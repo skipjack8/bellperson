@@ -118,18 +118,28 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
         Ok(())
     }
 
-    pub fn distribute_powers(&mut self, worker: &Worker, g: E::Fr) {
-        worker.scope(self.coeffs.len(), |scope, chunk| {
-            for (i, v) in self.coeffs.chunks_mut(chunk).enumerate() {
-                scope.spawn(move |_| {
-                    let mut u = g.pow(&[(i * chunk) as u64]);
-                    for v in v.iter_mut() {
-                        v.group_mul_assign(&u);
-                        u.mul_assign(&g);
-                    }
-                });
-            }
-        });
+    pub fn distribute_powers(
+        &mut self,
+        worker: &Worker,
+        g: E::Fr,
+        kern: &mut Option<gpu::FFTKernel<E>>,
+    ) -> gpu::GPUResult<()> {
+        if let Some(ref mut k) = kern {
+            gpu_distribute_powers(k, &mut self.coeffs, &g, self.exp)?;
+        } else {
+            worker.scope(self.coeffs.len(), |scope, chunk| {
+                for (i, v) in self.coeffs.chunks_mut(chunk).enumerate() {
+                    scope.spawn(move |_| {
+                        let mut u = g.pow(&[(i * chunk) as u64]);
+                        for v in v.iter_mut() {
+                            v.group_mul_assign(&u);
+                            u.mul_assign(&g);
+                        }
+                    });
+                }
+            });
+        }
+        Ok(())
     }
 
     pub fn coset_fft(
@@ -137,7 +147,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
         worker: &Worker,
         kern: &mut Option<gpu::FFTKernel<E>>,
     ) -> gpu::GPUResult<()> {
-        self.distribute_powers(worker, E::Fr::multiplicative_generator());
+        self.distribute_powers(worker, E::Fr::multiplicative_generator(), kern)?;
         self.fft(worker, kern)?;
         Ok(())
     }
@@ -149,7 +159,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     ) -> gpu::GPUResult<()> {
         let geninv = self.geninv;
         self.ifft(worker, kern)?;
-        self.distribute_powers(worker, geninv);
+        self.distribute_powers(worker, geninv, kern)?;
         Ok(())
     }
 
@@ -347,6 +357,18 @@ pub fn gpu_mul_by_field<E: Engine, T: Group<E>>(
     // The reason of unsafety is same as above.
     let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
     kern.mul_by_field(a, minv, log_n)?;
+    Ok(())
+}
+
+pub fn gpu_distribute_powers<E: Engine, T: Group<E>>(
+    kern: &mut gpu::FFTKernel<E>,
+    a: &mut [T],
+    g: &E::Fr,
+    log_n: u32,
+) -> gpu::GPUResult<()> {
+    // The reason of unsafety is same as above.
+    let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
+    kern.distribute_powers(a, g, log_n)?;
     Ok(())
 }
 

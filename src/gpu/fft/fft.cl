@@ -74,3 +74,23 @@ __kernel void mul_by_field(__global FIELD* elements,
   uint gid = get_global_id(0);
   elements[gid] = FIELD_mul(elements[gid], field);
 }
+
+/// Distribute powers
+/// E.g.
+/// [elements[0]*g^0, elements[1]*g^1, ..., elements[n]*g^n]
+__kernel void distribute_powers(__global FIELD* elements,
+                        uint n,
+                        FIELD g) {
+  uint gid = get_global_id(0);
+  uint gsize = get_global_size(0);
+
+  uint len = (uint)ceil(n / (float)gsize);
+  uint start = len * gid;
+  uint end = min(start + len, n);
+
+  FIELD field = FIELD_pow(g, start);
+  for(uint i = start; i < end; i++) {
+    elements[i] = FIELD_mul(elements[i], field);
+    field = FIELD_mul(field, g);
+  }
+}

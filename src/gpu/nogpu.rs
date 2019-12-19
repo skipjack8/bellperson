@@ -32,6 +32,12 @@ where
             msg: "GPU accelerator is not enabled!".to_string(),
         });
     }
+
+    pub fn distribute_powers(&mut self, _: &mut [E::Fr], _: &E::Fr, _: u32) -> GPUResult<()> {
+        return Err(GPUError {
+            msg: "GPU accelerator is not enabled!".to_string(),
+        });
+    }
 }
 
 pub struct MultiexpKernel<E>(PhantomData<E>)

@@ -4,7 +4,7 @@ use crate::gpu::{
 };
 use ff::Field;
 use log::info;
-use ocl::{Buffer, MemFlags, ProQue};
+use ocl::{Buffer, Device, MemFlags, ProQue};
 use paired::Engine;
 use std::cmp;
 
@@ -14,7 +14,7 @@ const LOG2_MAX_ELEMENTS: usize = 32; // At most 2^32 elements is supported.
 const MAX_RADIX_DEGREE: u32 = 8; // Radix256
 const MAX_LOCAL_WORK_SIZE_DEGREE: u32 = 7; // 128
 
-pub struct FFTKernel<E>
+pub struct SingleFFTKernel<E>
 where
     E: Engine,
 {
@@ -25,20 +25,13 @@ where
     fft_omg_buffer: Buffer<structs::PrimeFieldStruct<E::Fr>>,
 }
 
-impl<E> FFTKernel<E>
+impl<E> SingleFFTKernel<E>
 where
     E: Engine,
 {
-    pub fn create(n: u32) -> GPUResult<FFTKernel<E>> {
+    pub fn create(d: Device, n: u32) -> GPUResult<SingleFFTKernel<E>> {
         let src = sources::kernel::<E>();
-        let devices = &GPU_NVIDIA_DEVICES;
-        if devices.is_empty() {
-            return Err(GPUError {
-                msg: "No working GPUs found!".to_string(),
-            });
-        }
-        let device = devices[0]; // Select the first device for FFT
-        let pq = ProQue::builder().device(device).src(src).dims(n).build()?;
+        let pq = ProQue::builder().device(d).src(src).dims(n).build()?;
 
         let srcbuff = Buffer::builder()
             .queue(pq.queue().clone())
@@ -61,10 +54,7 @@ where
             .len(LOG2_MAX_ELEMENTS)
             .build()?;
 
-        info!("FFT: 1 working device(s) selected.");
-        info!("FFT: Device 0: {}", pq.device().name()?);
-
-        Ok(FFTKernel {
+        Ok(SingleFFTKernel {
             proque: pq,
             fft_src_buffer: srcbuff,
             fft_dst_buffer: dstbuff,
@@ -204,6 +194,48 @@ where
         }
         self.fft_src_buffer.read(ta).enq()?;
         self.proque.finish()?;
+        Ok(())
+    }
+}
+
+// A struct that containts several multiexp kernels for different devices
+pub struct FFTKernel<E>
+where
+    E: Engine,
+{
+    kernels: Vec<SingleFFTKernel<E>>,
+}
+
+impl<E> FFTKernel<E>
+where
+    E: Engine,
+{
+    pub fn create(n: u32) -> GPUResult<FFTKernel<E>> {
+        let kernels: Vec<_> = GPU_NVIDIA_DEVICES
+            .iter()
+            .map(|d| SingleFFTKernel::<E>::create(*d, n))
+            .filter(|res| res.is_ok())
+            .map(|res| res.unwrap())
+            .collect();
+        if kernels.is_empty() {
+            return Err(GPUError {
+                msg: "No working GPUs found!".to_string(),
+            });
+        }
+        info!("FFT: {} working device(s) selected.", kernels.len());
+        for (i, k) in kernels.iter().enumerate() {
+            info!("FFT: Device {}: {}", i, k.proque.device().name()?,);
+        }
+        return Ok(FFTKernel::<E> { kernels });
+    }
+
+    pub fn radix_fft(&mut self, a: &mut [E::Fr], omega: &E::Fr, lgn: u32) -> GPUResult<()> {
+        self.kernels[0].radix_fft(a, omega, lgn)?;
+        Ok(())
+    }
+
+    pub fn mul_by_field(&mut self, a: &mut [E::Fr], field: &E::Fr, lgn: u32) -> GPUResult<()> {
+        self.kernels[0].mul_by_field(a, field, lgn)?;
         Ok(())
     }
 }

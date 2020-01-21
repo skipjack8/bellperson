@@ -32,7 +32,7 @@ fn main() {
 
     println!("Creating parameters...");
 
-    let load_parameters = true;
+    let load_parameters = false;
     let parameters_path = "parameters.dat";
 
     // Create parameters for our circuit

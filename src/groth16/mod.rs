@@ -23,7 +23,7 @@ pub use self::generator::*;
 pub use self::prover::*;
 pub use self::verifier::*;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Proof<E: Engine> {
     pub a: E::G1Affine,
     pub b: E::G2Affine,
@@ -397,6 +397,17 @@ pub struct PreparedVerifyingKey<E: Engine> {
     neg_gamma_g2: <E::G2Affine as PairingCurveAffine>::Prepared,
     /// -delta in G2
     neg_delta_g2: <E::G2Affine as PairingCurveAffine>::Prepared,
+    /// Copy of IC from `VerifiyingKey`.
+    ic: Vec<E::G1Affine>,
+}
+
+pub struct BatchPreparedVerifyingKey<E: Engine> {
+    /// Pairing result of alpha*beta
+    alpha_g1_beta_g2: E::Fqk,
+    /// gamma in G2
+    gamma_g2: <E::G2Affine as PairingCurveAffine>::Prepared,
+    /// delta in G2
+    delta_g2: <E::G2Affine as PairingCurveAffine>::Prepared,
     /// Copy of IC from `VerifiyingKey`.
     ic: Vec<E::G1Affine>,
 }

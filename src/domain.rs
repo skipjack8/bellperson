@@ -113,11 +113,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
         Ok(())
     }
 
-    pub fn distribute_powers(
-        &mut self,
-        worker: &Worker,
-        g: E::Fr,
-    ) {
+    pub fn distribute_powers(&mut self, worker: &Worker, g: E::Fr) {
         worker.scope(self.coeffs.len(), |scope, chunk| {
             for (i, v) in self.coeffs.chunks_mut(chunk).enumerate() {
                 scope.spawn(move |_| {

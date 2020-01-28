@@ -174,56 +174,6 @@ where
 
         Ok(())
     }
-
-    /// Multiplies all of the elements in `a` by `field`
-    /// * `lgn` - Specifies log2 of number of elements
-    pub fn mul_by_field(&mut self, a: &mut [E::Fr], field: &E::Fr, lgn: u32) -> GPUResult<()> {
-        let n = 1u32 << lgn;
-        let ta = unsafe {
-            std::mem::transmute::<&mut [E::Fr], &mut [structs::PrimeFieldStruct<E::Fr>]>(a)
-        };
-        let field = structs::PrimeFieldStruct::<E::Fr>(*field);
-        self.fft_src_buffer.write(&*ta).enq()?;
-        let kernel = self
-            .proque
-            .kernel_builder("mul_by_field")
-            .global_work_size([n])
-            .arg(&self.fft_src_buffer)
-            .arg(n)
-            .arg(field)
-            .build()?;
-        unsafe {
-            kernel.enq()?;
-        }
-        self.fft_src_buffer.read(ta).enq()?;
-        self.proque.finish()?;
-        Ok(())
-    }
-
-    /// Distribute powers of `g` on `a`
-    /// * `lgn` - Specifies log2 of number of elements
-    pub fn distribute_powers(&mut self, a: &mut [E::Fr], g: &E::Fr, lgn: u32) -> GPUResult<()> {
-        let n = 1u32 << lgn;
-        let ta = unsafe {
-            std::mem::transmute::<&mut [E::Fr], &mut [structs::PrimeFieldStruct<E::Fr>]>(a)
-        };
-        let g = structs::PrimeFieldStruct::<E::Fr>(*g);
-        self.fft_src_buffer.write(&*ta).enq()?;
-        let kernel = self
-            .proque
-            .kernel_builder("distribute_powers")
-            .global_work_size([self.core_count])
-            .arg(&self.fft_src_buffer)
-            .arg(n)
-            .arg(g)
-            .build()?;
-        unsafe {
-            kernel.enq()?;
-        }
-        self.fft_src_buffer.read(ta).enq()?;
-        self.proque.finish()?;
-        Ok(())
-    }
 }
 
 // A struct that containts several multiexp kernels for different devices
@@ -259,16 +209,6 @@ where
 
     pub fn radix_fft(&mut self, a: &mut [E::Fr], omega: &E::Fr, lgn: u32) -> GPUResult<()> {
         self.kernels[0].radix_fft(a, omega, lgn)?;
-        Ok(())
-    }
-
-    pub fn mul_by_field(&mut self, a: &mut [E::Fr], field: &E::Fr, lgn: u32) -> GPUResult<()> {
-        self.kernels[0].mul_by_field(a, field, lgn)?;
-        Ok(())
-    }
-
-    pub fn distribute_powers(&mut self, a: &mut [E::Fr], field: &E::Fr, lgn: u32) -> GPUResult<()> {
-        self.kernels[0].distribute_powers(a, field, lgn)?;
         Ok(())
     }
 }

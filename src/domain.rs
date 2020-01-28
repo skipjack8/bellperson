@@ -15,8 +15,6 @@ use ff::{Field, PrimeField, ScalarEngine};
 use groupy::CurveProjective;
 use paired::Engine;
 
-use std::sync::Mutex;
-
 use super::multicore::Worker;
 use super::SynthesisError;
 
@@ -100,21 +98,18 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     ) -> gpu::GPUResult<()> {
         best_fft(kern, &mut self.coeffs, worker, &self.omegainv, self.exp)?;
 
-        if let Some(ref mut k) = kern {
-            gpu_mul_by_field(k, &mut self.coeffs, &self.minv, self.exp)?;
-        } else {
-            worker.scope(self.coeffs.len(), |scope, chunk| {
-                let minv = self.minv;
+        worker.scope(self.coeffs.len(), |scope, chunk| {
+            let minv = self.minv;
 
-                for v in self.coeffs.chunks_mut(chunk) {
-                    scope.spawn(move |_| {
-                        for v in v {
-                            v.group_mul_assign(&minv);
-                        }
-                    });
-                }
-            });
-        }
+            for v in self.coeffs.chunks_mut(chunk) {
+                scope.spawn(move |_| {
+                    for v in v {
+                        v.group_mul_assign(&minv);
+                    }
+                });
+            }
+        });
+
         Ok(())
     }
 
@@ -175,31 +170,21 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     /// The target polynomial is the zero polynomial in our
     /// evaluation domain, so we must perform division over
     /// a coset.
-    pub fn divide_by_z_on_coset(
-        &mut self,
-        worker: &Worker,
-        kern: &mut Option<gpu::FFTKernel<E>>,
-    ) -> gpu::GPUResult<()> {
+    pub fn divide_by_z_on_coset(&mut self, worker: &Worker) {
         let i = self
             .z(&E::Fr::multiplicative_generator())
             .inverse()
             .unwrap();
 
-        if let Some(ref mut k) = kern {
-            gpu_mul_by_field(k, &mut self.coeffs, &i, self.exp)?;
-        } else {
-            worker.scope(self.coeffs.len(), |scope, chunk| {
-                for v in self.coeffs.chunks_mut(chunk) {
-                    scope.spawn(move |_| {
-                        for v in v {
-                            v.group_mul_assign(&i);
-                        }
-                    });
-                }
-            });
-        }
-
-        Ok(())
+        worker.scope(self.coeffs.len(), |scope, chunk| {
+            for v in self.coeffs.chunks_mut(chunk) {
+                scope.spawn(move |_| {
+                    for v in v {
+                        v.group_mul_assign(&i);
+                    }
+                });
+            }
+        });
     }
 
     /// Perform O(n) multiplication of two polynomials in the domain.
@@ -345,30 +330,6 @@ pub fn gpu_fft<E: Engine, T: Group<E>>(
     // as it seems safe and needs less modifications in the current structure of Bellman library.
     let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
     kern.radix_fft(a, omega, log_n)?;
-    Ok(())
-}
-
-pub fn gpu_mul_by_field<E: Engine, T: Group<E>>(
-    kern: &mut gpu::FFTKernel<E>,
-    a: &mut [T],
-    minv: &E::Fr,
-    log_n: u32,
-) -> gpu::GPUResult<()> {
-    // The reason of unsafety is same as above.
-    let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
-    kern.mul_by_field(a, minv, log_n)?;
-    Ok(())
-}
-
-pub fn gpu_distribute_powers<E: Engine, T: Group<E>>(
-    kern: &mut gpu::FFTKernel<E>,
-    a: &mut [T],
-    g: &E::Fr,
-    log_n: u32,
-) -> gpu::GPUResult<()> {
-    // The reason of unsafety is same as above.
-    let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
-    kern.distribute_powers(a, g, log_n)?;
     Ok(())
 }
 
@@ -600,51 +561,20 @@ fn parallel_fft_consistency() {
     test_consistency::<Bls12, _>(rng);
 }
 
-lazy_static::lazy_static! {
-    static ref GPU_FFT_SUPPORTED: Mutex<Option<bool>> = { Mutex::new(None) };
-}
-
-use std::env;
-pub fn gpu_fft_supported<E>(log_d: u32) -> gpu::GPUResult<gpu::FFTKernel<E>>
+pub fn create_fft_kernel<E>(log_d: u32) -> Option<gpu::FFTKernel<E>>
 where
     E: Engine,
 {
-    const LOG_TEST_SIZE: u32 = 10;
-    let log_test_size: u32 = std::cmp::min(E::Fr::S - 1, std::cmp::min(LOG_TEST_SIZE, log_d));
-    let test_size: u32 = 1 << log_test_size;
-    let rng = &mut rand::thread_rng();
-    let mut kern = gpu::FFTKernel::create(1 << log_d)?;
-
-    // Checking the correctness of GPU results can be time consuming. User can disable this
-    // feature using BELLMAN_GPU_NO_CHECK flag.
-    if env::var("BELLMAN_GPU_NO_CHECK").is_ok() {
-        return Ok(kern);
-    }
-
-    let res = {
-        let mut supported = GPU_FFT_SUPPORTED.lock().unwrap();
-        if let Some(res) = *supported {
-            res
-        } else {
-            let elems = (0..test_size)
-                .map(|_| Scalar::<E>(E::Fr::random(rng)))
-                .collect::<Vec<_>>();
-            let mut v1 = EvaluationDomain::from_coeffs(elems.clone()).unwrap();
-            let mut v2 = EvaluationDomain::from_coeffs(elems.clone()).unwrap();
-            gpu_fft(&mut kern, &mut v1.coeffs, &v1.omega, log_test_size)?;
-            serial_fft(&mut v2.coeffs, &v2.omega, log_test_size);
-            let res = v1.coeffs == v2.coeffs;
-            *supported = Some(res);
-            res
+    use log::{info, warn};
+    match gpu::FFTKernel::create(1 << log_d) {
+        Ok(k) => {
+            info!("GPU FFT kernel instantiated!");
+            Some(k)
         }
-    };
-
-    if res {
-        Ok(kern)
-    } else {
-        Err(gpu::GPUError {
-            msg: "GPU FFT not supported!".to_string(),
-        })
+        Err(e) => {
+            warn!("Cannot instantiate GPU FFT kernel! Error: {}", e);
+            None
+        }
     }
 }
 

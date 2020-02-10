@@ -16,7 +16,8 @@ use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 
 // We're going to use the Groth16 proving system.
 use bellperson::groth16::{
-    create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof, Proof,
+    create_random_proof, create_random_proof_batch, generate_random_parameters,
+    prepare_batch_verifying_key, prepare_verifying_key, verify_proof, verify_proofs_batch, Proof,
 };
 
 const MIMC_ROUNDS: usize = 322;
@@ -53,6 +54,7 @@ fn mimc<E: Engine>(mut xl: E::Fr, mut xr: E::Fr, constants: &[E::Fr]) -> E::Fr {
 
 /// This is our demo circuit for proving knowledge of the
 /// preimage of a MiMC hash invocation.
+#[derive(Clone)]
 struct MiMCDemo<'a, E: Engine> {
     xl: Option<E::Fr>,
     xr: Option<E::Fr>,
@@ -183,6 +185,8 @@ fn test_mimc() {
     // Just a place to put the proof data, so we can
     // benchmark deserialization.
     let mut proof_vec = vec![];
+    let mut proofs = vec![];
+    let mut images = vec![];
 
     for _ in 0..SAMPLES {
         // Generate a random preimage and compute the image
@@ -215,7 +219,37 @@ fn test_mimc() {
         // Check the proof
         assert!(verify_proof(&pvk, &proof, &[image]).unwrap());
         total_verifying += start.elapsed();
+        proofs.push(proof);
+        images.push(vec![image]);
     }
+
+    // batch verification
+    println!("Creating batch proofs...");
+    let proving_batch = Instant::now();
+    {
+        // Create an instance of our circuit (with the
+        // witness)
+        let xl = <Bls12 as ScalarEngine>::Fr::random(rng);
+        let xr = <Bls12 as ScalarEngine>::Fr::random(rng);
+
+        let c = MiMCDemo {
+            xl: Some(xl),
+            xr: Some(xr),
+            constants: &constants,
+        };
+
+        // Create a groth16 proof with our parameters.
+        let proofs = create_random_proof_batch(vec![c; SAMPLES as usize], &params, rng).unwrap();
+        assert_eq!(proofs.len(), 50);
+    }
+
+    let proving_batch = proving_batch.elapsed().subsec_nanos() as f64 / 1_000_000_000f64;
+    println!(
+        "Proving time batch: {:04}s ({:04}s / proof)",
+        proving_batch,
+        proving_batch / SAMPLES as f64,
+    );
+
     let proving_avg = total_proving / SAMPLES;
     let proving_avg =
         proving_avg.subsec_nanos() as f64 / 1_000_000_000f64 + (proving_avg.as_secs() as f64);
@@ -224,6 +258,43 @@ fn test_mimc() {
     let verifying_avg =
         verifying_avg.subsec_nanos() as f64 / 1_000_000_000f64 + (verifying_avg.as_secs() as f64);
 
-    println!("Average proving time: {:?} seconds", proving_avg);
-    println!("Average verifying time: {:?} seconds", verifying_avg);
+    println!("Average proving time: {:08}s", proving_avg);
+    println!("Average verifying time: {:08}s", verifying_avg);
+
+    // batch verification
+    {
+        let pvk = prepare_batch_verifying_key(&params.vk);
+
+        let start = Instant::now();
+        let proofs: Vec<_> = proofs.iter().collect();
+        let valid = verify_proofs_batch(&pvk, &mut rand::rngs::OsRng, &proofs, &images).unwrap();
+        println!(
+            "Batch verification of {} proofs: {:04}s ({:04}s/proof)",
+            proofs.len(),
+            (start.elapsed().subsec_nanos() as f64) / 1_000_000_000f64,
+            ((start.elapsed().subsec_nanos() as f64) / 1_000_000_000f64) / proofs.len() as f64,
+        );
+        assert!(valid, "failed batch verification");
+
+        // check that invalid proofs don't validate
+        let mut bad_proofs = proofs
+            .iter()
+            .map(|p| (*p).clone())
+            .collect::<Vec<Proof<_>>>();
+
+        for i in 0..proofs.len() {
+            use groupy::CurveProjective;
+
+            let p = &mut bad_proofs[i];
+
+            let mut a: <Bls12 as Engine>::G1 = p.a.into();
+            a.add_assign(&<Bls12 as Engine>::G1::one());
+            p.a = a.into_affine();
+        }
+        let bad_proofs_ref = bad_proofs.iter().collect::<Vec<_>>();
+        assert!(
+            !verify_proofs_batch(&pvk, &mut rand::rngs::OsRng, &bad_proofs_ref[..], &images)
+                .unwrap()
+        );
+    }
 }

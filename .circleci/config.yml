@@ -2,14 +2,14 @@ version: 2.1
 
 executors:
   default:
-    docker:
-      - image: filecoin/rust:latest
-    working_directory: /mnt/crate
-    resource_class: 2xlarge
+    machine:
+      image: ubuntu-1604-cuda-10.1:201909-23
+    working_directory: ~/gpuci
+    resource_class: gpu.nvidia.medium
 
 restore-workspace: &restore-workspace
   attach_workspace:
-    at: /mnt
+    at: ~/
 
 restore-cache: &restore-cache
   restore_cache:
@@ -33,16 +33,20 @@ commands:
           name: Test (GPU) (<< parameters.target >>)
           command: TARGET=<< parameters.target >> cargo test --features gpu
           no_output_timeout: 15m
-      - run:
-          name: Build GPU (<< parameters.target >>)
-          command: TARGET=<< parameters.target >> cargo build --features gpu-test
-          no_output_timeout: 15m
 
 jobs:
+
   cargo_fetch:
     executor: default
     steps:
       - checkout
+      - run: curl https://sh.rustup.rs -sSf | sh -s -- -y
+      - run: echo 'export PATH="$HOME:~/.cargo/bin:$PATH"' >> $BASH_ENV
+      - run: echo $BASH_ENV
+      - run: echo $HOME
+      - run: source $BASH_ENV
+      - run: cargo --version
+      - run: rustc --version
       - run:
           name: Update submodules
           command: git submodule update --init --recursive
@@ -61,9 +65,9 @@ jobs:
       - run: rustc --version
       - run: rm -rf .git
       - persist_to_workspace:
-          root: /mnt
+          root: ~/
           paths:
-            - crate
+            - gpuci
       - save_cache:
           key: cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
           paths:
@@ -73,6 +77,11 @@ jobs:
   test_x86_64-unknown-linux-gnu:
     executor: default
     steps:
+      - run: echo 'export PATH="$HOME:~/.cargo/bin:$PATH"' >> $BASH_ENV
+      - run: source $BASH_ENV
+      - run: sudo apt-get update -y
+      - run: apt-cache search opencl
+      - run: sudo apt install -y ocl-icd-opencl-dev
       - test_target:
           target: "x86_64-unknown-linux-gnu"
 
@@ -81,6 +90,8 @@ jobs:
     steps:
       - *restore-workspace
       - *restore-cache
+      - run: echo 'export PATH="$HOME:~/.cargo/bin:$PATH"' >> $BASH_ENV
+      - run: source $BASH_ENV
       - run:
           name: Run cargo fmt
           command: cargo fmt --all -- --check
@@ -90,6 +101,8 @@ jobs:
     steps:
       - *restore-workspace
       - *restore-cache
+      - run: echo 'export PATH="$HOME:~/.cargo/bin:$PATH"' >> $BASH_ENV
+      - run: source $BASH_ENV
       - run:
           name: Run cargo clippy
           command: cargo clippy --all-features
@@ -99,6 +112,8 @@ jobs:
     steps:
       - *restore-workspace
       - *restore-cache
+      - run: echo 'export PATH="$HOME:~/.cargo/bin:$PATH"' >> $BASH_ENV
+      - run: source $BASH_ENV
       - run:
           name: Run cargo release build
           command: cargo build --release
@@ -122,3 +137,4 @@ workflows:
       - build:
           requires:
             - cargo_fetch
+            

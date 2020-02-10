@@ -7,6 +7,7 @@ use log::info;
 use ocl::{Buffer, Device, MemFlags, ProQue};
 use paired::Engine;
 use std::cmp;
+use crossbeam::thread;
 
 // NOTE: Please read `structs.rs` for an explanation for unsafe transmutes of this code!
 
@@ -207,8 +208,43 @@ where
         return Ok(FFTKernel::<E> { kernels });
     }
 
-    pub fn radix_fft(&mut self, a: &mut [E::Fr], omega: &E::Fr, lgn: u32) -> GPUResult<()> {
-        self.kernels[0].radix_fft(a, omega, lgn)?;
-        Ok(())
+    pub fn radix_fft(&mut self, sets: &mut Vec<(&mut [E::Fr], &E::Fr, u32)>) -> GPUResult<()> {
+
+        let num_ffts = sets.len();
+        let num_devices = self.kernels.len();
+        let chunk_size = ((num_ffts as f64) / (num_devices as f64)).ceil() as usize;
+
+        match thread::scope(|s| -> Result<(), GPUError> {
+            let mut threads = Vec::new();
+
+            if num_ffts > 0 {
+                for (chunk, kern) in sets
+                    .chunks_mut(chunk_size)
+                    .zip(self.kernels.iter_mut())
+                {
+                    threads.push(s.spawn(
+                        move |_| -> Result<(), GPUError> {
+                            for (a, omega, lgn) in chunk.iter_mut() {
+                                kern.radix_fft(a, omega, *lgn)?;
+                            }
+                            Ok(())
+                        },
+                    ));
+                }
+            }
+
+            let mut results = vec![];
+            for t in threads {
+                results.push(t.join());
+            }
+            for r in results {
+                r??;
+            }
+
+            Ok(())
+        }) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(GPUError::from(e)),
+        }
     }
 }

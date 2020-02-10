@@ -319,7 +319,8 @@ pub fn gpu_fft<E: Engine, T: Group<E>>(
     // For compatibility/performance reasons we decided to transmute the array to the desired type
     // as it seems safe and needs less modifications in the current structure of Bellman library.
     let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
-    kern.radix_fft(a, omega, log_n)?;
+    let mut v = vec![(a, omega, log_n)];
+    kern.radix_fft(&mut v)?;
     Ok(())
 }
 

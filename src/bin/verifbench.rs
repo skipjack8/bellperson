@@ -15,7 +15,10 @@ use paired::bls12_381::Bls12;
 use paired::Engine;
 use std::time::Instant;
 
+
 fn random_points<C: CurveProjective, R: Rng>(count: usize, rng: &mut R) -> Vec<C::Affine> {
+    // Number of distinct points is limited because generating random points is very time 
+    // consuming, so it's better to just repeat them.
     const DISTINT_POINTS: usize = 100;
     (0..DISTINT_POINTS)
         .map(|_| C::random(rng).into_affine())
@@ -102,7 +105,7 @@ fn main() {
         .unwrap_or(DEFAULT_NUM_PROOFS);
     let num_inputs = matches
         .value_of("inputs")
-        .map(|s| s.parse::<usize>().expect("Invalid number of proofs!"))
+        .map(|s| s.parse::<usize>().expect("Invalid number of inputs!"))
         .unwrap_or(DEFAULT_NUM_INPUTS);
     if matches.is_present("nogpu") {
         std::env::set_var("BELLMAN_NO_GPU", "1");

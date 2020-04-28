@@ -15,9 +15,8 @@ use paired::bls12_381::Bls12;
 use paired::Engine;
 use std::time::Instant;
 
-
 fn random_points<C: CurveProjective, R: Rng>(count: usize, rng: &mut R) -> Vec<C::Affine> {
-    // Number of distinct points is limited because generating random points is very time 
+    // Number of distinct points is limited because generating random points is very time
     // consuming, so it's better to just repeat them.
     const DISTINT_POINTS: usize = 100;
     (0..DISTINT_POINTS)

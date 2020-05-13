@@ -190,7 +190,10 @@ where
 }
 
 fn get_verifier_kernel<E: Engine>(pi_num: usize) -> Option<LockedMultiexpKernel<E>> {
-    match &std::env::var("BELLMAN_VERIFIER").unwrap_or("auto".to_string())[..] {
+    match &std::env::var("BELLMAN_VERIFIER")
+        .unwrap_or("auto".to_string())
+        .to_lowercase()[..]
+    {
         "gpu" => {
             let log_d = (pi_num as f32).log2().ceil() as usize;
             Some(LockedMultiexpKernel::<E>::new(log_d, false))

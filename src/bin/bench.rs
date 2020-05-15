@@ -7,8 +7,8 @@ use rand::{thread_rng, Rng};
 use std::sync::Arc;
 
 use bellperson::groth16::{
-    create_random_proof_batch, prepare_batch_verifying_key, verify_proofs_batch, Parameters, Proof,
-    VerifyingKey,
+    create_random_proof_batch, generate_random_parameters, prepare_batch_verifying_key,
+    verify_proofs_batch, Parameters, Proof, VerifyingKey,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use groupy::CurveProjective;
@@ -16,6 +16,17 @@ use paired::bls12_381::Bls12;
 use paired::Engine;
 use std::time::Instant;
 use structopt::StructOpt;
+
+macro_rules! timer {
+    ($e:expr, $samples:expr) => {{
+        let before = Instant::now();
+        for _ in 0..$samples {
+            $e;
+        }
+        (before.elapsed().as_secs() * 1000 as u64 + before.elapsed().subsec_millis() as u64)
+            / ($samples as u64)
+    }};
+}
 
 #[derive(Clone)]
 pub struct DummyDemo {
@@ -25,16 +36,24 @@ pub struct DummyDemo {
 
 impl<E: Engine> Circuit<E> for DummyDemo {
     fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
+        assert!(self.public >= 1);
         let mut x_val = E::Fr::from_str("2");
-        let mut x = cs.alloc(|| "", || x_val.ok_or(SynthesisError::AssignmentMissing))?;
+        let mut x = cs.alloc_input(|| "", || x_val.ok_or(SynthesisError::AssignmentMissing))?;
+        let mut pubs = 1;
 
-        for _ in 0..self.private {
+        for _ in 0..self.private + self.public - 1 {
             // Allocate: x * x = x2
             let x2_val = x_val.map(|mut e| {
                 e.square();
                 e
             });
-            let x2 = cs.alloc(|| "", || x2_val.ok_or(SynthesisError::AssignmentMissing))?;
+
+            let x2 = if pubs < self.public {
+                pubs += 1;
+                cs.alloc_input(|| "", || x2_val.ok_or(SynthesisError::AssignmentMissing))?
+            } else {
+                cs.alloc(|| "", || x2_val.ok_or(SynthesisError::AssignmentMissing))?
+            };
 
             // Enforce: x * x = x2
             cs.enforce(|| "", |lc| lc + x, |lc| lc + x, |lc| lc + x2);
@@ -83,7 +102,7 @@ fn dummy_inputs<E: Engine, R: Rng>(count: usize, rng: &mut R) -> Vec<<E as ff::S
         .collect()
 }
 
-fn dummy_vk<E: Engine, R: Rng>(count: usize, rng: &mut R) -> VerifyingKey<E> {
+fn dummy_vk<E: Engine, R: Rng>(public: usize, rng: &mut R) -> VerifyingKey<E> {
     VerifyingKey {
         alpha_g1: E::G1::random(rng).into_affine(),
         beta_g1: E::G1::random(rng).into_affine(),
@@ -91,17 +110,18 @@ fn dummy_vk<E: Engine, R: Rng>(count: usize, rng: &mut R) -> VerifyingKey<E> {
         gamma_g2: E::G2::random(rng).into_affine(),
         delta_g1: E::G1::random(rng).into_affine(),
         delta_g2: E::G2::random(rng).into_affine(),
-        ic: random_points::<E::G1, _>(count + 1, rng),
+        ic: random_points::<E::G1, _>(public + 1, rng),
     }
 }
 
-fn dummy_params<E: Engine, R: Rng>(count: usize, rng: &mut R) -> Parameters<E> {
-    let hlen = (1 << ((count as f64).log2().floor() as usize + 2)) - 1;
+fn dummy_params<E: Engine, R: Rng>(public: usize, private: usize, rng: &mut R) -> Parameters<E> {
+    let count = public + private;
+    let hlen = (1 << (((count + public + 1) as f64).log2().ceil() as usize)) - 1;
     Parameters {
-        vk: dummy_vk(count, rng),
+        vk: dummy_vk(public, rng),
         h: Arc::new(random_points::<E::G1, _>(hlen, rng)),
-        l: Arc::new(Vec::new()),
-        a: Arc::new(random_points::<E::G1, _>(count + 1, rng)),
+        l: Arc::new(random_points::<E::G1, _>(private, rng)),
+        a: Arc::new(random_points::<E::G1, _>(count, rng)),
         b_g1: Arc::new(random_points::<E::G1, _>(count, rng)),
         b_g2: Arc::new(random_points::<E::G2, _>(count, rng)),
     }
@@ -137,20 +157,24 @@ fn main() {
         std::env::set_var("BELLMAN_NO_GPU", "1");
     }
 
-    let params = dummy_params::<Bls12, _>(opts.public, rng);
+    let params = dummy_params::<Bls12, _>(opts.public, opts.private, rng);
     let pvk = prepare_batch_verifying_key(&params.vk);
 
     if opts.prove {
         println!("Proving...");
+        let circuits = vec![
+            DummyDemo {
+                public: opts.public,
+                private: opts.private
+            };
+            opts.proofs
+        ];
         for _ in 0..opts.samples {
-            let circuits = vec![
-                DummyDemo {
-                    public: opts.public,
-                    private: opts.private
-                };
-                opts.proofs
-            ];
-            create_random_proof_batch(circuits, &params, rng).unwrap();
+            let took = timer!(
+                create_random_proof_batch(circuits.clone(), &params, rng).unwrap(),
+                1
+            );
+            println!("Proof generation finished in {}ms", took);
         }
     }
 
@@ -164,13 +188,12 @@ fn main() {
                 "{} proofs, each having {} public inputs...",
                 opts.proofs, opts.public
             );
-            let now = Instant::now();
-            verify_proofs_batch(&pvk, rng, &pref[..], &vec![inputs.clone(); opts.proofs]).unwrap();
-            println!(
-                "Verification finished in {}s and {}ms",
-                now.elapsed().as_secs(),
-                now.elapsed().subsec_nanos() / 1000000
+            let took = timer!(
+                verify_proofs_batch(&pvk, rng, &pref[..], &vec![inputs.clone(); opts.proofs])
+                    .unwrap(),
+                1
             );
+            println!("Verification finished in {}ms", took);
         }
     }
 }

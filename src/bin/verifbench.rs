@@ -9,11 +9,11 @@ use std::sync::Arc;
 use bellperson::groth16::{
     prepare_batch_verifying_key, verify_proofs_batch, Parameters, Proof, VerifyingKey,
 };
-use clap::{App, Arg};
 use groupy::CurveProjective;
 use paired::bls12_381::Bls12;
 use paired::Engine;
 use std::time::Instant;
+use structopt::StructOpt;
 
 fn random_points<C: CurveProjective, R: Rng>(count: usize, rng: &mut R) -> Vec<C::Affine> {
     // Number of distinct points is limited because generating random points is very time
@@ -68,55 +68,37 @@ fn dummy_params<E: Engine, R: Rng>(count: usize, rng: &mut R) -> Parameters<E> {
     }
 }
 
-fn main() {
-    const DEFAULT_NUM_INPUTS: usize = 100000;
-    const DEFAULT_NUM_PROOFS: usize = 300;
+#[derive(Debug, StructOpt, Clone, Copy)]
+#[structopt(name = "Bellman Bench", about = "Benchmarking Bellman.")]
+struct Opts {
+    #[structopt(long = "proofs", default_value = "1")]
+    proofs: usize,
+    #[structopt(long = "public", default_value = "1")]
+    public: usize,
+    #[structopt(long = "private", default_value = "1000000")]
+    private: usize,
+    #[structopt(long = "samples", default_value = "10")]
+    samples: usize,
+    #[structopt(long = "gpu")]
+    gpu: bool,
+}
 
+fn main() {
     let rng = &mut thread_rng();
     env_logger::init();
 
-    let matches = App::new("Verifier Bench")
-        .arg(
-            Arg::with_name("proofs")
-                .short("p")
-                .long("proofs")
-                .help("Sets number of proofs in a batch")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("inputs")
-                .short("i")
-                .long("inputs")
-                .help("Sets number of public inputs")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("nogpu")
-                .long("nogpu")
-                .help("Disables GPU")
-                .takes_value(false),
-        )
-        .get_matches();
-
-    let num_proofs = matches
-        .value_of("proofs")
-        .map(|s| s.parse::<usize>().expect("Invalid number of proofs!"))
-        .unwrap_or(DEFAULT_NUM_PROOFS);
-    let num_inputs = matches
-        .value_of("inputs")
-        .map(|s| s.parse::<usize>().expect("Invalid number of inputs!"))
-        .unwrap_or(DEFAULT_NUM_INPUTS);
-    if matches.is_present("nogpu") {
-        std::env::set_var("BELLMAN_NO_GPU", "1");
+    let opts = Opts::from_args();
+    if opts.gpu {
+        std::env::set_var("BELLMAN_VERIFIER", "gpu");
     }
 
-    let inputs = dummy_inputs::<Bls12, _>(num_inputs, rng);
-    let proofs = dummy_proofs::<Bls12, _>(num_proofs, rng);
-    let params = dummy_params::<Bls12, _>(num_inputs, rng);
+    let inputs = dummy_inputs::<Bls12, _>(opts.public, rng);
+    let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
+    let params = dummy_params::<Bls12, _>(opts.public, rng);
     let pvk = prepare_batch_verifying_key(&params.vk);
     println!(
         "{} proofs, each having {} public inputs...",
-        num_proofs, num_inputs
+        opts.proofs, opts.public
     );
 
     let pref = proofs.iter().collect::<Vec<&_>>();
@@ -124,7 +106,7 @@ fn main() {
 
     for _ in 0..10 {
         let now = Instant::now();
-        verify_proofs_batch(&pvk, rng, &pref[..], &vec![inputs.clone(); num_proofs]).unwrap();
+        verify_proofs_batch(&pvk, rng, &pref[..], &vec![inputs.clone(); opts.proofs]).unwrap();
         println!(
             "Verification finished in {}s and {}ms",
             now.elapsed().as_secs(),

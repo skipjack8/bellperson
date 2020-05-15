@@ -1,6 +1,10 @@
-// -i, --inputs <inputs>    Sets number of public inputs
-// -p, --proofs <proofs>    Sets number of proofs in a batch
-// --nogpu                  Disables GPU
+// --prove                  Benchmark prover
+// --verify                 Benchmark verifier
+// --proofs <num>           Sets number of proofs in a batch
+// --public <num>           Sets number of public inputs
+// --private <num>          Sets number of private inputs
+// --gpu                    Enables GPU
+// --samples                Number of runs
 
 use ff::{Field, PrimeField};
 use rand::{thread_rng, Rng};

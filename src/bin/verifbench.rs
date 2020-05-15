@@ -2,18 +2,57 @@
 // -p, --proofs <proofs>    Sets number of proofs in a batch
 // --nogpu                  Disables GPU
 
-use ff::Field;
+use ff::{Field, PrimeField};
 use rand::{thread_rng, Rng};
 use std::sync::Arc;
 
 use bellperson::groth16::{
-    prepare_batch_verifying_key, verify_proofs_batch, Parameters, Proof, VerifyingKey,
+    create_random_proof_batch, prepare_batch_verifying_key, verify_proofs_batch, Parameters, Proof,
+    VerifyingKey,
 };
+use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use groupy::CurveProjective;
 use paired::bls12_381::Bls12;
 use paired::Engine;
 use std::time::Instant;
 use structopt::StructOpt;
+
+#[derive(Clone)]
+pub struct DummyDemo {
+    pub public: usize,
+    pub private: usize,
+}
+
+impl<E: Engine> Circuit<E> for DummyDemo {
+    fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
+        let mut x_val = E::Fr::from_str("2");
+        let mut x = cs.alloc(|| "", || x_val.ok_or(SynthesisError::AssignmentMissing))?;
+
+        for _ in 0..self.private {
+            // Allocate: x * x = x2
+            let x2_val = x_val.map(|mut e| {
+                e.square();
+                e
+            });
+            let x2 = cs.alloc(|| "", || x2_val.ok_or(SynthesisError::AssignmentMissing))?;
+
+            // Enforce: x * x = x2
+            cs.enforce(|| "", |lc| lc + x, |lc| lc + x, |lc| lc + x2);
+
+            x = x2;
+            x_val = x2_val;
+        }
+
+        cs.enforce(
+            || "",
+            |lc| lc + (x_val.unwrap(), CS::one()),
+            |lc| lc + CS::one(),
+            |lc| lc + x,
+        );
+
+        Ok(())
+    }
+}
 
 fn random_points<C: CurveProjective, R: Rng>(count: usize, rng: &mut R) -> Vec<C::Affine> {
     // Number of distinct points is limited because generating random points is very time
@@ -81,6 +120,10 @@ struct Opts {
     samples: usize,
     #[structopt(long = "gpu")]
     gpu: bool,
+    #[structopt(long = "verify")]
+    verify: bool,
+    #[structopt(long = "prove")]
+    prove: bool,
 }
 
 fn main() {
@@ -90,27 +133,44 @@ fn main() {
     let opts = Opts::from_args();
     if opts.gpu {
         std::env::set_var("BELLMAN_VERIFIER", "gpu");
+    } else {
+        std::env::set_var("BELLMAN_NO_GPU", "1");
     }
 
-    let inputs = dummy_inputs::<Bls12, _>(opts.public, rng);
-    let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
     let params = dummy_params::<Bls12, _>(opts.public, rng);
     let pvk = prepare_batch_verifying_key(&params.vk);
-    println!(
-        "{} proofs, each having {} public inputs...",
-        opts.proofs, opts.public
-    );
 
-    let pref = proofs.iter().collect::<Vec<&_>>();
-    println!("Verifying...");
+    if opts.prove {
+        println!("Proving...");
+        for _ in 0..opts.samples {
+            let circuits = vec![
+                DummyDemo {
+                    public: opts.public,
+                    private: opts.private
+                };
+                opts.proofs
+            ];
+            create_random_proof_batch(circuits, &params, rng).unwrap();
+        }
+    }
 
-    for _ in 0..10 {
-        let now = Instant::now();
-        verify_proofs_batch(&pvk, rng, &pref[..], &vec![inputs.clone(); opts.proofs]).unwrap();
-        println!(
-            "Verification finished in {}s and {}ms",
-            now.elapsed().as_secs(),
-            now.elapsed().subsec_nanos() / 1000000
-        );
+    if opts.verify {
+        println!("Verifying...");
+        for _ in 0..opts.samples {
+            let inputs = dummy_inputs::<Bls12, _>(opts.public, rng);
+            let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
+            let pref = proofs.iter().collect::<Vec<&_>>();
+            println!(
+                "{} proofs, each having {} public inputs...",
+                opts.proofs, opts.public
+            );
+            let now = Instant::now();
+            verify_proofs_batch(&pvk, rng, &pref[..], &vec![inputs.clone(); opts.proofs]).unwrap();
+            println!(
+                "Verification finished in {}s and {}ms",
+                now.elapsed().as_secs(),
+                now.elapsed().subsec_nanos() / 1000000
+            );
+        }
     }
 }

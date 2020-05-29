@@ -69,7 +69,7 @@ pub fn get_core_count(d: Device) -> GPUResult<usize> {
     }
 }
 
-pub fn get_pci_number(d: Device) -> GPUResult<usize> {
+pub fn get_bus_id(d: Device) -> GPUResult<usize> {
     let result = d.info_raw(0x4008)?;
     Ok((result[0] as usize)
         + ((result[1] as usize) << 8)

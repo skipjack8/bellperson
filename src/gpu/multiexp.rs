@@ -319,8 +319,9 @@ where
         );
         for (i, k) in kernels.iter().enumerate() {
             info!(
-                "Multiexp: Device {}: {} (Chunk-size: {})",
+                "Multiexp: Device {}: Bus Id: {} ({}) (Chunk-size: {})",
                 i,
+                utils::get_bus_id(k.proque.device())?,
                 k.proque.device().name()?,
                 k.n
             );

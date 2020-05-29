@@ -1,6 +1,6 @@
 use crate::gpu::{
     error::{GPUError, GPUResult},
-    locks, sources, structs, GPU_NVIDIA_DEVICES,
+    locks, sources, structs, utils, GPU_NVIDIA_DEVICES,
 };
 use ff::Field;
 use log::info;
@@ -64,7 +64,11 @@ where
             .build()?;
 
         info!("FFT: 1 working device(s) selected.");
-        info!("FFT: Device 0: {}", pq.device().name()?);
+        info!(
+            "FFT: Device 0: Bus Id: {} ({})",
+            utils::get_bus_id(device)?,
+            pq.device().name()?
+        );
 
         Ok(FFTKernel {
             proque: pq,

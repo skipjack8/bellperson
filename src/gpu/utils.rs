@@ -69,6 +69,14 @@ pub fn get_core_count(d: Device) -> GPUResult<usize> {
     }
 }
 
+pub fn get_pci_number(d: Device) -> GPUResult<usize> {
+    let result = d.info_raw(0x4008)?;
+    Ok((result[0] as usize)
+        + ((result[1] as usize) << 8)
+        + ((result[2] as usize) << 16)
+        + ((result[3] as usize) << 24))
+}
+
 pub fn get_memory(d: Device) -> GPUResult<u64> {
     match d.info(ocl::enums::DeviceInfo::GlobalMemSize)? {
         ocl::enums::DeviceInfoResult::GlobalMemSize(sz) => Ok(sz),

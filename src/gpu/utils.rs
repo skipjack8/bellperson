@@ -17,8 +17,22 @@ pub fn get_devices(platform_name: &str) -> GPUResult<Vec<Device>> {
         Ok(p) => p == platform_name,
         Err(_) => false,
     });
+    let bus_ids = env::var("BELLMAN_GPUS").map(|v| {
+        v.split(",")
+            .map(|s| s.parse::<u32>().unwrap())
+            .collect::<Vec<u32>>()
+    });
     match platform {
-        Some(p) => Ok(Device::list_all(p)?),
+        Some(p) => {
+            let mut devs = Device::list_all(p)?;
+            if let Ok(bus_ids) = bus_ids {
+                devs = devs
+                    .into_iter()
+                    .filter(|d| bus_ids.contains(&get_bus_id(*d).unwrap()))
+                    .collect();
+            }
+            Ok(devs)
+        }
         None => Err(GPUError::Simple("GPU platform not found!")),
     }
 }
@@ -69,12 +83,12 @@ pub fn get_core_count(d: Device) -> GPUResult<usize> {
     }
 }
 
-pub fn get_bus_id(d: Device) -> GPUResult<usize> {
+pub fn get_bus_id(d: Device) -> GPUResult<u32> {
     let result = d.info_raw(0x4008)?;
-    Ok((result[0] as usize)
-        + ((result[1] as usize) << 8)
-        + ((result[2] as usize) << 16)
-        + ((result[3] as usize) << 24))
+    Ok((result[0] as u32)
+        + ((result[1] as u32) << 8)
+        + ((result[2] as u32) << 16)
+        + ((result[3] as u32) << 24))
 }
 
 pub fn get_memory(d: Device) -> GPUResult<u64> {

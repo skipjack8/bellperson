@@ -17,19 +17,24 @@ pub fn get_devices(platform_name: &str) -> GPUResult<Vec<Device>> {
         Ok(p) => p == platform_name,
         Err(_) => false,
     });
+
     let bus_ids = env::var("BELLMAN_GPUS").map(|v| {
         v.split(",")
-            .map(|s| s.parse::<u32>().unwrap())
+            .map(|s| s.parse::<u32>().expect("Invalid Bus-Id number!"))
             .collect::<Vec<u32>>()
     });
+
     match platform {
         Some(p) => {
             let mut devs = Device::list_all(p)?;
             if let Ok(bus_ids) = bus_ids {
-                devs = devs
-                    .into_iter()
-                    .filter(|d| bus_ids.contains(&get_bus_id(*d).unwrap()))
-                    .collect();
+                let mut filtered_devs = Vec::new();
+                for d in devs.iter() {
+                    if bus_ids.contains(&get_bus_id(*d)?) {
+                        filtered_devs.push(*d);
+                    }
+                }
+                devs = filtered_devs;
             }
             Ok(devs)
         }

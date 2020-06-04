@@ -5,6 +5,7 @@
 // --private <num>          Sets number of private inputs
 // --gpu                    Enables GPU
 // --samples                Number of runs
+// --dummy                  Skip param generation and generate dummy params/proofs
 
 use ff::{Field, PrimeField};
 use rand::{thread_rng, Rng};
@@ -16,19 +17,19 @@ use bellperson::groth16::{
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use groupy::CurveProjective;
-use paired::bls12_381::Bls12;
+use paired::bls12_381::{Bls12, Fr};
 use paired::Engine;
 use std::time::Instant;
 use structopt::StructOpt;
 
 macro_rules! timer {
-    ($e:expr, $samples:expr) => {{
+    ($e:expr) => {{
         let before = Instant::now();
-        for _ in 0..$samples {
-            $e;
-        }
-        (before.elapsed().as_secs() * 1000 as u64 + before.elapsed().subsec_millis() as u64)
-            / ($samples as u64)
+        let ret = $e;
+        (
+            ret,
+            (before.elapsed().as_secs() * 1000 as u64 + before.elapsed().subsec_millis() as u64),
+        )
     }};
 }
 
@@ -148,6 +149,8 @@ struct Opts {
     verify: bool,
     #[structopt(long = "prove")]
     prove: bool,
+    #[structopt(long = "dummy")]
+    dummy: bool,
 }
 
 fn main() {
@@ -161,43 +164,65 @@ fn main() {
         std::env::set_var("BELLMAN_NO_GPU", "1");
     }
 
-    let params = dummy_params::<Bls12, _>(opts.public, opts.private, rng);
+    let circuit = DummyDemo {
+        public: opts.public,
+        private: opts.private,
+    };
+    let circuits = vec![circuit.clone(); opts.proofs];
+
+    let params = if opts.dummy {
+        dummy_params::<Bls12, _>(opts.public, opts.private, rng)
+    } else {
+        println!("Generating params... (You can skip this by passing `--dummy` flag)");
+        generate_random_parameters(circuit.clone(), rng).unwrap()
+    };
     let pvk = prepare_batch_verifying_key(&params.vk);
 
     if opts.prove {
         println!("Proving...");
-        let circuits = vec![
-            DummyDemo {
-                public: opts.public,
-                private: opts.private
-            };
-            opts.proofs
-        ];
+
         for _ in 0..opts.samples {
-            let took = timer!(
-                create_random_proof_batch(circuits.clone(), &params, rng).unwrap(),
-                1
-            );
+            let (_, took) =
+                timer!(create_random_proof_batch(circuits.clone(), &params, rng).unwrap());
             println!("Proof generation finished in {}ms", took);
         }
     }
 
     if opts.verify {
         println!("Verifying...");
+
+        let (inputs, proofs) = if opts.dummy {
+            (
+                dummy_inputs::<Bls12, _>(opts.public, rng),
+                dummy_proofs::<Bls12, _>(opts.proofs, rng),
+            )
+        } else {
+            let mut inputs = Vec::new();
+            let mut num = Fr::one();
+            num.double();
+            for _ in 0..opts.public {
+                inputs.push(num);
+                num.square();
+            }
+            println!("(Generating valid proofs...)");
+            let proofs = create_random_proof_batch(circuits.clone(), &params, rng).unwrap();
+            (inputs, proofs)
+        };
+
         for _ in 0..opts.samples {
-            let inputs = dummy_inputs::<Bls12, _>(opts.public, rng);
-            let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
             let pref = proofs.iter().collect::<Vec<&_>>();
             println!(
                 "{} proofs, each having {} public inputs...",
                 opts.proofs, opts.public
             );
-            let took = timer!(
-                verify_proofs_batch(&pvk, rng, &pref[..], &vec![inputs.clone(); opts.proofs])
-                    .unwrap(),
-                1
-            );
-            println!("Verification finished in {}ms", took);
+            let (valid, took) = timer!(verify_proofs_batch(
+                &pvk,
+                rng,
+                &pref[..],
+                &vec![inputs.clone(); opts.proofs]
+            )
+            .unwrap());
+            println!("Verification finished in {}ms (Valid: {})", took, valid);
         }
     }
 }

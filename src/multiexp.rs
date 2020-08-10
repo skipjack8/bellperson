@@ -418,14 +418,15 @@ where
 #[cfg(feature = "gpu")]
 #[test]
 pub fn gpu_multiexp_consistency() {
+    println!("USE GPU TOOLS");
     use paired::bls12_381::Bls12;
     use std::time::Instant;
 
     let _ = env_logger::try_init();
     gpu::dump_device_list();
 
-    const MAX_LOG_D: usize = 20;
-    const START_LOG_D: usize = 10;
+    const MAX_LOG_D: usize = 26;
+    const START_LOG_D: usize = 20;
     let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(MAX_LOG_D, false));
     let pool = Worker::new();
 
@@ -456,19 +457,6 @@ pub fn gpu_multiexp_consistency() {
             .unwrap();
         let gpu_dur = now.elapsed().as_secs() * 1000 as u64 + now.elapsed().subsec_millis() as u64;
         println!("GPU took {}ms.", gpu_dur);
-
-        now = Instant::now();
-        let cpu = multiexp(&pool, (g.clone(), 0), FullDensity, v.clone(), &mut None)
-            .wait()
-            .unwrap();
-        let cpu_dur = now.elapsed().as_secs() * 1000 as u64 + now.elapsed().subsec_millis() as u64;
-        println!("CPU took {}ms.", cpu_dur);
-
-        println!("Speedup: x{}", cpu_dur as f32 / gpu_dur as f32);
-
-        assert_eq!(cpu, gpu);
-
-        println!("============================");
 
         bases = [bases.clone(), bases.clone()].concat();
     }

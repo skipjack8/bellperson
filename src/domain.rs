@@ -87,18 +87,18 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     pub fn fft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        devices: &Option<gpu::DevicePool>,
     ) -> gpu::GPUResult<()> {
-        best_fft(kern, &mut self.coeffs, worker, &self.omega, self.exp)?;
+        best_fft(devices, &mut self.coeffs, worker, &self.omega, self.exp)?;
         Ok(())
     }
 
     pub fn ifft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        devices: &Option<gpu::DevicePool>,
     ) -> gpu::GPUResult<()> {
-        best_fft(kern, &mut self.coeffs, worker, &self.omegainv, self.exp)?;
+        best_fft(devices, &mut self.coeffs, worker, &self.omegainv, self.exp)?;
 
         worker.scope(self.coeffs.len(), |scope, chunk| {
             let minv = self.minv;
@@ -132,20 +132,20 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     pub fn coset_fft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        devices: &Option<gpu::DevicePool>,
     ) -> gpu::GPUResult<()> {
         self.distribute_powers(worker, E::Fr::multiplicative_generator());
-        self.fft(worker, kern)?;
+        self.fft(worker, devices)?;
         Ok(())
     }
 
     pub fn icoset_fft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        devices: &Option<gpu::DevicePool>,
     ) -> gpu::GPUResult<()> {
         let geninv = self.geninv;
-        self.ifft(worker, kern)?;
+        self.ifft(worker, devices)?;
         self.distribute_powers(worker, geninv);
         Ok(())
     }
@@ -288,17 +288,14 @@ impl<E: ScalarEngine> Group<E> for Scalar<E> {
 }
 
 fn best_fft<E: Engine, T: Group<E>>(
-    kern: &mut Option<gpu::LockedFFTKernel<E>>,
+    devices: &Option<gpu::DevicePool>,
     a: &mut [T],
     worker: &Worker,
     omega: &E::Fr,
     log_n: u32,
 ) -> gpu::GPUResult<()> {
-    if let Some(ref mut kern) = kern {
-        if kern
-            .with(|k: &mut gpu::FFTKernel<E>| gpu_fft(k, a, omega, log_n))
-            .is_ok()
-        {
+    if let Some(ref devices) = devices {
+        if gpu_fft(devices, a, omega, log_n).is_ok() {
             return Ok(());
         }
     }
@@ -314,7 +311,7 @@ fn best_fft<E: Engine, T: Group<E>>(
 }
 
 pub fn gpu_fft<E: Engine, T: Group<E>>(
-    kern: &mut gpu::FFTKernel<E>,
+    devices: &gpu::DevicePool,
     a: &mut [T],
     omega: &E::Fr,
     log_n: u32,
@@ -327,7 +324,7 @@ pub fn gpu_fft<E: Engine, T: Group<E>>(
     // For compatibility/performance reasons we decided to transmute the array to the desired type
     // as it seems safe and needs less modifications in the current structure of Bellman library.
     let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
-    kern.radix_fft(a, omega, log_n)?;
+    gpu::FFTKernel::<E>::radix_fft(devices, a, omega, log_n)?;
     Ok(())
 }
 
@@ -559,22 +556,6 @@ fn parallel_fft_consistency() {
     test_consistency::<Bls12, _>(rng);
 }
 
-pub fn create_fft_kernel<E>(_log_d: usize, priority: bool) -> Option<gpu::FFTKernel<E>>
-where
-    E: Engine,
-{
-    match gpu::FFTKernel::create(priority) {
-        Ok(k) => {
-            info!("GPU FFT kernel instantiated!");
-            Some(k)
-        }
-        Err(e) => {
-            warn!("Cannot instantiate GPU FFT kernel! Error: {}", e);
-            None
-        }
-    }
-}
-
 #[cfg(feature = "gpu")]
 #[cfg(test)]
 mod tests {
@@ -594,7 +575,7 @@ mod tests {
 
         let worker = Worker::new();
         let log_cpus = worker.log_num_cpus();
-        let mut kern = gpu::FFTKernel::create(false).expect("Cannot initialize kernel!");
+        let device_pool = gpu::DevicePool::default();
 
         for log_d in 1..25 {
             let d = 1 << log_d;
@@ -608,7 +589,7 @@ mod tests {
             println!("Testing FFT for {} elements...", d);
 
             let mut now = Instant::now();
-            gpu_fft(&mut kern, &mut v1.coeffs, &v1.omega, log_d).expect("GPU FFT failed!");
+            gpu_fft(&device_pool, &mut v1.coeffs, &v1.omega, log_d).expect("GPU FFT failed!");
             let gpu_dur =
                 now.elapsed().as_secs() * 1000 as u64 + now.elapsed().subsec_millis() as u64;
             println!("GPU took {}ms.", gpu_dur);

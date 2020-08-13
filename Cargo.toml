@@ -59,3 +59,6 @@ maintenance = { status = "actively-developed" }
 [[bench]]
 name = "lc"
 harness = false
+
+[patch.crates-io]
+rust-gpu-tools = { git = "https://github.com/filecoin-project/rust-gpu-tools", branch = "impl-hash" }

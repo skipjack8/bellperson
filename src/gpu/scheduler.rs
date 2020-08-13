@@ -4,6 +4,7 @@ use futures::Future;
 use paired::bls12_381::Bls12;
 use rust_gpu_tools::opencl as cl;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub struct DevicePool {
     devices: Vec<cl::Device>,
@@ -24,6 +25,7 @@ impl DevicePool {
 }
 
 lazy_static::lazy_static! {
+    static ref LOCK:Mutex<()>=Mutex::new(());
     static ref PROGRAMS: HashMap<cl::Device, cl::Program> = {
         let mut ret = HashMap::new();
         for d in cl::Device::all().unwrap() {
@@ -48,6 +50,7 @@ where
     F: FnOnce(&cl::Program) -> T + Send + 'static,
     T: Send + 'static,
 {
+    let _lock = LOCK.lock().unwrap();
     let device = pool.devices[0].clone();
     Box::new(worker.compute(move || Ok(f(&PROGRAMS[&device]))))
 }

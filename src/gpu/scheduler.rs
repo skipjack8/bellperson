@@ -50,7 +50,10 @@ where
     F: FnOnce(&cl::Program) -> T + Send + 'static,
     T: Send + 'static,
 {
-    let _lock = LOCK.lock().unwrap();
     let device = pool.devices[0].clone();
-    Box::new(worker.compute(move || Ok(f(&PROGRAMS[&device]))))
+    Box::new(worker.compute(move || {
+        let _lock = LOCK.lock().unwrap();
+        let ret = f(&PROGRAMS[&device]);
+        Ok(ret)
+    }))
 }

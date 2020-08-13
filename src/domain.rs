@@ -11,9 +11,7 @@
 //! [`EvaluationDomain`]: crate::domain::EvaluationDomain
 //! [Groth16]: https://eprint.iacr.org/2016/260
 
-use ff::{Field, PrimeField, ScalarEngine};
-use groupy::CurveProjective;
-use paired::Engine;
+use blstrs::*;
 
 use super::multicore::Worker;
 use super::SynthesisError;
@@ -22,33 +20,33 @@ use crate::gpu;
 
 use log::{info, warn};
 
-pub struct EvaluationDomain<E: ScalarEngine, G: Group<E>> {
-    coeffs: Vec<G>,
+pub struct EvaluationDomain {
+    coeffs: Vec<Scalar>,
     exp: u32,
-    omega: E::Fr,
-    omegainv: E::Fr,
-    geninv: E::Fr,
-    minv: E::Fr,
+    omega: Scalar,
+    omegainv: Scalar,
+    geninv: Scalar,
+    minv: Scalar,
 }
 
-impl<E: ScalarEngine, G: Group<E>> AsRef<[G]> for EvaluationDomain<E, G> {
-    fn as_ref(&self) -> &[G] {
+impl AsRef<[Scalar]> for EvaluationDomain {
+    fn as_ref(&self) -> &[Scalar] {
         &self.coeffs
     }
 }
 
-impl<E: ScalarEngine, G: Group<E>> AsMut<[G]> for EvaluationDomain<E, G> {
-    fn as_mut(&mut self) -> &mut [G] {
+impl AsMut<[Scalar]> for EvaluationDomain {
+    fn as_mut(&mut self) -> &mut [Scalar] {
         &mut self.coeffs
     }
 }
 
-impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
-    pub fn into_coeffs(self) -> Vec<G> {
+impl EvaluationDomain {
+    pub fn into_coeffs(self) -> Vec<Scalar> {
         self.coeffs
     }
 
-    pub fn from_coeffs(mut coeffs: Vec<G>) -> Result<EvaluationDomain<E, G>, SynthesisError> {
+    pub fn from_coeffs(mut coeffs: Vec<Scalar>) -> Result<EvaluationDomain, SynthesisError> {
         // Compute the size of our evaluation domain
         let mut m = 1;
         let mut exp = 0;
@@ -58,36 +56,33 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
 
             // The pairing-friendly curve may not be able to support
             // large enough (radix2) evaluation domains.
-            if exp >= E::Fr::S {
+            if exp >= SCALAR_S {
                 return Err(SynthesisError::PolynomialDegreeTooLarge);
             }
         }
         // Compute omega, the 2^exp primitive root of unity
-        let mut omega = E::Fr::root_of_unity();
-        for _ in exp..E::Fr::S {
+        let mut omega = Scalar::root_of_unity();
+        for _ in exp..SCALAR_S {
             omega.square();
         }
 
         // Extend the coeffs vector with zeroes if necessary
-        coeffs.resize(m, G::group_zero());
+        coeffs.resize(m, Scalar::zero());
 
         Ok(EvaluationDomain {
             coeffs,
             exp,
             omega,
-            omegainv: omega.inverse().unwrap(),
-            geninv: E::Fr::multiplicative_generator().inverse().unwrap(),
-            minv: E::Fr::from_str(&format!("{}", m))
-                .unwrap()
-                .inverse()
-                .unwrap(),
+            omegainv: omega.invert().unwrap(),
+            geninv: Scalar::multiplicative_generator().invert().unwrap(),
+            minv: Scalar::from(m as u64).invert().unwrap(),
         })
     }
 
     pub fn fft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        kern: &mut Option<gpu::LockedFFTKernel>,
     ) -> gpu::GPUResult<()> {
         best_fft(kern, &mut self.coeffs, worker, &self.omega, self.exp)?;
         Ok(())
@@ -96,7 +91,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     pub fn ifft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        kern: &mut Option<gpu::LockedFFTKernel>,
     ) -> gpu::GPUResult<()> {
         best_fft(kern, &mut self.coeffs, worker, &self.omegainv, self.exp)?;
 
@@ -106,7 +101,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
             for v in self.coeffs.chunks_mut(chunk) {
                 scope.spawn(move |_| {
                     for v in v {
-                        v.group_mul_assign(&minv);
+                        *v *= &minv;
                     }
                 });
             }
@@ -115,14 +110,14 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
         Ok(())
     }
 
-    pub fn distribute_powers(&mut self, worker: &Worker, g: E::Fr) {
+    pub fn distribute_powers(&mut self, worker: &Worker, g: Scalar) {
         worker.scope(self.coeffs.len(), |scope, chunk| {
             for (i, v) in self.coeffs.chunks_mut(chunk).enumerate() {
                 scope.spawn(move |_| {
-                    let mut u = g.pow(&[(i * chunk) as u64]);
+                    let mut u = g.pow(&[(i * chunk) as u64, 0, 0, 0]);
                     for v in v.iter_mut() {
-                        v.group_mul_assign(&u);
-                        u.mul_assign(&g);
+                        *v *= &u;
+                        u *= &g;
                     }
                 });
             }
@@ -132,9 +127,9 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     pub fn coset_fft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        kern: &mut Option<gpu::LockedFFTKernel>,
     ) -> gpu::GPUResult<()> {
-        self.distribute_powers(worker, E::Fr::multiplicative_generator());
+        self.distribute_powers(worker, Scalar::multiplicative_generator());
         self.fft(worker, kern)?;
         Ok(())
     }
@@ -142,7 +137,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     pub fn icoset_fft(
         &mut self,
         worker: &Worker,
-        kern: &mut Option<gpu::LockedFFTKernel<E>>,
+        kern: &mut Option<gpu::LockedFFTKernel>,
     ) -> gpu::GPUResult<()> {
         let geninv = self.geninv;
         self.ifft(worker, kern)?;
@@ -152,9 +147,9 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
 
     /// This evaluates t(tau) for this domain, which is
     /// tau^m - 1 for these radix-2 domains.
-    pub fn z(&self, tau: &E::Fr) -> E::Fr {
-        let mut tmp = tau.pow(&[self.coeffs.len() as u64]);
-        tmp.sub_assign(&E::Fr::one());
+    pub fn z(&self, tau: &Scalar) -> Scalar {
+        let mut tmp = tau.pow(&[self.coeffs.len() as u64, 0, 0, 0]);
+        tmp -= &Scalar::one();
 
         tmp
     }
@@ -164,15 +159,15 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     /// a coset.
     pub fn divide_by_z_on_coset(&mut self, worker: &Worker) {
         let i = self
-            .z(&E::Fr::multiplicative_generator())
-            .inverse()
+            .z(&Scalar::multiplicative_generator())
+            .invert()
             .unwrap();
 
         worker.scope(self.coeffs.len(), |scope, chunk| {
             for v in self.coeffs.chunks_mut(chunk) {
                 scope.spawn(move |_| {
                     for v in v {
-                        v.group_mul_assign(&i);
+                        *v *= &i;
                     }
                 });
             }
@@ -180,7 +175,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     }
 
     /// Perform O(n) multiplication of two polynomials in the domain.
-    pub fn mul_assign(&mut self, worker: &Worker, other: &EvaluationDomain<E, Scalar<E>>) {
+    pub fn mul_assign(&mut self, worker: &Worker, other: &EvaluationDomain) {
         assert_eq!(self.coeffs.len(), other.coeffs.len());
 
         worker.scope(self.coeffs.len(), |scope, chunk| {
@@ -191,7 +186,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
             {
                 scope.spawn(move |_| {
                     for (a, b) in a.iter_mut().zip(b.iter()) {
-                        a.group_mul_assign(&b.0);
+                        *a *= b;
                     }
                 });
             }
@@ -199,7 +194,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     }
 
     /// Perform O(n) subtraction of one polynomial from another in the domain.
-    pub fn sub_assign(&mut self, worker: &Worker, other: &EvaluationDomain<E, G>) {
+    pub fn sub_assign(&mut self, worker: &Worker, other: &EvaluationDomain) {
         assert_eq!(self.coeffs.len(), other.coeffs.len());
 
         worker.scope(self.coeffs.len(), |scope, chunk| {
@@ -210,7 +205,7 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
             {
                 scope.spawn(move |_| {
                     for (a, b) in a.iter_mut().zip(b.iter()) {
-                        a.group_sub_assign(&b);
+                        *a -= b;
                     }
                 });
             }
@@ -218,85 +213,16 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     }
 }
 
-pub trait Group<E: ScalarEngine>: Sized + Copy + Clone + Send + Sync {
-    fn group_zero() -> Self;
-    fn group_mul_assign(&mut self, by: &E::Fr);
-    fn group_add_assign(&mut self, other: &Self);
-    fn group_sub_assign(&mut self, other: &Self);
-}
-
-pub struct Point<G: CurveProjective>(pub G);
-
-impl<G: CurveProjective> PartialEq for Point<G> {
-    fn eq(&self, other: &Point<G>) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<G: CurveProjective> Copy for Point<G> {}
-
-impl<G: CurveProjective> Clone for Point<G> {
-    fn clone(&self) -> Point<G> {
-        *self
-    }
-}
-
-impl<G: CurveProjective> Group<G::Engine> for Point<G> {
-    fn group_zero() -> Self {
-        Point(G::zero())
-    }
-    fn group_mul_assign(&mut self, by: &G::Scalar) {
-        self.0.mul_assign(by.into_repr());
-    }
-    fn group_add_assign(&mut self, other: &Self) {
-        self.0.add_assign(&other.0);
-    }
-    fn group_sub_assign(&mut self, other: &Self) {
-        self.0.sub_assign(&other.0);
-    }
-}
-
-pub struct Scalar<E: ScalarEngine>(pub E::Fr);
-
-impl<E: ScalarEngine> PartialEq for Scalar<E> {
-    fn eq(&self, other: &Scalar<E>) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<E: ScalarEngine> Copy for Scalar<E> {}
-
-impl<E: ScalarEngine> Clone for Scalar<E> {
-    fn clone(&self) -> Scalar<E> {
-        *self
-    }
-}
-
-impl<E: ScalarEngine> Group<E> for Scalar<E> {
-    fn group_zero() -> Self {
-        Scalar(E::Fr::zero())
-    }
-    fn group_mul_assign(&mut self, by: &E::Fr) {
-        self.0.mul_assign(by);
-    }
-    fn group_add_assign(&mut self, other: &Self) {
-        self.0.add_assign(&other.0);
-    }
-    fn group_sub_assign(&mut self, other: &Self) {
-        self.0.sub_assign(&other.0);
-    }
-}
-
-fn best_fft<E: Engine, T: Group<E>>(
-    kern: &mut Option<gpu::LockedFFTKernel<E>>,
-    a: &mut [T],
+fn best_fft(
+    kern: &mut Option<gpu::LockedFFTKernel>,
+    a: &mut [Scalar],
     worker: &Worker,
-    omega: &E::Fr,
+    omega: &Scalar,
     log_n: u32,
 ) -> gpu::GPUResult<()> {
     if let Some(ref mut kern) = kern {
         if kern
-            .with(|k: &mut gpu::FFTKernel<E>| gpu_fft(k, a, omega, log_n))
+            .with(|k: &mut gpu::FFTKernel| gpu_fft(k, a, omega, log_n))
             .is_ok()
         {
             return Ok(());
@@ -313,25 +239,17 @@ fn best_fft<E: Engine, T: Group<E>>(
     Ok(())
 }
 
-pub fn gpu_fft<E: Engine, T: Group<E>>(
-    kern: &mut gpu::FFTKernel<E>,
-    a: &mut [T],
-    omega: &E::Fr,
+pub fn gpu_fft(
+    kern: &mut gpu::FFTKernel,
+    a: &mut [Scalar],
+    omega: &Scalar,
     log_n: u32,
 ) -> gpu::GPUResult<()> {
-    // EvaluationDomain module is supposed to work only with E::Fr elements, and not CurveProjective
-    // points. The Bellman authors have implemented an unnecessarry abstraction called Group<E>
-    // which is implemented for both PrimeField and CurveProjective elements. As nowhere in the code
-    // is the CurveProjective version used, T and E::Fr are guaranteed to be equal and thus have same
-    // size.
-    // For compatibility/performance reasons we decided to transmute the array to the desired type
-    // as it seems safe and needs less modifications in the current structure of Bellman library.
-    let a = unsafe { std::mem::transmute::<&mut [T], &mut [E::Fr]>(a) };
     kern.radix_fft(a, omega, log_n)?;
     Ok(())
 }
 
-pub fn serial_fft<E: ScalarEngine, T: Group<E>>(a: &mut [T], omega: &E::Fr, log_n: u32) {
+pub fn serial_fft(a: &mut [Scalar], omega: &Scalar, log_n: u32) {
     fn bitreverse(mut n: u32, l: u32) -> u32 {
         let mut r = 0;
         for _ in 0..l {
@@ -353,19 +271,19 @@ pub fn serial_fft<E: ScalarEngine, T: Group<E>>(a: &mut [T], omega: &E::Fr, log_
 
     let mut m = 1;
     for _ in 0..log_n {
-        let w_m = omega.pow(&[u64::from(n / (2 * m))]);
+        let w_m = omega.pow(&[u64::from(n / (2 * m)), 0, 0, 0]);
 
         let mut k = 0;
         while k < n {
-            let mut w = E::Fr::one();
+            let mut w = Scalar::one();
             for j in 0..m {
                 let mut t = a[(k + j + m) as usize];
-                t.group_mul_assign(&w);
+                t *= &w;
                 let mut tmp = a[(k + j) as usize];
-                tmp.group_sub_assign(&t);
+                tmp -= &t;
                 a[(k + j + m) as usize] = tmp;
-                a[(k + j) as usize].group_add_assign(&t);
-                w.mul_assign(&w_m);
+                a[(k + j) as usize] += &t;
+                w *= &w_m;
             }
 
             k += 2 * m;
@@ -375,19 +293,13 @@ pub fn serial_fft<E: ScalarEngine, T: Group<E>>(a: &mut [T], omega: &E::Fr, log_
     }
 }
 
-fn parallel_fft<E: ScalarEngine, T: Group<E>>(
-    a: &mut [T],
-    worker: &Worker,
-    omega: &E::Fr,
-    log_n: u32,
-    log_cpus: u32,
-) {
+fn parallel_fft(a: &mut [Scalar], worker: &Worker, omega: &Scalar, log_n: u32, log_cpus: u32) {
     assert!(log_n >= log_cpus);
 
     let num_cpus = 1 << log_cpus;
     let log_new_n = log_n - log_cpus;
-    let mut tmp = vec![vec![T::group_zero(); 1 << log_new_n]; num_cpus];
-    let new_omega = omega.pow(&[num_cpus as u64]);
+    let mut tmp = vec![vec![Scalar::zero(); 1 << log_new_n]; num_cpus];
+    let new_omega = omega.pow(&[num_cpus as u64, 0, 0, 0]);
 
     worker.scope(0, |scope, _| {
         let a = &*a;
@@ -395,19 +307,19 @@ fn parallel_fft<E: ScalarEngine, T: Group<E>>(
         for (j, tmp) in tmp.iter_mut().enumerate() {
             scope.spawn(move |_scope| {
                 // Shuffle into a sub-FFT
-                let omega_j = omega.pow(&[j as u64]);
-                let omega_step = omega.pow(&[(j as u64) << log_new_n]);
+                let omega_j = omega.pow(&[j as u64, 0, 0, 0]);
+                let omega_step = omega.pow(&[(j as u64) << log_new_n, 0, 0, 0]);
 
-                let mut elt = E::Fr::one();
+                let mut elt = Scalar::one();
                 for (i, tmp) in tmp.iter_mut().enumerate() {
                     for s in 0..num_cpus {
                         let idx = (i + (s << log_new_n)) % (1 << log_n);
                         let mut t = a[idx];
-                        t.group_mul_assign(&elt);
-                        tmp.group_add_assign(&t);
-                        elt.mul_assign(&omega_step);
+                        t *= &elt;
+                        *tmp += &t;
+                        elt *= &omega_step;
                     }
-                    elt.mul_assign(&omega_j);
+                    elt *= &omega_j;
                 }
 
                 // Perform sub-FFT
@@ -441,30 +353,26 @@ fn polynomial_arith() {
     use paired::bls12_381::Bls12;
     use rand_core::RngCore;
 
-    fn test_mul<E: ScalarEngine, R: RngCore>(rng: &mut R) {
+    fn test_mul<R: RngCore>(rng: &mut R) {
         let worker = Worker::new();
 
         for coeffs_a in 0..70 {
             for coeffs_b in 0..70 {
-                let mut a: Vec<_> = (0..coeffs_a)
-                    .map(|_| Scalar::<E>(E::Fr::random(rng)))
-                    .collect();
-                let mut b: Vec<_> = (0..coeffs_b)
-                    .map(|_| Scalar::<E>(E::Fr::random(rng)))
-                    .collect();
+                let mut a: Vec<_> = (0..coeffs_a).map(|_| Scalar::random(rng)).collect();
+                let mut b: Vec<_> = (0..coeffs_b).map(|_| Scalar::random(rng)).collect();
 
                 // naive evaluation
-                let mut naive = vec![Scalar(E::Fr::zero()); coeffs_a + coeffs_b];
+                let mut naive = vec![Scalar::zero(); coeffs_a + coeffs_b];
                 for (i1, a) in a.iter().enumerate() {
                     for (i2, b) in b.iter().enumerate() {
                         let mut prod = *a;
-                        prod.group_mul_assign(&b.0);
-                        naive[i1 + i2].group_add_assign(&prod);
+                        prod *= &b;
+                        naive[i1 + i2] += &prod;
                     }
                 }
 
-                a.resize(coeffs_a + coeffs_b, Scalar(E::Fr::zero()));
-                b.resize(coeffs_a + coeffs_b, Scalar(E::Fr::zero()));
+                a.resize(coeffs_a + coeffs_b, Scalar::zero());
+                b.resize(coeffs_a + coeffs_b, Scalar::zero());
 
                 let mut a = EvaluationDomain::from_coeffs(a).unwrap();
                 let mut b = EvaluationDomain::from_coeffs(b).unwrap();
@@ -492,7 +400,7 @@ fn fft_composition() {
     use paired::bls12_381::Bls12;
     use rand_core::RngCore;
 
-    fn test_comp<E: ScalarEngine, R: RngCore>(rng: &mut R) {
+    fn test_comp<R: RngCore>(rng: &mut R) {
         let worker = Worker::new();
 
         for coeffs in 0..10 {
@@ -500,7 +408,7 @@ fn fft_composition() {
 
             let mut v = vec![];
             for _ in 0..coeffs {
-                v.push(Scalar::<E>(E::Fr::random(rng)));
+                v.push(Scalar::random(rng));
             }
 
             let mut domain = EvaluationDomain::from_coeffs(v.clone()).unwrap();
@@ -531,16 +439,14 @@ fn parallel_fft_consistency() {
     use rand_core::RngCore;
     use std::cmp::min;
 
-    fn test_consistency<E: ScalarEngine, R: RngCore>(rng: &mut R) {
+    fn test_consistency<R: RngCore>(rng: &mut R) {
         let worker = Worker::new();
 
         for _ in 0..5 {
             for log_d in 0..10 {
                 let d = 1 << log_d;
 
-                let v1 = (0..d)
-                    .map(|_| Scalar::<E>(E::Fr::random(rng)))
-                    .collect::<Vec<_>>();
+                let v1 = (0..d).map(|_| Scalar::random(rng)).collect::<Vec<_>>();
                 let mut v1 = EvaluationDomain::from_coeffs(v1).unwrap();
                 let mut v2 = EvaluationDomain::from_coeffs(v1.coeffs.clone()).unwrap();
 
@@ -556,13 +462,10 @@ fn parallel_fft_consistency() {
 
     let rng = &mut rand::thread_rng();
 
-    test_consistency::<Bls12, _>(rng);
+    test_consistency::<_>(rng);
 }
 
-pub fn create_fft_kernel<E>(_log_d: usize, priority: bool) -> Option<gpu::FFTKernel<E>>
-where
-    E: Engine,
-{
+pub fn create_fft_kernel(_log_d: usize, priority: bool) -> Option<gpu::FFTKernel> {
     match gpu::FFTKernel::create(priority) {
         Ok(k) => {
             info!("GPU FFT kernel instantiated!");

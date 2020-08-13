@@ -1,10 +1,7 @@
-use ff::{Field, PrimeField};
-use paired::Engine;
+use blstrs::*;
 
 mod dummy_engine;
 use self::dummy_engine::*;
-
-use std::marker::PhantomData;
 
 use super::{
     create_proof, create_proof_batch, generate_parameters, prepare_verifying_key, verify_proof,
@@ -12,22 +9,21 @@ use super::{
 use crate::{Circuit, ConstraintSystem, SynthesisError};
 
 #[derive(Clone)]
-struct XORDemo<E: Engine> {
+struct XORDemo {
     a: Option<bool>,
     b: Option<bool>,
-    _marker: PhantomData<E>,
 }
 
-impl<E: Engine> Circuit<E> for XORDemo<E> {
-    fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
+impl Circuit for XORDemo {
+    fn synthesize<CS: ConstraintSystem>(self, cs: &mut CS) -> Result<(), SynthesisError> {
         let a_var = cs.alloc(
             || "a",
             || {
                 if self.a.is_some() {
                     if self.a.unwrap() {
-                        Ok(E::Fr::one())
+                        Ok(Scalar::one())
                     } else {
-                        Ok(E::Fr::zero())
+                        Ok(Scalar::zero())
                     }
                 } else {
                     Err(SynthesisError::AssignmentMissing)
@@ -47,9 +43,9 @@ impl<E: Engine> Circuit<E> for XORDemo<E> {
             || {
                 if self.b.is_some() {
                     if self.b.unwrap() {
-                        Ok(E::Fr::one())
+                        Ok(Scalar::one())
                     } else {
-                        Ok(E::Fr::zero())
+                        Ok(Scalar::zero())
                     }
                 } else {
                     Err(SynthesisError::AssignmentMissing)
@@ -69,9 +65,9 @@ impl<E: Engine> Circuit<E> for XORDemo<E> {
             || {
                 if self.a.is_some() && self.b.is_some() {
                     if self.a.unwrap() ^ self.b.unwrap() {
-                        Ok(E::Fr::one())
+                        Ok(Scalar::one())
                     } else {
-                        Ok(E::Fr::zero())
+                        Ok(Scalar::zero())
                     }
                 } else {
                     Err(SynthesisError::AssignmentMissing)
@@ -92,20 +88,16 @@ impl<E: Engine> Circuit<E> for XORDemo<E> {
 
 #[test]
 fn test_xordemo() {
-    let g1 = Fr::one();
-    let g2 = Fr::one();
-    let alpha = Fr::from_str("48577").unwrap();
-    let beta = Fr::from_str("22580").unwrap();
-    let gamma = Fr::from_str("53332").unwrap();
-    let delta = Fr::from_str("5481").unwrap();
-    let tau = Fr::from_str("3673").unwrap();
+    let g1 = Scalar::one();
+    let g2 = Scalar::one();
+    let alpha = Scalar::from_str("48577").unwrap();
+    let beta = Scalar::from_str("22580").unwrap();
+    let gamma = Scalar::from_str("53332").unwrap();
+    let delta = Scalar::from_str("5481").unwrap();
+    let tau = Scalar::from_str("3673").unwrap();
 
     let params = {
-        let c = XORDemo::<DummyEngine> {
-            a: None,
-            b: None,
-            _marker: PhantomData,
-        };
+        let c = XORDemo::<DummyEngine> { a: None, b: None };
 
         generate_parameters(c, g1, g2, alpha, beta, gamma, delta, tau).unwrap()
     };
@@ -125,15 +117,15 @@ fn test_xordemo() {
     // have 7 elements (it's a quotient polynomial)
     assert_eq!(7, params.h.len());
 
-    let mut root_of_unity = Fr::root_of_unity();
+    let mut root_of_unity = Scalar::root_of_unity();
 
     // We expect this to be a 2^10 root of unity
-    assert_eq!(Fr::one(), root_of_unity.pow(&[1 << 10]));
+    assert_eq!(Scalar::one(), root_of_unity.pow(&[1 << 10]));
 
     // Let's turn it into a 2^3 root of unity.
     root_of_unity = root_of_unity.pow(&[1 << 7]);
-    assert_eq!(Fr::one(), root_of_unity.pow(&[1 << 3]));
-    assert_eq!(Fr::from_str("20201").unwrap(), root_of_unity);
+    assert_eq!(Scalar::one(), root_of_unity.pow(&[1 << 3]));
+    assert_eq!(Scalar::from_str("20201").unwrap(), root_of_unity);
 
     // Let's compute all the points in our evaluation domain.
     let mut points = Vec::with_capacity(8);
@@ -143,14 +135,14 @@ fn test_xordemo() {
 
     // Let's compute t(tau) = (tau - p_0)(tau - p_1)...
     //                      = tau^8 - 1
-    let mut t_at_tau = tau.pow(&[8]);
-    t_at_tau.sub_assign(&Fr::one());
+    let mut t_at_tau = tau.pow(&[8, 0, 0, 0]);
+    t_at_tau.sub_assign(&Scalar::one());
     {
-        let mut tmp = Fr::one();
+        let mut tmp = Scalar::one();
         for p in &points {
             let mut term = tau;
             term.sub_assign(p);
-            tmp.mul_assign(&term);
+            tmp *= &term;
         }
         assert_eq!(tmp, t_at_tau);
     }
@@ -161,16 +153,16 @@ fn test_xordemo() {
     let gamma_inverse = gamma.inverse().unwrap();
     {
         let mut coeff = delta_inverse;
-        coeff.mul_assign(&t_at_tau);
+        coeff *= &t_at_tau;
 
-        let mut cur = Fr::one();
+        let mut cur = Scalar::one();
         for h in params.h.iter() {
             let mut tmp = cur;
-            tmp.mul_assign(&coeff);
+            tmp *= &coeff;
 
             assert_eq!(*h, tmp);
 
-            cur.mul_assign(&tau);
+            cur *= &tau;
         }
     }
 
@@ -217,15 +209,15 @@ fn test_xordemo() {
 
     let u_i = [59158, 48317, 21767, 10402]
         .iter()
-        .map(|e| Fr::from_str(&format!("{}", e)).unwrap())
+        .map(|e| Scalar::from_str(&format!("{}", e)).unwrap())
         .collect::<Vec<Fr>>();
     let v_i = [0, 0, 60619, 30791]
         .iter()
-        .map(|e| Fr::from_str(&format!("{}", e)).unwrap())
+        .map(|e| Scalar::from_str(&format!("{}", e)).unwrap())
         .collect::<Vec<Fr>>();
     let w_i = [0, 23320, 41193, 41193]
         .iter()
-        .map(|e| Fr::from_str(&format!("{}", e)).unwrap())
+        .map(|e| Scalar::from_str(&format!("{}", e)).unwrap())
         .collect::<Vec<Fr>>();
 
     for (u, a) in u_i.iter().zip(&params.a[..]) {
@@ -234,7 +226,7 @@ fn test_xordemo() {
 
     for (v, b) in v_i
         .iter()
-        .filter(|&&e| e != Fr::zero())
+        .filter(|&&e| e != Scalar::zero())
         .zip(&params.b_g1[..])
     {
         assert_eq!(v, b);
@@ -242,7 +234,7 @@ fn test_xordemo() {
 
     for (v, b) in v_i
         .iter()
-        .filter(|&&e| e != Fr::zero())
+        .filter(|&&e| e != Scalar::zero())
         .zip(&params.b_g2[..])
     {
         assert_eq!(v, b);
@@ -250,22 +242,22 @@ fn test_xordemo() {
 
     for i in 0..4 {
         let mut tmp1 = beta;
-        tmp1.mul_assign(&u_i[i]);
+        tmp1 *= &u_i[i];
 
         let mut tmp2 = alpha;
-        tmp2.mul_assign(&v_i[i]);
+        tmp2 *= &v_i[i];
 
-        tmp1.add_assign(&tmp2);
-        tmp1.add_assign(&w_i[i]);
+        tmp1 += &tmp2;
+        tmp1 += &w_i[i];
 
         if i < 2 {
             // Check the correctness of the IC query elements
-            tmp1.mul_assign(&gamma_inverse);
+            tmp1 *= &gamma_inverse;
 
             assert_eq!(tmp1, params.vk.ic[i]);
         } else {
             // Check the correctness of the L query elements
-            tmp1.mul_assign(&delta_inverse);
+            tmp1 *= &delta_inverse;
 
             assert_eq!(tmp1, params.l[i - 2]);
         }
@@ -281,14 +273,13 @@ fn test_xordemo() {
 
     let pvk = prepare_verifying_key(&params.vk);
 
-    let r = Fr::from_str("27134").unwrap();
-    let s = Fr::from_str("17146").unwrap();
+    let r = Scalar::from_str("27134").unwrap();
+    let s = Scalar::from_str("17146").unwrap();
 
     let proof = {
         let c = XORDemo {
             a: Some(true),
             b: Some(false),
-            _marker: PhantomData,
         };
 
         create_proof(c, &params, r, s).unwrap()
@@ -302,12 +293,12 @@ fn test_xordemo() {
     {
         // proof A = alpha + A(tau) + delta * r
         let mut expected_a = delta;
-        expected_a.mul_assign(&r);
-        expected_a.add_assign(&alpha);
-        expected_a.add_assign(&u_i[0]); // a_0 = 1
-        expected_a.add_assign(&u_i[1]); // a_1 = 1
-        expected_a.add_assign(&u_i[2]); // a_2 = 1
-                                        // a_3 = 0
+        expected_a *= &r;
+        expected_a += &alpha;
+        expected_a += &u_i[0]; // a_0 = 1
+        expected_a += &u_i[1]; // a_1 = 1
+        expected_a += &u_i[2]; // a_2 = 1
+                               // a_3 = 0
         assert_eq!(proof.a, expected_a);
     }
 
@@ -319,12 +310,12 @@ fn test_xordemo() {
     {
         // proof B = beta + B(tau) + delta * s
         let mut expected_b = delta;
-        expected_b.mul_assign(&s);
-        expected_b.add_assign(&beta);
-        expected_b.add_assign(&v_i[0]); // a_0 = 1
-        expected_b.add_assign(&v_i[1]); // a_1 = 1
-        expected_b.add_assign(&v_i[2]); // a_2 = 1
-                                        // a_3 = 0
+        expected_b *= &s;
+        expected_b += &beta;
+        expected_b += &v_i[0]; // a_0 = 1
+        expected_b += &v_i[1]; // a_1 = 1
+        expected_b += &v_i[2]; // a_2 = 1
+                               // a_3 = 0
         assert_eq!(proof.b, expected_b);
     }
 
@@ -342,79 +333,74 @@ fn test_xordemo() {
     // h(x) = P(x) / t(x)
     //      = 49752*x^6 + 13914*x^5 + 29243*x^4 + 27227*x^3 + 62362*x^2 + 35703*x + 4032
     {
-        let mut expected_c = Fr::zero();
+        let mut expected_c = Scalar::zero();
 
         // A * s
         let mut tmp = proof.a;
-        tmp.mul_assign(&s);
-        expected_c.add_assign(&tmp);
+        tmp *= &s;
+        expected_c += &tmp;
 
         // B * r
         let mut tmp = proof.b;
-        tmp.mul_assign(&r);
-        expected_c.add_assign(&tmp);
+        tmp *= &r;
+        expected_c += &tmp;
 
         // delta * r * s
         let mut tmp = delta;
-        tmp.mul_assign(&r);
-        tmp.mul_assign(&s);
+        tmp *= &r;
+        tmp *= &s;
         expected_c.sub_assign(&tmp);
 
         // L query answer
         // a_2 = 1, a_3 = 0
-        expected_c.add_assign(&params.l[0]);
+        expected_c += &params.l[0];
 
         // H query answer
         for (i, coeff) in [5040, 11763, 10755, 63633, 128, 9747, 8739]
             .iter()
             .enumerate()
         {
-            let coeff = Fr::from_str(&format!("{}", coeff)).unwrap();
+            let coeff = Scalar::from_str(&format!("{}", coeff)).unwrap();
 
             let mut tmp = params.h[i];
-            tmp.mul_assign(&coeff);
-            expected_c.add_assign(&tmp);
+            tmp *= &coeff;
+            expected_c += &tmp;
         }
 
         assert_eq!(expected_c, proof.c);
     }
 
-    assert!(verify_proof(&pvk, &proof, &[Fr::one()]).unwrap());
+    assert!(verify_proof(&pvk, &proof, &[Scalar::one()]).unwrap());
 }
 
 #[test]
 fn test_create_batch_single() {
     // test consistency between single and batch creation
-    let g1 = Fr::one();
-    let g2 = Fr::one();
-    let alpha = Fr::from_str("48577").unwrap();
-    let beta = Fr::from_str("22580").unwrap();
-    let gamma = Fr::from_str("53332").unwrap();
-    let delta = Fr::from_str("5481").unwrap();
-    let tau = Fr::from_str("3673").unwrap();
+    let g1 = G1Projective::one();
+    let g2 = G2Projective::one();
+    let alpha = Scalar::from(48577);
+    let beta = Scalar::from(22580);
+    let gamma = Scalar::from(53332);
+    let delta = Scalar::from(5481);
+    let tau = Scalar::from(3673);
 
     let params = {
-        let c = XORDemo::<DummyEngine> {
-            a: None,
-            b: None,
-            _marker: PhantomData,
-        };
+        let c = XORDemo::<DummyEngine> { a: None, b: None };
 
         generate_parameters(c, g1, g2, alpha, beta, gamma, delta, tau).unwrap()
     };
 
     let pvk = prepare_verifying_key(&params.vk);
 
-    let r1 = Fr::from_str("27134").unwrap();
-    let s1 = Fr::from_str("17146").unwrap();
+    let r1 = Scalar::from_str("27134").unwrap();
+    let s1 = Scalar::from_str("17146").unwrap();
 
-    let r2 = Fr::from_str("27132").unwrap();
-    let s2 = Fr::from_str("17142").unwrap();
+    let r2 = Scalar::from_str("27132").unwrap();
+    let s2 = Scalar::from_str("17142").unwrap();
 
     let c = XORDemo {
         a: Some(true),
         b: Some(false),
-        _marker: PhantomData,
     };
     let proof_single_1 = create_proof(c.clone(), &params, r1, s1).unwrap();
     let proof_single_2 = create_proof(c.clone(), &params, r2, s2).unwrap();
@@ -430,9 +416,9 @@ fn test_create_batch_single() {
     assert_eq!(proof_batch[0], proof_single_1);
     assert_eq!(proof_batch[1], proof_single_2);
 
-    assert!(verify_proof(&pvk, &proof_single_1, &[Fr::one()]).unwrap());
-    assert!(verify_proof(&pvk, &proof_single_2, &[Fr::one()]).unwrap());
+    assert!(verify_proof(&pvk, &proof_single_1, &[Scalar::one()]).unwrap());
+    assert!(verify_proof(&pvk, &proof_single_2, &[Scalar::one()]).unwrap());
     for proof in &proof_batch {
-        assert!(verify_proof(&pvk, &proof, &[Fr::one()]).unwrap());
+        assert!(verify_proof(&pvk, &proof, &[Scalar::one()]).unwrap());
     }
 }

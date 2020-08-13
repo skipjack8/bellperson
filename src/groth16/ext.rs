@@ -1,117 +1,109 @@
 use super::{create_proof_batch_priority, create_random_proof_batch_priority};
 use super::{ParameterSource, Proof};
 use crate::{Circuit, SynthesisError};
-use paired::Engine;
+
 use rand_core::RngCore;
 
-pub fn create_proof<E, C, P: ParameterSource<E>>(
+use blstrs::*;
+
+pub fn create_proof<C, P: ParameterSource>(
     circuit: C,
     params: P,
-    r: E::Fr,
-    s: E::Fr,
-) -> Result<Proof<E>, SynthesisError>
+    r: Scalar,
+    s: Scalar,
+) -> Result<Proof, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
 {
     let proofs =
-        create_proof_batch_priority::<E, C, P>(vec![circuit], params, vec![r], vec![s], false)?;
+        create_proof_batch_priority::<C, P>(vec![circuit], params, vec![r], vec![s], false)?;
     Ok(proofs.into_iter().next().unwrap())
 }
 
-pub fn create_random_proof<E, C, R, P: ParameterSource<E>>(
+pub fn create_random_proof<C, R, P: ParameterSource>(
     circuit: C,
     params: P,
     rng: &mut R,
-) -> Result<Proof<E>, SynthesisError>
+) -> Result<Proof, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
     R: RngCore,
 {
-    let proofs =
-        create_random_proof_batch_priority::<E, C, R, P>(vec![circuit], params, rng, false)?;
+    let proofs = create_random_proof_batch_priority::<C, R, P>(vec![circuit], params, rng, false)?;
     Ok(proofs.into_iter().next().unwrap())
 }
 
-pub fn create_proof_batch<E, C, P: ParameterSource<E>>(
+pub fn create_proof_batch<C, P: ParameterSource>(
     circuits: Vec<C>,
     params: P,
-    r: Vec<E::Fr>,
-    s: Vec<E::Fr>,
-) -> Result<Vec<Proof<E>>, SynthesisError>
+    r: Vec<Scalar>,
+    s: Vec<Scalar>,
+) -> Result<Vec<Proof>, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
 {
-    create_proof_batch_priority::<E, C, P>(circuits, params, r, s, false)
+    create_proof_batch_priority::<C, P>(circuits, params, r, s, false)
 }
 
-pub fn create_random_proof_batch<E, C, R, P: ParameterSource<E>>(
+pub fn create_random_proof_batch<C, R, P: ParameterSource>(
     circuits: Vec<C>,
     params: P,
     rng: &mut R,
-) -> Result<Vec<Proof<E>>, SynthesisError>
+) -> Result<Vec<Proof>, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
     R: RngCore,
 {
-    create_random_proof_batch_priority::<E, C, R, P>(circuits, params, rng, false)
+    create_random_proof_batch_priority::<C, R, P>(circuits, params, rng, false)
 }
 
-pub fn create_proof_in_priority<E, C, P: ParameterSource<E>>(
+pub fn create_proof_in_priority<C, P: ParameterSource>(
     circuit: C,
     params: P,
-    r: E::Fr,
-    s: E::Fr,
-) -> Result<Proof<E>, SynthesisError>
+    r: Scalar,
+    s: Scalar,
+) -> Result<Proof, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
 {
     let proofs =
-        create_proof_batch_priority::<E, C, P>(vec![circuit], params, vec![r], vec![s], true)?;
+        create_proof_batch_priority::<C, P>(vec![circuit], params, vec![r], vec![s], true)?;
     Ok(proofs.into_iter().next().unwrap())
 }
 
-pub fn create_random_proof_in_priority<E, C, R, P: ParameterSource<E>>(
+pub fn create_random_proof_in_priority<C, R, P: ParameterSource>(
     circuit: C,
     params: P,
     rng: &mut R,
-) -> Result<Proof<E>, SynthesisError>
+) -> Result<Proof, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
     R: RngCore,
 {
-    let proofs =
-        create_random_proof_batch_priority::<E, C, R, P>(vec![circuit], params, rng, true)?;
+    let proofs = create_random_proof_batch_priority::<C, R, P>(vec![circuit], params, rng, true)?;
     Ok(proofs.into_iter().next().unwrap())
 }
 
-pub fn create_proof_batch_in_priority<E, C, P: ParameterSource<E>>(
+pub fn create_proof_batch_in_priority<C, P: ParameterSource>(
     circuits: Vec<C>,
     params: P,
-    r: Vec<E::Fr>,
-    s: Vec<E::Fr>,
-) -> Result<Vec<Proof<E>>, SynthesisError>
+    r: Vec<Scalar>,
+    s: Vec<Scalar>,
+) -> Result<Vec<Proof>, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
 {
-    create_proof_batch_priority::<E, C, P>(circuits, params, r, s, true)
+    create_proof_batch_priority::<C, P>(circuits, params, r, s, true)
 }
 
-pub fn create_random_proof_batch_in_priority<E, C, R, P: ParameterSource<E>>(
+pub fn create_random_proof_batch_in_priority<C, R, P: ParameterSource>(
     circuits: Vec<C>,
     params: P,
     rng: &mut R,
-) -> Result<Vec<Proof<E>>, SynthesisError>
+) -> Result<Vec<Proof>, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
     R: RngCore,
 {
-    create_random_proof_batch_priority::<E, C, R, P>(circuits, params, rng, true)
+    create_random_proof_batch_priority::<C, R, P>(circuits, params, rng, true)
 }

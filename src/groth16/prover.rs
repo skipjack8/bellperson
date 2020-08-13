@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
-use ff::{Field, PrimeField};
+use blstrs::*;
 use futures::Future;
-use groupy::{CurveAffine, CurveProjective};
-use paired::Engine;
 use rand_core::RngCore;
 use rayon::prelude::*;
 
 use super::{ParameterSource, Proof};
-use crate::domain::{EvaluationDomain, Scalar};
+use crate::domain::EvaluationDomain;
 use crate::gpu::{LockedFFTKernel, LockedMultiexpKernel};
 use crate::multicore::{Worker, THREAD_POOL};
 use crate::multiexp::{multiexp, DensityTracker, FullDensity};
@@ -20,14 +18,14 @@ use log::info;
 #[cfg(feature = "gpu")]
 use crate::gpu::PriorityLock;
 
-fn eval<E: Engine>(
-    lc: &LinearCombination<E>,
+fn eval(
+    lc: &LinearCombination,
     mut input_density: Option<&mut DensityTracker>,
     mut aux_density: Option<&mut DensityTracker>,
-    input_assignment: &[E::Fr],
-    aux_assignment: &[E::Fr],
-) -> E::Fr {
-    let mut acc = E::Fr::zero();
+    input_assignment: &[Scalar],
+    aux_assignment: &[Scalar],
+) -> Scalar {
+    let mut acc = Scalar::zero();
 
     for (&index, &coeff) in lc.0.iter() {
         let mut tmp;
@@ -47,7 +45,7 @@ fn eval<E: Engine>(
             }
         }
 
-        if coeff == E::Fr::one() {
+        if coeff == Scalar::one() {
             acc.add_assign(&tmp);
         } else {
             tmp.mul_assign(&coeff);
@@ -58,24 +56,24 @@ fn eval<E: Engine>(
     acc
 }
 
-struct ProvingAssignment<E: Engine> {
+struct ProvingAssignment {
     // Density of queries
     a_aux_density: DensityTracker,
     b_input_density: DensityTracker,
     b_aux_density: DensityTracker,
 
     // Evaluations of A, B, C polynomials
-    a: Vec<Scalar<E>>,
-    b: Vec<Scalar<E>>,
-    c: Vec<Scalar<E>>,
+    a: Vec<Scalar>,
+    b: Vec<Scalar>,
+    c: Vec<Scalar>,
 
     // Assignments of variables
-    input_assignment: Vec<E::Fr>,
-    aux_assignment: Vec<E::Fr>,
+    input_assignment: Vec<Scalar>,
+    aux_assignment: Vec<Scalar>,
 }
 use std::fmt;
 
-impl<E: Engine> fmt::Debug for ProvingAssignment<E> {
+impl fmt::Debug for ProvingAssignment {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("ProvingAssignment")
             .field("a_aux_density", &self.a_aux_density)
@@ -111,8 +109,8 @@ impl<E: Engine> fmt::Debug for ProvingAssignment<E> {
     }
 }
 
-impl<E: Engine> PartialEq for ProvingAssignment<E> {
-    fn eq(&self, other: &ProvingAssignment<E>) -> bool {
+impl PartialEq for ProvingAssignment {
+    fn eq(&self, other: &ProvingAssignment) -> bool {
         self.a_aux_density == other.a_aux_density
             && self.b_input_density == other.b_input_density
             && self.b_aux_density == other.b_aux_density
@@ -124,7 +122,7 @@ impl<E: Engine> PartialEq for ProvingAssignment<E> {
     }
 }
 
-impl<E: Engine> ConstraintSystem<E> for ProvingAssignment<E> {
+impl ConstraintSystem for ProvingAssignment {
     type Root = Self;
 
     fn new() -> Self {
@@ -142,7 +140,7 @@ impl<E: Engine> ConstraintSystem<E> for ProvingAssignment<E> {
 
     fn alloc<F, A, AR>(&mut self, _: A, f: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        F: FnOnce() -> Result<Scalar, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -155,7 +153,7 @@ impl<E: Engine> ConstraintSystem<E> for ProvingAssignment<E> {
 
     fn alloc_input<F, A, AR>(&mut self, _: A, f: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        F: FnOnce() -> Result<Scalar, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -169,15 +167,15 @@ impl<E: Engine> ConstraintSystem<E> for ProvingAssignment<E> {
     where
         A: FnOnce() -> AR,
         AR: Into<String>,
-        LA: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-        LB: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-        LC: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
+        LA: FnOnce(LinearCombination) -> LinearCombination,
+        LB: FnOnce(LinearCombination) -> LinearCombination,
+        LC: FnOnce(LinearCombination) -> LinearCombination,
     {
         let a = a(LinearCombination::zero());
         let b = b(LinearCombination::zero());
         let c = c(LinearCombination::zero());
 
-        self.a.push(Scalar(eval(
+        self.a.push(eval(
             &a,
             // Inputs have full density in the A query
             // because there are constraints of the
@@ -186,15 +184,15 @@ impl<E: Engine> ConstraintSystem<E> for ProvingAssignment<E> {
             Some(&mut self.a_aux_density),
             &self.input_assignment,
             &self.aux_assignment,
-        )));
-        self.b.push(Scalar(eval(
+        ));
+        self.b.push(eval(
             &b,
             Some(&mut self.b_input_density),
             Some(&mut self.b_aux_density),
             &self.input_assignment,
             &self.aux_assignment,
-        )));
-        self.c.push(Scalar(eval(
+        ));
+        self.c.push(eval(
             &c,
             // There is no C polynomial query,
             // though there is an (beta)A + (alpha)B + C
@@ -204,7 +202,7 @@ impl<E: Engine> ConstraintSystem<E> for ProvingAssignment<E> {
             None,
             &self.input_assignment,
             &self.aux_assignment,
-        )));
+        ));
     }
 
     fn push_namespace<NR, N>(&mut self, _: N)
@@ -243,56 +241,53 @@ impl<E: Engine> ConstraintSystem<E> for ProvingAssignment<E> {
     }
 }
 
-pub fn create_random_proof_batch_priority<E, C, R, P: ParameterSource<E>>(
+pub fn create_random_proof_batch_priority<C, R, P: ParameterSource>(
     circuits: Vec<C>,
     params: P,
     rng: &mut R,
     priority: bool,
-) -> Result<Vec<Proof<E>>, SynthesisError>
+) -> Result<Vec<Proof>, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
     R: RngCore,
 {
-    let r_s = (0..circuits.len()).map(|_| E::Fr::random(rng)).collect();
-    let s_s = (0..circuits.len()).map(|_| E::Fr::random(rng)).collect();
+    let r_s = (0..circuits.len()).map(|_| Scalar::random(rng)).collect();
+    let s_s = (0..circuits.len()).map(|_| Scalar::random(rng)).collect();
 
-    create_proof_batch_priority::<E, C, P>(circuits, params, r_s, s_s, priority)
+    create_proof_batch_priority::<C, P>(circuits, params, r_s, s_s, priority)
 }
 
-pub fn create_proof_batch_priority<E, C, P: ParameterSource<E>>(
+pub fn create_proof_batch_priority<C, P: ParameterSource>(
     circuits: Vec<C>,
     params: P,
-    r_s: Vec<E::Fr>,
-    s_s: Vec<E::Fr>,
+    r_s: Vec<Scalar>,
+    s_s: Vec<Scalar>,
     priority: bool,
-) -> Result<Vec<Proof<E>>, SynthesisError>
+) -> Result<Vec<Proof>, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
 {
     info!("Bellperson {} is being used!", BELLMAN_VERSION);
 
     THREAD_POOL.install(|| create_proof_batch_priority_inner(circuits, params, r_s, s_s, priority))
 }
 
-fn create_proof_batch_priority_inner<E, C, P: ParameterSource<E>>(
+fn create_proof_batch_priority_inner<C, P: ParameterSource>(
     circuits: Vec<C>,
     params: P,
-    r_s: Vec<E::Fr>,
-    s_s: Vec<E::Fr>,
+    r_s: Vec<Scalar>,
+    s_s: Vec<Scalar>,
     priority: bool,
-) -> Result<Vec<Proof<E>>, SynthesisError>
+) -> Result<Vec<Proof>, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E> + Send,
+    C: Circuit + Send,
 {
     let mut provers = circuits
         .into_par_iter()
         .map(|circuit| -> Result<_, SynthesisError> {
             let mut prover = ProvingAssignment::new();
 
-            prover.alloc_input(|| "", || Ok(E::Fr::one()))?;
+            prover.alloc_input(|| "", || Ok(Scalar::one()))?;
 
             circuit.synthesize(&mut prover)?;
 
@@ -330,7 +325,7 @@ where
         None
     };
 
-    let mut fft_kern = Some(LockedFFTKernel::<E>::new(log_d, priority));
+    let mut fft_kern = Some(LockedFFTKernel::new(log_d, priority));
 
     let a_s = provers
         .iter_mut()
@@ -366,7 +361,7 @@ where
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
     drop(fft_kern);
-    let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
+    let mut multiexp_kern = Some(LockedMultiexpKernel::new(log_d, priority));
 
     let h_s = a_s
         .into_iter()

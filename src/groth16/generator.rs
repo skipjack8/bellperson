@@ -1,56 +1,50 @@
-use rand_core::RngCore;
-
 use std::sync::Arc;
 
-use ff::{Field, PrimeField};
-use groupy::{CurveAffine, CurveProjective, Wnaf};
-use paired::Engine;
+use blstrs::*;
+use groupy::Wnaf;
+use rand_core::RngCore;
 
 use super::{Parameters, VerifyingKey};
-
-use crate::{Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
-
-use crate::domain::{EvaluationDomain, Scalar};
-
+use crate::domain::EvaluationDomain;
 use crate::multicore::Worker;
+use crate::{Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
 
 /// Generates a random common reference string for
 /// a circuit.
-pub fn generate_random_parameters<E, C, R>(
+pub fn generate_random_parameters<C, R>(
     circuit: C,
     rng: &mut R,
-) -> Result<Parameters<E>, SynthesisError>
+) -> Result<Parameters, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E>,
+    C: Circuit,
     R: RngCore,
 {
-    let g1 = E::G1::random(rng);
-    let g2 = E::G2::random(rng);
-    let alpha = E::Fr::random(rng);
-    let beta = E::Fr::random(rng);
-    let gamma = E::Fr::random(rng);
-    let delta = E::Fr::random(rng);
-    let tau = E::Fr::random(rng);
+    let g1 = G1Projective::random(rng);
+    let g2 = G2Projective::random(rng);
+    let alpha = Scalar::random(rng);
+    let beta = Scalar::random(rng);
+    let gamma = Scalar::random(rng);
+    let delta = Scalar::random(rng);
+    let tau = Scalar::random(rng);
 
-    generate_parameters::<E, C>(circuit, g1, g2, alpha, beta, gamma, delta, tau)
+    generate_parameters::<C>(circuit, g1, g2, alpha, beta, gamma, delta, tau)
 }
 
 /// This is our assembly structure that we'll use to synthesize the
 /// circuit into a QAP.
-struct KeypairAssembly<E: Engine> {
+struct KeypairAssembly {
     num_inputs: usize,
     num_aux: usize,
     num_constraints: usize,
-    at_inputs: Vec<Vec<(E::Fr, usize)>>,
-    bt_inputs: Vec<Vec<(E::Fr, usize)>>,
-    ct_inputs: Vec<Vec<(E::Fr, usize)>>,
-    at_aux: Vec<Vec<(E::Fr, usize)>>,
-    bt_aux: Vec<Vec<(E::Fr, usize)>>,
-    ct_aux: Vec<Vec<(E::Fr, usize)>>,
+    at_inputs: Vec<Vec<(Scalar, usize)>>,
+    bt_inputs: Vec<Vec<(Scalar, usize)>>,
+    ct_inputs: Vec<Vec<(Scalar, usize)>>,
+    at_aux: Vec<Vec<(Scalar, usize)>>,
+    bt_aux: Vec<Vec<(Scalar, usize)>>,
+    ct_aux: Vec<Vec<(Scalar, usize)>>,
 }
 
-impl<E: Engine> ConstraintSystem<E> for KeypairAssembly<E> {
+impl ConstraintSystem for KeypairAssembly {
     type Root = Self;
 
     fn new() -> Self {
@@ -79,7 +73,7 @@ impl<E: Engine> ConstraintSystem<E> for KeypairAssembly<E> {
 
     fn alloc<F, A, AR>(&mut self, _: A, _: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        F: FnOnce() -> Result<Scalar, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -98,7 +92,7 @@ impl<E: Engine> ConstraintSystem<E> for KeypairAssembly<E> {
 
     fn alloc_input<F, A, AR>(&mut self, _: A, _: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        F: FnOnce() -> Result<Scalar, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -119,14 +113,14 @@ impl<E: Engine> ConstraintSystem<E> for KeypairAssembly<E> {
     where
         A: FnOnce() -> AR,
         AR: Into<String>,
-        LA: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-        LB: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-        LC: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
+        LA: FnOnce(LinearCombination) -> LinearCombination,
+        LB: FnOnce(LinearCombination) -> LinearCombination,
+        LC: FnOnce(LinearCombination) -> LinearCombination,
     {
-        fn eval<E: Engine>(
-            l: LinearCombination<E>,
-            inputs: &mut [Vec<(E::Fr, usize)>],
-            aux: &mut [Vec<(E::Fr, usize)>],
+        fn eval(
+            l: LinearCombination,
+            inputs: &mut [Vec<(Scalar, usize)>],
+            aux: &mut [Vec<(Scalar, usize)>],
             this_constraint: usize,
         ) {
             for (index, coeff) in l.0 {
@@ -177,24 +171,23 @@ impl<E: Engine> ConstraintSystem<E> for KeypairAssembly<E> {
 }
 
 /// Create parameters for a circuit, given some toxic waste.
-pub fn generate_parameters<E, C>(
+pub fn generate_parameters<C>(
     circuit: C,
-    g1: E::G1,
-    g2: E::G2,
-    alpha: E::Fr,
-    beta: E::Fr,
-    gamma: E::Fr,
-    delta: E::Fr,
-    tau: E::Fr,
-) -> Result<Parameters<E>, SynthesisError>
+    g1: G1Projective,
+    g2: G2Projective,
+    alpha: Scalar,
+    beta: Scalar,
+    gamma: Scalar,
+    delta: Scalar,
+    tau: Scalar,
+) -> Result<Parameters, SynthesisError>
 where
-    E: Engine,
-    C: Circuit<E>,
+    C: Circuit,
 {
     let mut assembly = KeypairAssembly::new();
 
     // Allocate the "one" input variable
-    assembly.alloc_input(|| "", || Ok(E::Fr::one()))?;
+    assembly.alloc_input(|| "", || Ok(Scalar::one()))?;
 
     // Synthesize the circuit.
     circuit.synthesize(&mut assembly)?;
@@ -206,7 +199,7 @@ where
     }
 
     // Create bases for blind evaluation of polynomials at tau
-    let powers_of_tau = vec![Scalar::<E>(E::Fr::zero()); assembly.num_constraints];
+    let powers_of_tau = vec![Scalar::zero(); assembly.num_constraints];
     let mut powers_of_tau = EvaluationDomain::from_coeffs(powers_of_tau)?;
 
     // Compute G1 window table
@@ -234,7 +227,7 @@ where
 
     let worker = Worker::new();
 
-    let mut h = vec![E::G1::zero(); powers_of_tau.as_ref().len() - 1];
+    let mut h = vec![G1Projective::zero(); powers_of_tau.as_ref().len() - 1];
     {
         // Compute powers of tau
         {
@@ -277,7 +270,7 @@ where
                     }
 
                     // Batch normalize
-                    E::G1::batch_normalization(h);
+                    G1Projective::batch_normalization(h);
                 });
             }
         });
@@ -287,37 +280,37 @@ where
     powers_of_tau.ifft(&worker, &mut None)?;
     let powers_of_tau = powers_of_tau.into_coeffs();
 
-    let mut a = vec![E::G1::zero(); assembly.num_inputs + assembly.num_aux];
-    let mut b_g1 = vec![E::G1::zero(); assembly.num_inputs + assembly.num_aux];
-    let mut b_g2 = vec![E::G2::zero(); assembly.num_inputs + assembly.num_aux];
-    let mut ic = vec![E::G1::zero(); assembly.num_inputs];
-    let mut l = vec![E::G1::zero(); assembly.num_aux];
+    let mut a = vec![G1Projective::zero(); assembly.num_inputs + assembly.num_aux];
+    let mut b_g1 = vec![G1Projective::zero(); assembly.num_inputs + assembly.num_aux];
+    let mut b_g2 = vec![G2Projective::zero(); assembly.num_inputs + assembly.num_aux];
+    let mut ic = vec![G1Projective::zero(); assembly.num_inputs];
+    let mut l = vec![G1Projective::zero(); assembly.num_aux];
 
-    fn eval<E: Engine>(
+    fn eval(
         // wNAF window tables
-        g1_wnaf: &Wnaf<usize, &[E::G1], &mut Vec<i64>>,
-        g2_wnaf: &Wnaf<usize, &[E::G2], &mut Vec<i64>>,
+        g1_wnaf: &Wnaf<usize, &[G1Projective], &mut Vec<i64>>,
+        g2_wnaf: &Wnaf<usize, &[G2Projective], &mut Vec<i64>>,
 
         // Lagrange coefficients for tau
-        powers_of_tau: &[Scalar<E>],
+        powers_of_tau: &[Scalar],
 
         // QAP polynomials
-        at: &[Vec<(E::Fr, usize)>],
-        bt: &[Vec<(E::Fr, usize)>],
-        ct: &[Vec<(E::Fr, usize)>],
+        at: &[Vec<(Scalar, usize)>],
+        bt: &[Vec<(Scalar, usize)>],
+        ct: &[Vec<(Scalar, usize)>],
 
         // Resulting evaluated QAP polynomials
-        a: &mut [E::G1],
-        b_g1: &mut [E::G1],
-        b_g2: &mut [E::G2],
-        ext: &mut [E::G1],
+        a: &mut [G1Projective],
+        b_g1: &mut [G1Projective],
+        b_g2: &mut [G2Projective],
+        ext: &mut [G1Projective],
 
         // Inverse coefficient for ext elements
-        inv: &E::Fr,
+        inv: &Scalar,
 
         // Trapdoors
-        alpha: &E::Fr,
-        beta: &E::Fr,
+        alpha: &Scalar,
+        beta: &Scalar,
 
         // Worker
         worker: &Worker,
@@ -354,16 +347,13 @@ where
                         .zip(bt.iter())
                         .zip(ct.iter())
                     {
-                        fn eval_at_tau<E: Engine>(
-                            powers_of_tau: &[Scalar<E>],
-                            p: &[(E::Fr, usize)],
-                        ) -> E::Fr {
-                            let mut acc = E::Fr::zero();
+                        fn eval_at_tau(powers_of_tau: &[Scalar], p: &[(Scalar, usize)]) -> Scalar {
+                            let mut acc = Scalar::zero();
 
                             for &(ref coeff, index) in p {
                                 let mut n = powers_of_tau[index].0;
                                 n.mul_assign(coeff);
-                                acc.add_assign(&n);
+                                acc += &n;
                             }
 
                             acc
@@ -390,18 +380,18 @@ where
                         bt.mul_assign(&alpha);
 
                         let mut e = at;
-                        e.add_assign(&bt);
-                        e.add_assign(&ct);
+                        e += &bt;
+                        e += &ct;
                         e.mul_assign(inv);
 
                         *ext = g1_wnaf.scalar(e.into_repr());
                     }
 
                     // Batch normalize
-                    E::G1::batch_normalization(a);
-                    E::G1::batch_normalization(b_g1);
-                    E::G2::batch_normalization(b_g2);
-                    E::G1::batch_normalization(ext);
+                    G1Projective::batch_normalization(a);
+                    G1Projective::batch_normalization(b_g1);
+                    G2Projective::batch_normalization(b_g2);
+                    G1Projective::batch_normalization(ext);
                 });
             }
         });
@@ -454,7 +444,7 @@ where
     let g1 = g1.into_affine();
     let g2 = g2.into_affine();
 
-    let vk = VerifyingKey::<E> {
+    let vk = VerifyingKey {
         alpha_g1: g1.mul(alpha).into_affine(),
         beta_g1: g1.mul(beta).into_affine(),
         beta_g2: g2.mul(beta).into_affine(),

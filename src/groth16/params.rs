@@ -1,6 +1,3 @@
-use groupy::{CurveAffine, EncodedPoint};
-use paired::Engine;
-
 use crate::multiexp::SourceBuilder;
 use crate::SynthesisError;
 
@@ -13,34 +10,36 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use blstrs::*;
+
 use super::{MappedParameters, VerifyingKey};
 
 #[derive(Clone)]
-pub struct Parameters<E: Engine> {
-    pub vk: VerifyingKey<E>,
+pub struct Parameters {
+    pub vk: VerifyingKey,
 
     // Elements of the form ((tau^i * t(tau)) / delta) for i between 0 and
     // m-2 inclusive. Never contains points at infinity.
-    pub h: Arc<Vec<E::G1Affine>>,
+    pub h: Arc<Vec<G1Affine>>,
 
     // Elements of the form (beta * u_i(tau) + alpha v_i(tau) + w_i(tau)) / delta
     // for all auxiliary inputs. Variables can never be unconstrained, so this
     // never contains points at infinity.
-    pub l: Arc<Vec<E::G1Affine>>,
+    pub l: Arc<Vec<G1Affine>>,
 
     // QAP "A" polynomials evaluated at tau in the Lagrange basis. Never contains
     // points at infinity: polynomials that evaluate to zero are omitted from
     // the CRS and the prover can deterministically skip their evaluation.
-    pub a: Arc<Vec<E::G1Affine>>,
+    pub a: Arc<Vec<G1Affine>>,
 
     // QAP "B" polynomials evaluated at tau in the Lagrange basis. Needed in
     // G1 and G2 for C/B queries, respectively. Never contains points at
     // infinity for the same reason as the "A" polynomials.
-    pub b_g1: Arc<Vec<E::G1Affine>>,
-    pub b_g2: Arc<Vec<E::G2Affine>>,
+    pub b_g1: Arc<Vec<G1Affine>>,
+    pub b_g2: Arc<Vec<G2Affine>>,
 }
 
-impl<E: Engine> PartialEq for Parameters<E> {
+impl PartialEq for Parameters {
     fn eq(&self, other: &Self) -> bool {
         self.vk == other.vk
             && self.h == other.h
@@ -51,7 +50,7 @@ impl<E: Engine> PartialEq for Parameters<E> {
     }
 }
 
-impl<E: Engine> Parameters<E> {
+impl Parameters {
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         self.vk.write(&mut writer)?;
 
@@ -89,14 +88,14 @@ impl<E: Engine> Parameters<E> {
     pub fn build_mapped_parameters(
         param_file_path: PathBuf,
         checked: bool,
-    ) -> io::Result<MappedParameters<E>> {
+    ) -> io::Result<MappedParameters> {
         let mut offset: usize = 0;
         let param_file = File::open(&param_file_path)?;
         let params = unsafe { MmapOptions::new().map(&param_file)? };
 
         let u32_len = mem::size_of::<u32>();
-        let g1_len = mem::size_of::<<E::G1Affine as CurveAffine>::Uncompressed>();
-        let g2_len = mem::size_of::<<E::G2Affine as CurveAffine>::Uncompressed>();
+        let g1_len = G1Affine::uncompressed_size();
+        let g2_len = G2Affine::uncompressed_size();
 
         let read_length = |params: &Mmap, offset: &mut usize| -> Result<usize, std::io::Error> {
             let mut raw_len = &params[*offset..*offset + u32_len];
@@ -125,7 +124,7 @@ impl<E: Engine> Parameters<E> {
             Ok(())
         };
 
-        let vk = VerifyingKey::<E>::read_mmap(&params, &mut offset)?;
+        let vk = VerifyingKey::read_mmap(&params, &mut offset)?;
 
         let mut h = vec![];
         let mut l = vec![];
@@ -159,25 +158,24 @@ impl<E: Engine> Parameters<E> {
     // method, in that it loads all parameters to RAM.
     pub fn read_mmap(mmap: &Mmap, checked: bool) -> io::Result<Self> {
         let u32_len = mem::size_of::<u32>();
-        let g1_len = mem::size_of::<<E::G1Affine as CurveAffine>::Uncompressed>();
-        let g2_len = mem::size_of::<<E::G2Affine as CurveAffine>::Uncompressed>();
+        let g1_len = G1Affine::uncompressed_size();
+        let g2_len = G2Affine::uncompressed_size();
 
-        let read_g1 = |mmap: &Mmap, offset: &mut usize| -> io::Result<E::G1Affine> {
+        let read_g1 = |mmap: &Mmap, offset: &mut usize| -> io::Result<G1Affine> {
             let ptr = &mmap[*offset..*offset + g1_len];
             *offset += g1_len;
             // Safety: this operation is safe, because it's simply
             // casting to a known struct at the correct offset, given
             // the structure of the on-disk data.
-            let repr: <E::G1Affine as CurveAffine>::Uncompressed = unsafe {
-                *(ptr as *const [u8] as *const <E::G1Affine as CurveAffine>::Uncompressed)
-            };
+            let repr: [u8; G1Affine::uncompressed_size()] =
+                unsafe { *(ptr as *const [u8] as *const _) };
 
             if checked {
-                repr.into_affine()
+                G1Affine::from_uncompressed(&repr)
             } else {
-                repr.into_affine_unchecked()
+                G1Affine::from_uncompressed_unchecked(&repr)
             }
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            .ok_or(io::Error::new(io::ErrorKind::InvalidData, "invalid"))
             .and_then(|e| {
                 if e.is_zero() {
                     Err(io::Error::new(
@@ -190,22 +188,21 @@ impl<E: Engine> Parameters<E> {
             })
         };
 
-        let read_g2 = |mmap: &Mmap, offset: &mut usize| -> io::Result<E::G2Affine> {
+        let read_g2 = |mmap: &Mmap, offset: &mut usize| -> io::Result<G2Affine> {
             let ptr = &mmap[*offset..*offset + g2_len];
             *offset += g2_len;
             // Safety: this operation is safe, because it's simply
             // casting to a known struct at the correct offset, given
             // the structure of the on-disk data.
-            let repr: <E::G2Affine as CurveAffine>::Uncompressed = unsafe {
-                *(ptr as *const [u8] as *const <E::G2Affine as CurveAffine>::Uncompressed)
-            };
+            let repr: [u8; G2Affine::uncompressed_size()] =
+                unsafe { *(ptr as *const [u8] as *const _) };
 
             if checked {
-                repr.into_affine()
+                G2Affine::from_uncompressed(&repr)
             } else {
-                repr.into_affine_unchecked()
+                G2Affine::from_uncompressed_unchecked(&repr)
             }
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            .ok_or(io::Error::new(io::ErrorKind::InvalidData, "invalid"))
             .and_then(|e| {
                 if e.is_zero() {
                     Err(io::Error::new(
@@ -230,7 +227,7 @@ impl<E: Engine> Parameters<E> {
 
         let get_g1s = |mmap: &Mmap,
                        offset: &mut usize,
-                       param: &mut Vec<E::G1Affine>|
+                       param: &mut Vec<G1Affine>|
          -> Result<(), std::io::Error> {
             let len = read_length(&mmap, &mut *offset)?;
             for _ in 0..len {
@@ -242,7 +239,7 @@ impl<E: Engine> Parameters<E> {
 
         let get_g2s = |mmap: &Mmap,
                        offset: &mut usize,
-                       param: &mut Vec<E::G2Affine>|
+                       param: &mut Vec<G2Affine>|
          -> Result<(), std::io::Error> {
             let len = read_length(&mmap, &mut *offset)?;
             for _ in 0..len {
@@ -253,7 +250,7 @@ impl<E: Engine> Parameters<E> {
         };
 
         let mut offset: usize = 0;
-        let vk = VerifyingKey::<E>::read_mmap(&mmap, &mut offset)?;
+        let vk = VerifyingKey::read_mmap(&mmap, &mut offset)?;
 
         let mut h = vec![];
         let mut l = vec![];
@@ -278,8 +275,8 @@ impl<E: Engine> Parameters<E> {
     }
 
     pub fn read<R: Read>(mut reader: R, checked: bool) -> io::Result<Self> {
-        let read_g1 = |reader: &mut R| -> io::Result<E::G1Affine> {
-            let mut repr = <E::G1Affine as CurveAffine>::Uncompressed::empty();
+        let read_g1 = |reader: &mut R| -> io::Result<G1Affine> {
+            let mut repr = [0u8; G1Affine::uncompressed_size()];
             reader.read_exact(repr.as_mut())?;
 
             if checked {
@@ -300,8 +297,8 @@ impl<E: Engine> Parameters<E> {
             })
         };
 
-        let read_g2 = |reader: &mut R| -> io::Result<E::G2Affine> {
-            let mut repr = <E::G2Affine as CurveAffine>::Uncompressed::empty();
+        let read_g2 = |reader: &mut R| -> io::Result<G2Affine> {
+            let mut repr = [0u8; G2Affine::uncompressed_size()];
             reader.read_exact(repr.as_mut())?;
 
             if checked {
@@ -322,7 +319,7 @@ impl<E: Engine> Parameters<E> {
             })
         };
 
-        let vk = VerifyingKey::<E>::read(&mut reader)?;
+        let vk = VerifyingKey::read(&mut reader)?;
 
         let mut h = vec![];
         let mut l = vec![];
@@ -376,11 +373,11 @@ impl<E: Engine> Parameters<E> {
     }
 }
 
-pub trait ParameterSource<E: Engine>: Send + Sync {
-    type G1Builder: SourceBuilder<E::G1Affine>;
-    type G2Builder: SourceBuilder<E::G2Affine>;
+pub trait ParameterSource: Send + Sync {
+    type G1Builder: SourceBuilder<G1Affine>;
+    type G2Builder: SourceBuilder<G2Affine>;
 
-    fn get_vk(&self, num_ic: usize) -> Result<&VerifyingKey<E>, SynthesisError>;
+    fn get_vk(&self, num_ic: usize) -> Result<&VerifyingKey, SynthesisError>;
     fn get_h(&self, num_h: usize) -> Result<Self::G1Builder, SynthesisError>;
     fn get_l(&self, num_l: usize) -> Result<Self::G1Builder, SynthesisError>;
     fn get_a(
@@ -400,11 +397,11 @@ pub trait ParameterSource<E: Engine>: Send + Sync {
     ) -> Result<(Self::G2Builder, Self::G2Builder), SynthesisError>;
 }
 
-impl<'a, E: Engine> ParameterSource<E> for &'a Parameters<E> {
-    type G1Builder = (Arc<Vec<E::G1Affine>>, usize);
-    type G2Builder = (Arc<Vec<E::G2Affine>>, usize);
+impl<'a> ParameterSource for &'a Parameters {
+    type G1Builder = (Arc<Vec<G1Affine>>, usize);
+    type G2Builder = (Arc<Vec<G2Affine>>, usize);
 
-    fn get_vk(&self, _: usize) -> Result<&VerifyingKey<E>, SynthesisError> {
+    fn get_vk(&self, _: usize) -> Result<&VerifyingKey, SynthesisError> {
         Ok(&self.vk)
     }
 

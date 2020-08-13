@@ -1,8 +1,6 @@
-use groupy::{CurveAffine, EncodedPoint};
-use paired::Engine;
-
 use crate::SynthesisError;
 
+use blstrs::*;
 use memmap::Mmap;
 
 use std::fs::File;
@@ -13,7 +11,7 @@ use std::sync::Arc;
 
 use super::{ParameterSource, VerifyingKey};
 
-pub struct MappedParameters<E: Engine> {
+pub struct MappedParameters {
     /// The parameter file we're reading from.  
     pub param_file_path: PathBuf,
     /// The file descriptor we have mmaped.
@@ -22,7 +20,7 @@ pub struct MappedParameters<E: Engine> {
     pub params: Mmap,
 
     /// This is always loaded (i.e. not lazily loaded).
-    pub vk: VerifyingKey<E>,
+    pub vk: VerifyingKey,
 
     /// Elements of the form ((tau^i * t(tau)) / delta) for i between 0 and
     /// m-2 inclusive. Never contains points at infinity.
@@ -47,11 +45,11 @@ pub struct MappedParameters<E: Engine> {
     pub checked: bool,
 }
 
-impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
-    type G1Builder = (Arc<Vec<E::G1Affine>>, usize);
-    type G2Builder = (Arc<Vec<E::G2Affine>>, usize);
+impl<'a> ParameterSource for &'a MappedParameters {
+    type G1Builder = (Arc<Vec<G1Affine>>, usize);
+    type G2Builder = (Arc<Vec<G2Affine>>, usize);
 
-    fn get_vk(&self, _: usize) -> Result<&VerifyingKey<E>, SynthesisError> {
+    fn get_vk(&self, _: usize) -> Result<&VerifyingKey, SynthesisError> {
         Ok(&self.vk)
     }
 
@@ -60,7 +58,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .h
             .iter()
             .cloned()
-            .map(|h| read_g1::<E>(&self.params, h, self.checked))
+            .map(|h| read_g1(&self.params, h, self.checked))
             .collect::<Result<_, _>>()?;
 
         Ok((Arc::new(builder), 0))
@@ -71,7 +69,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .l
             .iter()
             .cloned()
-            .map(|l| read_g1::<E>(&self.params, l, self.checked))
+            .map(|l| read_g1(&self.params, l, self.checked))
             .collect::<Result<_, _>>()?;
 
         Ok((Arc::new(builder), 0))
@@ -86,7 +84,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .a
             .iter()
             .cloned()
-            .map(|a| read_g1::<E>(&self.params, a, self.checked))
+            .map(|a| read_g1(&self.params, a, self.checked))
             .collect::<Result<_, _>>()?;
 
         let builder: Arc<Vec<_>> = Arc::new(builder);
@@ -103,7 +101,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .b_g1
             .iter()
             .cloned()
-            .map(|b_g1| read_g1::<E>(&self.params, b_g1, self.checked))
+            .map(|b_g1| read_g1(&self.params, b_g1, self.checked))
             .collect::<Result<_, _>>()?;
 
         let builder: Arc<Vec<_>> = Arc::new(builder);
@@ -120,7 +118,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .b_g2
             .iter()
             .cloned()
-            .map(|b_g2| read_g2::<E>(&self.params, b_g2, self.checked))
+            .map(|b_g2| read_g2(&self.params, b_g2, self.checked))
             .collect::<Result<_, _>>()?;
 
         let builder: Arc<Vec<_>> = Arc::new(builder);
@@ -132,17 +130,16 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
 // A re-usable method for parameter loading via mmap.  Unlike the
 // internal ones used elsewhere, this one does not update offset state
 // and simply does the cast and transform needed.
-pub fn read_g1<E: Engine>(
+pub fn read_g1(
     mmap: &Mmap,
     range: Range<usize>,
     checked: bool,
-) -> Result<E::G1Affine, std::io::Error> {
+) -> Result<G1Affine, std::io::Error> {
     let ptr = &mmap[range];
     // Safety: this operation is safe, because it's simply
     // casting to a known struct at the correct offset, given
     // the structure of the on-disk data.
-    let repr =
-        unsafe { *(ptr as *const [u8] as *const <E::G1Affine as CurveAffine>::Uncompressed) };
+    let repr = unsafe { *(ptr as *const [u8] as *const [u8; G1Affine::uncompressed_size()]) };
 
     if checked {
         repr.into_affine()
@@ -165,17 +162,16 @@ pub fn read_g1<E: Engine>(
 // A re-usable method for parameter loading via mmap.  Unlike the
 // internal ones used elsewhere, this one does not update offset state
 // and simply does the cast and transform needed.
-pub fn read_g2<E: Engine>(
+pub fn read_g2(
     mmap: &Mmap,
     range: Range<usize>,
     checked: bool,
-) -> Result<E::G2Affine, std::io::Error> {
+) -> Result<G2Affine, std::io::Error> {
     let ptr = &mmap[range];
     // Safety: this operation is safe, because it's simply
     // casting to a known struct at the correct offset, given
     // the structure of the on-disk data.
-    let repr =
-        unsafe { *(ptr as *const [u8] as *const <E::G2Affine as CurveAffine>::Uncompressed) };
+    let repr = unsafe { *(ptr as *const [u8] as *const [u8; G2Affine::uncompressed_size()]) };
 
     if checked {
         repr.into_affine()

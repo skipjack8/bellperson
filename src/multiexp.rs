@@ -1,15 +1,29 @@
 use bit_vec::{self, BitVec};
-use ff::{Field, PrimeField, PrimeFieldRepr, ScalarEngine};
 use futures::Future;
-use groupy::{CurveAffine, CurveProjective};
 use log::{info, warn};
 use std::io;
 use std::iter;
 use std::sync::Arc;
 
+use blstrs::*;
+
 use super::multicore::Worker;
 use super::SynthesisError;
 use crate::gpu;
+
+pub trait CurveAffine:
+    Send + Sync + 'static + Clone + Copy + PartialEq + Eq + Sized + std::fmt::Debug
+{
+    type Projective: Send;
+}
+
+impl CurveAffine for G1Affine {
+    type Projective = G1Projective;
+}
+
+impl CurveAffine for G2Affine {
+    type Projective = G2Projective;
+}
 
 /// An object that builds a source of bases.
 pub trait SourceBuilder<G: CurveAffine>: Send + Sync + 'static + Clone {
@@ -196,7 +210,7 @@ fn multiexp_inner<Q, D, G, S>(
     pool: &Worker,
     bases: S,
     density_map: D,
-    exponents: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
+    exponents: Arc<Vec<Scalar>>,
     mut skip: u32,
     c: u32,
     handle_trivial: bool,
@@ -223,8 +237,8 @@ where
             // Create space for the buckets
             let mut buckets = vec![<G as CurveAffine>::Projective::zero(); (1 << c) - 1];
 
-            let zero = <G::Engine as ScalarEngine>::Fr::zero().into_repr();
-            let one = <G::Engine as ScalarEngine>::Fr::one().into_repr();
+            let zero = Scalar::zero().into_repr();
+            let one = Scalar::one().into_repr();
 
             // Sort the bases into buckets
             for (&exp, density) in exponents.iter().zip(density_map.as_ref().iter()) {
@@ -267,7 +281,7 @@ where
 
     skip += c;
 
-    if skip >= <G::Engine as ScalarEngine>::Fr::NUM_BITS {
+    if skip >= Scalar::num_bits() {
         // There isn't another region.
         Box::new(this)
     } else {
@@ -302,18 +316,17 @@ pub fn multiexp<Q, D, G, S>(
     pool: &Worker,
     bases: S,
     density_map: D,
-    exponents: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
-    kern: &mut Option<gpu::LockedMultiexpKernel<G::Engine>>,
+    exponents: Arc<Vec<Scalar>>,
+    kern: &mut Option<gpu::LockedMultiexpKernel>,
 ) -> Box<dyn Future<Item = <G as CurveAffine>::Projective, Error = SynthesisError>>
 where
     for<'a> &'a Q: QueryDensity,
     D: Send + Sync + 'static + Clone + AsRef<Q>,
     G: CurveAffine,
-    G::Engine: paired::Engine,
     S: SourceBuilder<G>,
 {
     if let Some(ref mut kern) = kern {
-        if let Ok(p) = kern.with(|k: &mut gpu::MultiexpKernel<G::Engine>| {
+        if let Ok(p) = kern.with(|k: &mut gpu::MultiexpKernel| {
             let mut exps = vec![exponents[0]; exponents.len()];
             let mut n = 0;
             for (&e, d) in exponents.iter().zip(density_map.as_ref().iter()) {
@@ -360,7 +373,7 @@ where
 fn test_with_bls12() {
     fn naive_multiexp<G: CurveAffine>(
         bases: Arc<Vec<G>>,
-        exponents: Arc<Vec<<G::Scalar as PrimeField>::Repr>>,
+        exponents: Arc<Vec<Scalar>>,
     ) -> G::Projective {
         assert_eq!(bases.len(), exponents.len());
 
@@ -373,7 +386,6 @@ fn test_with_bls12() {
         acc
     }
 
-    use paired::{bls12_381::Bls12, Engine};
     use rand;
 
     const SAMPLES: usize = 1 << 14;
@@ -381,12 +393,12 @@ fn test_with_bls12() {
     let rng = &mut rand::thread_rng();
     let v = Arc::new(
         (0..SAMPLES)
-            .map(|_| <Bls12 as ScalarEngine>::Fr::random(rng).into_repr())
+            .map(|_| Scalar::random(rng))
             .collect::<Vec<_>>(),
     );
     let g = Arc::new(
         (0..SAMPLES)
-            .map(|_| <Bls12 as Engine>::G1::random(rng).into_affine())
+            .map(|_| G1Projective::random(rng).into())
             .collect::<Vec<_>>(),
     );
 
@@ -399,11 +411,8 @@ fn test_with_bls12() {
     assert_eq!(naive, fast);
 }
 
-pub fn create_multiexp_kernel<E>(_log_d: usize, priority: bool) -> Option<gpu::MultiexpKernel<E>>
-where
-    E: paired::Engine,
-{
-    match gpu::MultiexpKernel::<E>::create(priority) {
+pub fn create_multiexp_kernel(_log_d: usize, priority: bool) -> Option<gpu::MultiexpKernel> {
+    match gpu::MultiexpKernel::create(priority) {
         Ok(k) => {
             info!("GPU Multiexp kernel instantiated!");
             Some(k)
@@ -432,7 +441,7 @@ pub fn gpu_multiexp_consistency() {
     let rng = &mut rand::thread_rng();
 
     let mut bases = (0..(1 << 10))
-        .map(|_| <Bls12 as paired::Engine>::G1::random(rng).into_affine())
+        .map(|_| G1Projective::random(rng).into())
         .collect::<Vec<_>>();
     for _ in 10..START_LOG_D {
         bases = [bases.clone(), bases.clone()].concat();
@@ -446,7 +455,7 @@ pub fn gpu_multiexp_consistency() {
 
         let v = Arc::new(
             (0..samples)
-                .map(|_| <Bls12 as ScalarEngine>::Fr::random(rng).into_repr())
+                .map(|_| Scalar::random(rng))
                 .collect::<Vec<_>>(),
         );
 

@@ -2,9 +2,6 @@
 //!
 //! [Groth16]: https://eprint.iacr.org/2016/260
 
-use groupy::{CurveAffine, EncodedPoint};
-use paired::Engine;
-
 use std::io::{self, Read, Write};
 
 #[cfg(test)]
@@ -26,36 +23,37 @@ pub use self::verifier::*;
 pub use self::verifying_key::*;
 pub use params::*;
 
+use blstrs::*;
+
 #[derive(Clone, Debug)]
-pub struct Proof<E: Engine> {
-    pub a: E::G1Affine,
-    pub b: E::G2Affine,
-    pub c: E::G1Affine,
+pub struct Proof {
+    pub a: G1Affine,
+    pub b: G2Affine,
+    pub c: G1Affine,
 }
 
-impl<E: Engine> PartialEq for Proof<E> {
+impl PartialEq for Proof {
     fn eq(&self, other: &Self) -> bool {
         self.a == other.a && self.b == other.b && self.c == other.c
     }
 }
 
-impl<E: Engine> Proof<E> {
+impl Proof {
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        writer.write_all(self.a.into_compressed().as_ref())?;
-        writer.write_all(self.b.into_compressed().as_ref())?;
-        writer.write_all(self.c.into_compressed().as_ref())?;
+        writer.write_all(self.a.to_compressed().as_ref())?;
+        writer.write_all(self.b.to_compressed().as_ref())?;
+        writer.write_all(self.c.to_compressed().as_ref())?;
 
         Ok(())
     }
 
     pub fn read<R: Read>(mut reader: R) -> io::Result<Self> {
-        let mut g1_repr = <E::G1Affine as CurveAffine>::Compressed::empty();
-        let mut g2_repr = <E::G2Affine as CurveAffine>::Compressed::empty();
+        let mut g1_repr = [0u8; G1Affine::compressed_size()];
+        let mut g2_repr = [0u8; G2Affine::compressed_size()];
 
         reader.read_exact(g1_repr.as_mut())?;
-        let a = g1_repr
-            .into_affine()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let a = G1Affine::from_compressed(&g1_repr)
+            .ok_or(io::Error::new(io::ErrorKind::InvalidData, "invalid"))
             .and_then(|e| {
                 if e.is_zero() {
                     Err(io::Error::new(
@@ -68,9 +66,8 @@ impl<E: Engine> Proof<E> {
             })?;
 
         reader.read_exact(g2_repr.as_mut())?;
-        let b = g2_repr
-            .into_affine()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let b = G2Affine::from_compressed(&g2_repr)
+            .ok_or(io::Error::new(io::ErrorKind::InvalidData, "invalid"))
             .and_then(|e| {
                 if e.is_zero() {
                     Err(io::Error::new(
@@ -83,9 +80,8 @@ impl<E: Engine> Proof<E> {
             })?;
 
         reader.read_exact(g1_repr.as_mut())?;
-        let c = g1_repr
-            .into_affine()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let c = G1Affine::from_compressed(&g1_repr)
+            .ok_or(io::Error::new(io::ErrorKind::InvalidData, "invalid"))
             .and_then(|e| {
                 if e.is_zero() {
                     Err(io::Error::new(
@@ -106,22 +102,17 @@ mod test_with_bls12_381 {
     use super::*;
     use crate::{Circuit, ConstraintSystem, SynthesisError};
 
-    use ff::Field;
-    use paired::bls12_381::{Bls12, Fr};
     use rand::thread_rng;
 
     #[test]
     fn serialization() {
-        struct MySillyCircuit<E: Engine> {
-            a: Option<E::Fr>,
-            b: Option<E::Fr>,
+        struct MySillyCircuit {
+            a: Option<Scalar>,
+            b: Option<Scalar>,
         }
 
-        impl<E: Engine> Circuit<E> for MySillyCircuit<E> {
-            fn synthesize<CS: ConstraintSystem<E>>(
-                self,
-                cs: &mut CS,
-            ) -> Result<(), SynthesisError> {
+        impl Circuit for MySillyCircuit {
+            fn synthesize<CS: ConstraintSystem>(self, cs: &mut CS) -> Result<(), SynthesisError> {
                 let a = cs.alloc(|| "a", || self.a.ok_or(SynthesisError::AssignmentMissing))?;
                 let b = cs.alloc(|| "b", || self.b.ok_or(SynthesisError::AssignmentMissing))?;
                 let c = cs.alloc_input(
@@ -144,8 +135,7 @@ mod test_with_bls12_381 {
         let rng = &mut thread_rng();
 
         let params =
-            generate_random_parameters::<Bls12, _, _>(MySillyCircuit { a: None, b: None }, rng)
-                .unwrap();
+            generate_random_parameters::<_, _>(MySillyCircuit { a: None, b: None }, rng).unwrap();
 
         {
             let mut v = vec![];
@@ -160,11 +150,11 @@ mod test_with_bls12_381 {
             assert!(params == de_params);
         }
 
-        let pvk = prepare_verifying_key::<Bls12>(&params.vk);
+        let pvk = prepare_verifying_key(&params.vk);
 
         for _ in 0..100 {
-            let a = Fr::random(rng);
-            let b = Fr::random(rng);
+            let a = Scalar::random(rng);
+            let b = Scalar::random(rng);
             let mut c = a;
             c.mul_assign(&b);
 

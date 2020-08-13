@@ -32,6 +32,7 @@ memmap = "0.7.0"
 thiserror = "1.0.10"
 ahash = "0.3.4"
 rust-gpu-tools = { version = "0.1.0", optional = true }
+blstrs = { path = "../blstrs" }
 
 [dev-dependencies]
 hex-literal = "0.2"

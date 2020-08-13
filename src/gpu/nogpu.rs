@@ -1,68 +1,50 @@
 use super::error::{GPUError, GPUResult};
 use crate::multicore::Worker;
-use ff::{PrimeField, ScalarEngine};
-use groupy::CurveAffine;
-use std::marker::PhantomData;
+
 use std::sync::Arc;
 
+use blstrs::*;
+
 // This module is compiled instead of `fft.rs` and `multiexp.rs` if `gpu` feature is disabled.
+pub struct FFTKernel;
 
-pub struct FFTKernel<E>(PhantomData<E>)
-where
-    E: ScalarEngine;
-
-impl<E> FFTKernel<E>
-where
-    E: ScalarEngine,
-{
-    pub fn create(_: bool) -> GPUResult<FFTKernel<E>> {
+impl FFTKernel {
+    pub fn create(_: bool) -> GPUResult<FFTKernel> {
         return Err(GPUError::GPUDisabled);
     }
 
-    pub fn radix_fft(&mut self, _: &mut [E::Fr], _: &E::Fr, _: u32) -> GPUResult<()> {
+    pub fn radix_fft(&mut self, _: &mut [Scalar], _: &Scalar, _: u32) -> GPUResult<()> {
         return Err(GPUError::GPUDisabled);
     }
 }
 
-pub struct MultiexpKernel<E>(PhantomData<E>)
-where
-    E: ScalarEngine;
+pub struct MultiexpKernel;
 
-impl<E> MultiexpKernel<E>
-where
-    E: ScalarEngine,
-{
-    pub fn create(_: bool) -> GPUResult<MultiexpKernel<E>> {
+impl MultiexpKernel {
+    pub fn create(_: bool) -> GPUResult<MultiexpKernel> {
         return Err(GPUError::GPUDisabled);
     }
 
-    pub fn multiexp<G>(
+    // TODO: allow for both g1 and g2
+    pub fn multiexp<C: crate::multiexp::CurveAffine>(
         &mut self,
         _: &Worker,
-        _: Arc<Vec<G>>,
-        _: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
+        _: Arc<Vec<Scalar>>,
+        _: Arc<Vec<Scalar>>,
         _: usize,
         _: usize,
-    ) -> GPUResult<<G as CurveAffine>::Projective>
-    where
-        G: CurveAffine,
-    {
+    ) -> GPUResult<C::Projective> {
         return Err(GPUError::GPUDisabled);
     }
 }
-
-use paired::Engine;
 
 macro_rules! locked_kernel {
     ($class:ident) => {
-        pub struct $class<E>(PhantomData<E>);
+        pub struct $class;
 
-        impl<E> $class<E>
-        where
-            E: Engine,
-        {
-            pub fn new(_: usize, _: bool) -> $class<E> {
-                $class::<E>(PhantomData)
+        impl $class {
+            pub fn new(_: usize, _: bool) -> $class {
+                $class
             }
 
             pub fn with<F, R, K>(&mut self, _: F) -> GPUResult<R>

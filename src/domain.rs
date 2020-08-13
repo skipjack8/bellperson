@@ -20,7 +20,7 @@ use super::SynthesisError;
 
 use crate::gpu;
 
-use log::{info, warn};
+use log::*;
 
 pub struct EvaluationDomain<E: ScalarEngine, G: Group<E>> {
     coeffs: Vec<G>,
@@ -295,8 +295,13 @@ fn best_fft<E: Engine, T: Group<E>>(
     log_n: u32,
 ) -> gpu::GPUResult<()> {
     if let Some(ref devices) = devices {
-        if gpu_fft(devices, a, omega, log_n).is_ok() {
-            return Ok(());
+        match gpu_fft(devices, a, omega, log_n) {
+            Ok(_) => {
+                return Ok(());
+            }
+            Err(e) => {
+                error!("GPU FFT failed! Error: {}", e);
+            }
         }
     }
 

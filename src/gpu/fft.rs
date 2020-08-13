@@ -2,7 +2,7 @@ use crate::gpu::{error::GPUResult, scheduler};
 use crate::multicore::Worker;
 use ff::Field;
 use futures::future::Future;
-use log::info;
+use log::*;
 use paired::Engine;
 use rust_gpu_tools::*;
 use std::cmp;
@@ -110,6 +110,11 @@ where
         let result =
             scheduler::schedule(&worker, devices, move |program| -> GPUResult<Vec<E::Fr>> {
                 let n = 1 << log_n;
+                info!(
+                    "Running FFT of {} elements on {}...",
+                    n,
+                    program.device().name()
+                );
                 let mut src_buffer = program.create_buffer::<E::Fr>(n)?;
                 let mut dst_buffer = program.create_buffer::<E::Fr>(n)?;
 

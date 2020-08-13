@@ -5,7 +5,7 @@ use crate::multicore::Worker;
 use ff::{PrimeField, ScalarEngine};
 use futures::Future;
 use groupy::{CurveAffine, CurveProjective};
-use log::{error, info};
+use log::*;
 use paired::Engine;
 use rust_gpu_tools::*;
 use std::any::TypeId;
@@ -106,6 +106,12 @@ where
     where
         G: CurveAffine,
     {
+        info!(
+            "Running Multiexp of {} elements on {}...",
+            n,
+            program.device().name()
+        );
+
         let core_count = utils::get_core_count(&program.device());
         let exp_bits = std::mem::size_of::<E::Fr>() * 8;
 

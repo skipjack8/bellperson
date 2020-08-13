@@ -2,7 +2,7 @@ use bit_vec::{self, BitVec};
 use ff::{Field, PrimeField, PrimeFieldRepr, ScalarEngine};
 use futures::Future;
 use groupy::{CurveAffine, CurveProjective};
-use log::{info, warn};
+use log::*;
 use std::io;
 use std::iter;
 use std::sync::Arc;
@@ -323,16 +323,20 @@ where
         }
 
         let (bss, skip) = bases.clone().get();
-        let result = gpu::MultiexpKernel::<G::Engine>::multiexp(
+        match gpu::MultiexpKernel::<G::Engine>::multiexp(
             devices,
             pool,
             bss,
             Arc::new(exps.clone()),
             skip,
             n,
-        );
-        if let Ok(p) = result {
-            return Box::new(pool.compute(move || Ok(p)));
+        ) {
+            Ok(p) => {
+                return Box::new(pool.compute(move || Ok(p)));
+            }
+            Err(e) => {
+                error!("GPU Multiexp failed! Error: {}", e);
+            }
         }
     }
 
@@ -416,7 +420,7 @@ pub fn gpu_multiexp_consistency() {
 
     const MAX_LOG_D: usize = 20;
     const START_LOG_D: usize = 10;
-    let mut device_pool = Some(gpu::DevicePool::default());
+    let device_pool = Some(gpu::DevicePool::default());
     let pool = Worker::new();
 
     let rng = &mut rand::thread_rng();

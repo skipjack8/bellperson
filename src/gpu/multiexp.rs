@@ -89,6 +89,14 @@ impl<E> MultiexpKernel<E>
 where
     E: Engine,
 {
+    fn ensure_curve() -> GPUResult<()> {
+        if TypeId::of::<E>() == TypeId::of::<paired::bls12_381::Bls12>() {
+            Ok(())
+        } else {
+            Err(GPUError::CurveNotSupported)
+        }
+    }
+
     pub fn chunk_size_of(program: &opencl::Program) -> usize {
         let core_count = utils::get_core_count(&program.device());
         let exp_bits = std::mem::size_of::<E::Fr>() * 8;
@@ -106,6 +114,8 @@ where
     where
         G: CurveAffine,
     {
+        MultiexpKernel::<E>::ensure_curve()?;
+
         info!(
             "Running Multiexp of {} elements on {}...",
             n,
@@ -197,6 +207,8 @@ where
         G: CurveAffine,
         <G as groupy::CurveAffine>::Engine: paired::Engine,
     {
+        MultiexpKernel::<E>::ensure_curve()?;
+
         // Bases are skipped by `self.1` elements, when converted from (Arc<Vec<G>>, usize) to Source
         // https://github.com/zkcrypto/bellman/blob/10c5010fd9c2ca69442dc9775ea271e286e776d8/src/multiexp.rs#L38
         let bases = &bases[skip..(skip + n)];

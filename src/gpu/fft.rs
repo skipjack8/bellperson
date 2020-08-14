@@ -1,10 +1,14 @@
-use crate::gpu::{error::GPUResult, scheduler};
+use crate::gpu::{
+    error::{GPUError, GPUResult},
+    scheduler,
+};
 use crate::multicore::Worker;
 use ff::Field;
 use futures::future::Future;
 use log::*;
 use paired::Engine;
 use rust_gpu_tools::*;
+use std::any::TypeId;
 use std::cmp;
 
 const LOG2_MAX_ELEMENTS: usize = 32; // At most 2^32 elements is supported.
@@ -22,6 +26,14 @@ impl<E> FFTKernel<E>
 where
     E: Engine,
 {
+    fn ensure_curve() -> GPUResult<()> {
+        if TypeId::of::<E>() == TypeId::of::<paired::bls12_381::Bls12>() {
+            Ok(())
+        } else {
+            Err(GPUError::CurveNotSupported)
+        }
+    }
+
     /// Peforms a FFT round
     /// * `log_n` - Specifies log2 of number of elements
     /// * `log_p` - Specifies log2 of `p`, (http://www.bealto.com/gpu-fft_group-1.html)
@@ -104,6 +116,8 @@ where
         omega: &E::Fr,
         log_n: u32,
     ) -> GPUResult<()> {
+        FFTKernel::<E>::ensure_curve()?;
+
         let mut elems = a.to_vec();
         let omega = *omega;
         let worker = Worker::new();

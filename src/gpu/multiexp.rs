@@ -97,7 +97,7 @@ where
         }
     }
 
-    pub fn chunk_size_of(program: &opencl::Program) -> usize {
+    fn chunk_size_of(program: &opencl::Program) -> usize {
         let core_count = utils::get_core_count(&program.device());
         let exp_bits = std::mem::size_of::<E::Fr>() * 8;
         let max_n = calc_chunk_size::<E>(program.device().memory(), core_count);
@@ -105,7 +105,7 @@ where
         std::cmp::min(max_n, best_n)
     }
 
-    pub fn multiexp_on<G>(
+    fn multiexp_on<G>(
         program: &opencl::Program,
         bases: &[G],
         exps: &[<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr],

@@ -50,6 +50,8 @@ where
         deg: u32,
         max_deg: u32,
     ) -> GPUResult<()> {
+        FFTKernel::<E>::ensure_curve()?;
+
         let n = 1u32 << log_n;
         let local_work_size = 1 << cmp::min(deg - 1, MAX_LOG2_LOCAL_WORK_SIZE);
         let global_work_size = (n >> deg) * local_work_size;
@@ -80,6 +82,8 @@ where
         n: usize,
         max_deg: u32,
     ) -> GPUResult<(opencl::Buffer<E::Fr>, opencl::Buffer<E::Fr>)> {
+        FFTKernel::<E>::ensure_curve()?;
+
         // Precalculate:
         // [omega^(0/(2^(deg-1))), omega^(1/(2^(deg-1))), ..., omega^((2^(deg-1)-1)/(2^(deg-1)))]
         let mut pq = vec![E::Fr::zero(); 1 << max_deg >> 1];

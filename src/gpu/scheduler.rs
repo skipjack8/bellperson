@@ -1,6 +1,7 @@
 use super::*;
 use crate::multicore::Worker;
 use futures::Future;
+use log::info;
 use paired::bls12_381::Bls12;
 use rust_gpu_tools::opencl as cl;
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ lazy_static::lazy_static! {
     static ref PROGRAMS: HashMap<cl::Device, cl::Program> = {
         let mut ret = HashMap::new();
         for d in cl::Device::all().unwrap() {
+            info!("Compiling kernels on device: {} (Bus-id: {})",d.name(),d.bus_id());
             let src = sources::kernel::<Bls12>(d.brand() == cl::Brand::Nvidia);
             let program = cl::Program::from_opencl(d.clone(), &src).unwrap();
             ret.insert(d, program);

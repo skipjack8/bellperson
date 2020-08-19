@@ -468,6 +468,29 @@ pub fn gpu_multiexp_consistency() {
     }
 }
 
+#[cfg(feature = "gpu")]
+#[test]
+pub fn gpu_multiexp_calibrate() {
+    use paired::bls12_381::Bls12;
+
+    let _ = env_logger::try_init();
+    gpu::dump_device_list();
+
+    const MAX_LOG_D: usize = 20;
+    const START_LOG_D: usize = 10;
+    let dev = rust_gpu_tools::opencl::Device::all().unwrap()[0].clone();
+    for log_d in START_LOG_D..(MAX_LOG_D + 1) {
+        let n = 1 << log_d;
+
+        let work_size = gpu::MultiexpKernel::<Bls12>::calibrate::<
+            <Bls12 as paired::Engine>::G1Affine,
+        >(gpu::programs().get(&dev).unwrap(), n)
+        .unwrap();
+
+        println!("Best work-size for {} elements: {}", n, work_size);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

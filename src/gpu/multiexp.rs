@@ -2,6 +2,7 @@ use super::error::{GPUError, GPUResult};
 use super::scheduler;
 use super::utils;
 use crate::multicore::Worker;
+use ff::Field;
 use ff::{PrimeField, ScalarEngine};
 use futures::Future;
 use groupy::{CurveAffine, CurveProjective};
@@ -38,21 +39,21 @@ where
     _phantom: std::marker::PhantomData<E::Fr>,
 }
 
-fn calc_num_groups(core_count: usize, num_windows: usize) -> usize {
-    // Observations show that we get the best performance when num_groups * num_windows ~= 2 * CUDA_CORES
-    2 * core_count / num_windows
+fn calc_num_groups(work_size: usize, num_windows: usize) -> usize {
+    // Observations show that we get the best performance when work_size ~= 2 * CUDA_CORES
+    work_size / num_windows
 }
 
-fn calc_window_size(n: usize, exp_bits: usize, core_count: usize) -> usize {
+fn calc_window_size(n: usize, exp_bits: usize, work_size: usize) -> usize {
     // window_size = ln(n / num_groups)
     // num_windows = exp_bits / window_size
-    // num_groups = 2 * core_count / num_windows = 2 * core_count * window_size / exp_bits
-    // window_size = ln(n / num_groups) = ln(n * exp_bits / (2 * core_count * window_size))
-    // window_size = ln(exp_bits * n / (2 * core_count)) - ln(window_size)
+    // num_groups = work_size / num_windows = work_size * window_size / exp_bits
+    // window_size = ln(n / num_groups) = ln(n * exp_bits / (work_size * window_size))
+    // window_size = ln(exp_bits * n / (work_size)) - ln(window_size)
     //
     // Thus we need to solve the following equation:
-    // window_size + ln(window_size) = ln(exp_bits * n / (2 * core_count))
-    let lower_bound = (((exp_bits * n) as f64) / ((2 * core_count) as f64)).ln();
+    // window_size + ln(window_size) = ln(exp_bits * n / (work_size))
+    let lower_bound = (((exp_bits * n) as f64) / ((work_size) as f64)).ln();
     for w in 0..MAX_WINDOW_SIZE {
         if (w as f64) + (w as f64).ln() > lower_bound {
             return w;
@@ -62,18 +63,15 @@ fn calc_window_size(n: usize, exp_bits: usize, core_count: usize) -> usize {
     MAX_WINDOW_SIZE
 }
 
-fn calc_best_chunk_size(max_window_size: usize, core_count: usize, exp_bits: usize) -> usize {
+fn calc_best_chunk_size(max_window_size: usize, work_size: usize, exp_bits: usize) -> usize {
     // Best chunk-size (N) can also be calculated using the same logic as calc_window_size:
-    // n = e^window_size * window_size * 2 * core_count / exp_bits
-    (((max_window_size as f64).exp() as f64)
-        * (max_window_size as f64)
-        * 2f64
-        * (core_count as f64)
+    // n = e^window_size * window_size * work_size / exp_bits
+    (((max_window_size as f64).exp() as f64) * (max_window_size as f64) * (work_size as f64)
         / (exp_bits as f64))
         .ceil() as usize
 }
 
-fn calc_chunk_size<E>(mem: u64, core_count: usize) -> usize
+fn calc_chunk_size<E>(mem: u64, work_size: usize) -> usize
 where
     E: Engine,
 {
@@ -81,7 +79,7 @@ where
     let exp_size = std::mem::size_of::<E::Fr>();
     let proj_size = std::mem::size_of::<E::G1>() + std::mem::size_of::<E::G2>();
     ((((mem as f64) * (1f64 - MEMORY_PADDING)) as usize)
-        - (2 * core_count * ((1 << MAX_WINDOW_SIZE) + 1) * proj_size))
+        - (work_size * ((1 << MAX_WINDOW_SIZE) + 1) * proj_size))
         / (aff_size + exp_size)
 }
 
@@ -97,11 +95,10 @@ where
         }
     }
 
-    fn chunk_size_of(program: &opencl::Program) -> usize {
-        let core_count = utils::get_core_count(&program.device());
+    fn chunk_size_of(program: &opencl::Program, work_size: usize) -> usize {
         let exp_bits = std::mem::size_of::<E::Fr>() * 8;
-        let max_n = calc_chunk_size::<E>(program.device().memory(), core_count);
-        let best_n = calc_best_chunk_size(MAX_WINDOW_SIZE, core_count, exp_bits);
+        let max_n = calc_chunk_size::<E>(program.device().memory(), work_size);
+        let best_n = calc_best_chunk_size(MAX_WINDOW_SIZE, work_size, exp_bits);
         std::cmp::min(max_n, best_n)
     }
 
@@ -110,6 +107,7 @@ where
         bases: &[G],
         exps: &[<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr],
         n: usize,
+        work_size: usize,
     ) -> GPUResult<<G as CurveAffine>::Projective>
     where
         G: CurveAffine,
@@ -122,12 +120,11 @@ where
             program.device().name()
         );
 
-        let core_count = utils::get_core_count(&program.device());
         let exp_bits = std::mem::size_of::<E::Fr>() * 8;
 
-        let window_size = calc_window_size(n as usize, exp_bits, core_count);
+        let window_size = calc_window_size(n as usize, exp_bits, work_size);
         let num_windows = ((exp_bits as f64) / (window_size as f64)).ceil() as usize;
-        let num_groups = calc_num_groups(core_count, num_windows);
+        let num_groups = calc_num_groups(work_size, num_windows);
         let bucket_len = 1 << window_size;
 
         // Each group will have `num_windows` threads and as there are `num_groups` groups, there will
@@ -141,9 +138,8 @@ where
         exp_buffer.write_from(exps)?;
 
         let bucket_buffer =
-            program.create_buffer::<<G as CurveAffine>::Projective>(2 * core_count * bucket_len)?;
-        let result_buffer =
-            program.create_buffer::<<G as CurveAffine>::Projective>(2 * core_count)?;
+            program.create_buffer::<<G as CurveAffine>::Projective>(work_size * bucket_len)?;
+        let result_buffer = program.create_buffer::<<G as CurveAffine>::Projective>(work_size)?;
 
         // Make global work size divisible by `LOCAL_WORK_SIZE`
         let mut global_work_size = num_windows * num_groups;
@@ -195,6 +191,41 @@ where
         Ok(acc)
     }
 
+    pub fn calibrate<G>(program: &opencl::Program, n: usize) -> GPUResult<usize>
+    where
+        G: CurveAffine,
+        <G as groupy::CurveAffine>::Engine: paired::Engine,
+    {
+        fn n_of<F, T: Clone>(n: usize, mut f: F) -> Vec<T>
+        where
+            F: FnMut() -> T,
+        {
+            let init = (0..1024).map(|_| f()).collect::<Vec<_>>();
+            init.into_iter().cycle().take(n).collect::<Vec<_>>()
+        }
+        use std::time::Instant;
+        let rng = &mut rand::thread_rng();
+        let bases = n_of(n, || {
+            <G as CurveAffine>::Projective::random(rng).into_affine()
+        });
+        let exps = n_of(n, || <G as CurveAffine>::Scalar::random(rng).into_repr());
+        let mut best_work_size = 128;
+        let mut best_dur = None;
+        loop {
+            let now = Instant::now();
+            Self::multiexp_on(program, &bases[..], &exps[..], n, best_work_size + 128)?;
+            let dur = now.elapsed().as_secs() * 1000 as u64 + now.elapsed().subsec_millis() as u64;
+            if best_dur.is_some() && dur > ((best_dur.unwrap() as f64) * 1.1f64) as u64 {
+                break;
+            } else {
+                best_dur = Some(dur);
+            }
+            best_work_size += 128;
+        }
+        println!("Best: {}", best_work_size);
+        Ok(best_work_size)
+    }
+
     pub fn multiexp<G>(
         devices: &scheduler::DevicePool,
         pool: &Worker,
@@ -216,7 +247,7 @@ where
 
         let chunk_size = scheduler::programs()
             .values()
-            .map(|p| MultiexpKernel::<E>::chunk_size_of(p))
+            .map(|p| MultiexpKernel::<E>::chunk_size_of(p, utils::best_work_size(&p.device())))
             .min()
             .unwrap();
 
@@ -230,7 +261,13 @@ where
                     pool,
                     devices,
                     move |prog| -> GPUResult<<G as CurveAffine>::Projective> {
-                        MultiexpKernel::<E>::multiexp_on(prog, &bases, &exps, bases.len())
+                        MultiexpKernel::<E>::multiexp_on(
+                            prog,
+                            &bases,
+                            &exps,
+                            bases.len(),
+                            utils::best_work_size(&prog.device()),
+                        )
                     },
                 )
             })

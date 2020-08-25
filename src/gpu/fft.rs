@@ -97,7 +97,7 @@ where
             }
         }
         let mut pq_buffer = program.create_buffer::<E::Fr>(1 << MAX_LOG2_RADIX >> 1)?;
-        pq_buffer.write_from(&pq)?;
+        pq_buffer.write_from(0, &pq)?;
 
         // Precalculate [omega, omega^2, omega^4, omega^8, ..., omega^(2^31)]
         let mut omegas = vec![E::Fr::zero(); 32];
@@ -106,7 +106,7 @@ where
             omegas[i] = omegas[i - 1].pow([2u64]);
         }
         let mut omegas_buffer = program.create_buffer::<E::Fr>(LOG2_MAX_ELEMENTS)?;
-        omegas_buffer.write_from(&omegas)?;
+        omegas_buffer.write_from(0, &omegas)?;
 
         Ok((pq_buffer, omegas_buffer))
     }
@@ -140,7 +140,7 @@ where
                 let (pq_buffer, omegas_buffer) =
                     FFTKernel::<E>::setup_pq_omegas(program, &omega, n, max_deg)?;
 
-                src_buffer.write_from(&elems)?;
+                src_buffer.write_from(0, &elems)?;
                 let mut log_p = 0u32;
                 while log_p < log_n {
                     let deg = cmp::min(max_deg, log_n - log_p);
@@ -159,7 +159,7 @@ where
                     std::mem::swap(&mut src_buffer, &mut dst_buffer);
                 }
 
-                src_buffer.read_into(&mut elems)?;
+                src_buffer.read_into(0, &mut elems)?;
 
                 Ok(elems)
             })

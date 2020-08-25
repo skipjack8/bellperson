@@ -99,6 +99,10 @@ where
     E: Engine,
 {
     pub fn create(d: opencl::Device, priority: bool) -> GPUResult<SingleMultiexpKernel<E>> {
+        if TypeId::of::<E>() != TypeId::of::<paired::bls12_381::Bls12>() {
+            return Err(GPUError::CurveNotSupported);
+        }
+
         let src = sources::kernel::<E>(d.brand() == opencl::Brand::Nvidia);
 
         let exp_bits = std::mem::size_of::<E::Fr>() * 8;

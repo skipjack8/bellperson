@@ -338,7 +338,18 @@ where
         assert!(query_size == exponents.len());
     }
 
-    pool.compute(move || multiexp_inner(bases, density_map, exponents, c, true))
+    let result = pool.compute(move || multiexp_inner(bases, density_map, exponents, c, true));
+
+    #[cfg(feature = "gpu")]
+    {
+        // Do not give the control back to the caller till the
+        // multiexp is done. We may want to reacquire the GPU again
+        // between the multiexps.
+        let result = result.wait();
+        Waiter::done(result)
+    }
+    #[cfg(not(feature = "gpu"))]
+    result
 }
 
 #[cfg(feature = "paired")]

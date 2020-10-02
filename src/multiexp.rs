@@ -2,6 +2,7 @@ use bit_vec::{self, BitVec};
 use ff::{Field, PrimeField, PrimeFieldRepr, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
 use log::{info, warn};
+use rayon::prelude::*;
 use std::io;
 use std::iter;
 use std::sync::Arc;
@@ -195,7 +196,6 @@ fn multiexp_inner<Q, D, G, S>(
     bases: S,
     density_map: D,
     exponents: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
-    mut skip: u32,
     c: u32,
     handle_trivial: bool,
 ) -> Result<<G as CurveAffine>::Projective, SynthesisError>
@@ -206,87 +206,90 @@ where
     S: SourceBuilder<G>,
 {
     // Perform this region of the multiexp
-    let this =
-        move |bases: S,
-              density_map: D,
-              exponents: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>| {
-            // Accumulate the result
-            let mut acc = G::Projective::zero();
+    let this = move |bases: S,
+                     density_map: D,
+                     exponents: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
+                     skip: u32,
+                     handle_trivial: bool|
+          -> Result<_, SynthesisError> {
+        // Accumulate the result
+        let mut acc = G::Projective::zero();
 
-            // Build a source for the bases
-            let mut bases = bases.new();
+        // Build a source for the bases
+        let mut bases = bases.new();
 
-            // Create space for the buckets
-            let mut buckets = vec![<G as CurveAffine>::Projective::zero(); (1 << c) - 1];
+        // Create space for the buckets
+        let mut buckets = vec![<G as CurveAffine>::Projective::zero(); (1 << c) - 1];
 
-            let zero = <G::Engine as ScalarEngine>::Fr::zero().into_repr();
-            let one = <G::Engine as ScalarEngine>::Fr::one().into_repr();
+        let zero = <G::Engine as ScalarEngine>::Fr::zero().into_repr();
+        let one = <G::Engine as ScalarEngine>::Fr::one().into_repr();
 
-            // Sort the bases into buckets
-            for (&exp, density) in exponents.iter().zip(density_map.as_ref().iter()) {
-                if density {
-                    if exp == zero {
-                        bases.skip(1)?;
-                    } else if exp == one {
-                        if handle_trivial {
-                            bases.add_assign_mixed(&mut acc)?;
-                        } else {
-                            bases.skip(1)?;
-                        }
+        // Sort the bases into buckets
+        for (&exp, density) in exponents.iter().zip(density_map.as_ref().iter()) {
+            if density {
+                if exp == zero {
+                    bases.skip(1)?;
+                } else if exp == one {
+                    if handle_trivial {
+                        bases.add_assign_mixed(&mut acc)?;
                     } else {
-                        let mut exp = exp;
-                        exp.shr(skip);
-                        let exp = exp.as_ref()[0] % (1 << c);
+                        bases.skip(1)?;
+                    }
+                } else {
+                    let mut exp = exp;
+                    exp.shr(skip);
+                    let exp = exp.as_ref()[0] % (1 << c);
 
-                        if exp != 0 {
-                            bases.add_assign_mixed(&mut buckets[(exp - 1) as usize])?;
-                        } else {
-                            bases.skip(1)?;
-                        }
+                    if exp != 0 {
+                        bases.add_assign_mixed(&mut buckets[(exp - 1) as usize])?;
+                    } else {
+                        bases.skip(1)?;
                     }
                 }
             }
-
-            // Summation by parts
-            // e.g. 3a + 2b + 1c = a +
-            //                    (a) + b +
-            //                    ((a) + b) + c
-            let mut running_sum = G::Projective::zero();
-            for exp in buckets.into_iter().rev() {
-                running_sum.add_assign(&exp);
-                acc.add_assign(&running_sum);
-            }
-
-            Ok(acc)
-        };
-
-    skip += c;
-
-    if skip >= <G::Engine as ScalarEngine>::Fr::NUM_BITS {
-        this(bases, density_map, exponents)
-    } else {
-        // There's another region more significant. Calculate and join it with
-        // this region recursively.
-
-        let bases1 = bases.clone();
-        let exponents1 = exponents.clone();
-        let density_map1 = density_map.clone();
-
-        let (this, higher) = rayon::join(
-            move || this(bases1, density_map1, exponents1),
-            move || multiexp_inner(bases, density_map, exponents, skip, c, false),
-        );
-
-        let this = this?;
-        let mut higher = higher?;
-
-        for _ in 0..c {
-            higher.double();
         }
 
-        higher.add_assign(&this);
-        Ok(higher)
+        // Summation by parts
+        // e.g. 3a + 2b + 1c = a +
+        //                    (a) + b +
+        //                    ((a) + b) + c
+        let mut running_sum = G::Projective::zero();
+        for exp in buckets.into_iter().rev() {
+            running_sum.add_assign(&exp);
+            acc.add_assign(&running_sum);
+        }
+
+        Ok(acc)
+    };
+
+    let parts = (0..<G::Engine as ScalarEngine>::Fr::NUM_BITS)
+        .into_par_iter()
+        .step_by(c as usize)
+        .enumerate()
+        .map(|(i, skip)| {
+            let handle_trivial = if i == 0 { handle_trivial } else { false };
+            this(
+                bases.clone(),
+                density_map.clone(),
+                exponents.clone(),
+                skip,
+                handle_trivial,
+            )
+        })
+        .collect::<Vec<Result<_, _>>>();
+
+    let mut acc = <G as CurveAffine>::Projective::zero();
+
+    for (i, part) in parts.into_iter().enumerate().rev() {
+        acc.add_assign(&part?);
+        if i > 0 {
+            for _ in 0..c {
+                acc.double();
+            }
+        }
     }
+
+    Ok(acc)
 }
 
 /// Perform multi-exponentiation. The caller is responsible for ensuring the
@@ -335,7 +338,7 @@ where
         assert!(query_size == exponents.len());
     }
 
-    pool.compute(move || multiexp_inner(bases, density_map, exponents, 0, c, true))
+    pool.compute(move || multiexp_inner(bases, density_map, exponents, c, true))
 }
 
 #[cfg(feature = "paired")]

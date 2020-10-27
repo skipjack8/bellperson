@@ -583,6 +583,7 @@ mod tests {
     use crate::gpu;
     use crate::multicore::Worker;
     use ff::Field;
+    use std::time::Instant;
 
     #[test]
     pub fn gpu_fft_consistency() {

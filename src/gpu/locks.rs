@@ -6,7 +6,7 @@ use std::path::PathBuf;
 const GPU_LOCK_NAME: &str = "bellman.gpu.lock";
 const PRIORITY_LOCK_NAME: &str = "bellman.priority.lock";
 fn tmp_path(filename: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
+    let mut p = dbg!(std::env::temp_dir());
     p.push(filename);
     p
 }
@@ -16,8 +16,9 @@ fn tmp_path(filename: &str) -> PathBuf {
 pub struct GPULock(File);
 impl GPULock {
     pub fn lock() -> GPULock {
-        debug!("Acquiring GPU lock...");
-        let f = File::create(tmp_path(GPU_LOCK_NAME)).unwrap();
+        let p = tmp_path(GPU_LOCK_NAME);
+        debug!("Acquiring GPU lock ({})...", p.display());
+        let f = File::create(p).unwrap();
         f.lock_exclusive().unwrap();
         debug!("GPU lock acquired!");
         GPULock(f)
@@ -26,6 +27,7 @@ impl GPULock {
 impl Drop for GPULock {
     fn drop(&mut self) {
         debug!("GPU lock released!");
+        self.0.unlock().unwrap();
     }
 }
 
@@ -37,31 +39,34 @@ impl Drop for GPULock {
 pub struct PriorityLock(File);
 impl PriorityLock {
     pub fn lock() -> PriorityLock {
-        debug!("Acquiring priority lock...");
-        let f = File::create(tmp_path(PRIORITY_LOCK_NAME)).unwrap();
+        let p = tmp_path(PRIORITY_LOCK_NAME);
+        debug!("Acquiring priority lock ({})...", p.display());
+        let f = File::create(p).unwrap();
         f.lock_exclusive().unwrap();
         debug!("Priority lock acquired!");
         PriorityLock(f)
     }
     pub fn wait(priority: bool) {
         if !priority {
-            File::create(tmp_path(PRIORITY_LOCK_NAME))
-                .unwrap()
-                .lock_exclusive()
-                .unwrap();
+            let p = tmp_path(PRIORITY_LOCK_NAME);
+            debug!("wait: ({})", p.display());
+            File::create(p).unwrap().lock_exclusive().unwrap();
         }
     }
     pub fn should_break(priority: bool) -> bool {
-        !priority
-            && File::create(tmp_path(PRIORITY_LOCK_NAME))
-                .unwrap()
-                .try_lock_exclusive()
-                .is_err()
+        if !priority {
+            let p = tmp_path(PRIORITY_LOCK_NAME);
+            debug!("should_break: ({})", p.display());
+            File::create(p).unwrap().try_lock_exclusive().is_err()
+        } else {
+            false
+        }
     }
 }
 impl Drop for PriorityLock {
     fn drop(&mut self) {
         debug!("Priority lock released!");
+        self.0.unlock().unwrap();
     }
 }
 

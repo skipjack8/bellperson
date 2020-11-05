@@ -18,7 +18,7 @@ use crate::{
 use log::info;
 
 #[cfg(feature = "gpu")]
-use crate::gpu::PriorityLock;
+use crate::gpu::{GPULock, PriorityLock};
 
 fn eval<E: Engine>(
     lc: &LinearCombination<E>,
@@ -328,10 +328,11 @@ where
     }
 
     #[cfg(feature = "gpu")]
-    let prio_lock = if priority {
-        Some(PriorityLock::lock())
+    let (gpu_lock, prio_lock) = if priority {
+        let gpu_lock = GPULock::lock();
+        (gpu_lock, Some(PriorityLock::lock()))
     } else {
-        None
+        (GPULock::lock(), None)
     };
 
     let mut fft_kern = Some(LockedFFTKernel::<E>::new(log_d, priority));
@@ -508,7 +509,10 @@ where
     drop(multiexp_kern);
 
     #[cfg(feature = "gpu")]
-    drop(prio_lock);
+    {
+        drop(prio_lock);
+        drop(gpu_lock);
+    }
 
     let proofs = h_s
         .into_iter()

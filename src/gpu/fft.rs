@@ -19,7 +19,6 @@ where
     program: opencl::Program,
     pq_buffer: opencl::Buffer<E::Fr>,
     omegas_buffer: opencl::Buffer<E::Fr>,
-    _lock: locks::GPULock, // RFC 1857: struct fields are dropped in the same order as they are declared.
     priority: bool,
 }
 
@@ -28,8 +27,6 @@ where
     E: Engine,
 {
     pub fn create(priority: bool) -> GPUResult<FFTKernel<E>> {
-        let lock = locks::GPULock::lock();
-
         let devices = opencl::Device::all()?;
         if devices.is_empty() {
             return Err(GPUError::Simple("No working GPUs found!"));
@@ -51,7 +48,6 @@ where
             program,
             pq_buffer,
             omegas_buffer,
-            _lock: lock,
             priority,
         })
     }

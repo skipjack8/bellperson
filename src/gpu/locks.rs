@@ -46,6 +46,7 @@ impl PriorityLock {
         debug!("Priority lock acquired!");
         PriorityLock(f)
     }
+
     pub fn wait(priority: bool) {
         if !priority {
             let p = tmp_path(PRIORITY_LOCK_NAME);

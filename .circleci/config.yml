@@ -214,7 +214,7 @@ jobs:
       - run: source $BASH_ENV
       - run:
           name: Generate coverage report
-          command: cargo tarpaulin --out Xml --no-default-features --features pairing,gpu
+          command: cargo tarpaulin --out Xml
       - codecov/upload:
           file: cobertura.xml
 

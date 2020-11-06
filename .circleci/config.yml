@@ -213,7 +213,7 @@ workflows:
       - clippy:
           requires:
             - cargo_fetch
-            
+
       - test_pairing_x86_64-unknown-linux-gnu:
           requires:
             - cargo_fetch
@@ -227,11 +227,10 @@ workflows:
       - test_blst_gpu_x86_64-unknown-linux-gnu:
           requires:
             - cargo_fetch
-            
+
       - build_blst:
           requires:
             - cargo_fetch
       - build_pairing:
           requires:
             - cargo_fetch
-            

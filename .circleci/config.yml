@@ -20,54 +20,54 @@ restore-cache: &restore-cache
       - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
       - repo-source-{{ .Branch }}-{{ .Revision }}
 
-commands:
-  test_target_pairing:
-    parameters:
-      target:
-        type: string
-    steps:
-      - *restore-workspace
-      - *restore-cache
-      - run:
-          name: Test pairing (<< parameters.target >>)
-          command: TARGET=<< parameters.target >> cargo test --no-default-features --features pairing
-          no_output_timeout: 15m
-
-  test_target_pairing_gpu:
-    parameters:
-      target:
-        type: string
-    steps:
-      - *restore-workspace
-      - *restore-cache
-      - run:
-          name: Test pairing (GPU) (<< parameters.target >>)
-          command: TARGET=<< parameters.target >> cargo test --release --no-default-features --features gpu,pairing
-          no_output_timeout: 30m
-
-  test_target_blst:
-    parameters:
-      target:
-        type: string
-    steps:
-      - *restore-workspace
-      - *restore-cache
-      - run:
-          name: Test blst (<< parameters.target >>)
-          command: TARGET=<< parameters.target >> cargo test --no-default-features --features blst
-          no_output_timeout: 15m
-
-  test_target_blst_gpu:
-    parameters:
-      target:
-        type: string
-    steps:
-      - *restore-workspace
-      - *restore-cache
-      - run:
-          name: Test blst (GPU) (<< parameters.target >>)
-          command: TARGET=<< parameters.target >> cargo test --release --no-default-features --features gpu,blst
-          no_output_timeout: 30m
+#commands:
+#  test_target_pairing:
+#    parameters:
+#      target:
+#        type: string
+#    steps:
+#      - *restore-workspace
+#      - *restore-cache
+#      - run:
+#          name: Test pairing (<< parameters.target >>)
+#          command: TARGET=<< parameters.target >> cargo test --no-default-features --features pairing
+#          no_output_timeout: 15m
+#
+#  test_target_pairing_gpu:
+#    parameters:
+#      target:
+#        type: string
+#    steps:
+#      - *restore-workspace
+#      - *restore-cache
+#      - run:
+#          name: Test pairing (GPU) (<< parameters.target >>)
+#          command: TARGET=<< parameters.target >> cargo test --release --no-default-features --features gpu,pairing
+#          no_output_timeout: 30m
+#
+#  test_target_blst:
+#    parameters:
+#      target:
+#        type: string
+#    steps:
+#      - *restore-workspace
+#      - *restore-cache
+#      - run:
+#          name: Test blst (<< parameters.target >>)
+#          command: TARGET=<< parameters.target >> cargo test --no-default-features --features blst
+#          no_output_timeout: 15m
+#
+#  test_target_blst_gpu:
+#    parameters:
+#      target:
+#        type: string
+#    steps:
+#      - *restore-workspace
+#      - *restore-cache
+#      - run:
+#          name: Test blst (GPU) (<< parameters.target >>)
+#          command: TARGET=<< parameters.target >> cargo test --release --no-default-features --features gpu,blst
+#          no_output_timeout: 30m
 
 jobs:
 

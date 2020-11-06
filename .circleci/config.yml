@@ -1,5 +1,8 @@
 version: 2.1
 
+orbs:
+  codecov: codecov/codecov@1
+
 executors:
   default:
     machine:
@@ -95,6 +98,7 @@ jobs:
       - run: rustup component add rustfmt-preview
       - run: rustup component add clippy-preview
       - run: rustc --version
+      - run: cargo install cargo-tarpaulin
       - run: rm -rf .git
       - persist_to_workspace:
           root: ~/
@@ -200,6 +204,19 @@ jobs:
       - run:
           name: Run cargo release build
           command: cargo build --release --no-default-features --features pairing
+
+  coverage:
+    executor: default
+    steps:
+      - *restore-workspace
+      - *restore-cache
+      - run: echo 'export PATH="$HOME:~/.cargo/bin:$PATH"' >> $BASH_ENV
+      - run: source $BASH_ENV
+      - run:
+          name: Generate coverage report
+          command: cargo tarpaulin --out Xml --all-feature
+      - codecov/upload:
+          file: cobertura.xml
 
 workflows:
   version: 2.1

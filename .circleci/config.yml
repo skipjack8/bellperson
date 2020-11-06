@@ -88,9 +88,9 @@ jobs:
       - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
-      - restore_cache:
-          keys:
-            - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
+      #- restore_cache:
+      #    keys:
+      #      - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}
       - run: cargo update
       - run: cargo fetch
       - run: rustup install $(cat rust-toolchain)
@@ -209,7 +209,7 @@ jobs:
     executor: default
     steps:
       - *restore-workspace
-      - *restore-cache
+      #- *restore-cache
       - run: echo 'export PATH="$HOME:~/.cargo/bin:$PATH"' >> $BASH_ENV
       - run: source $BASH_ENV
       - run:

@@ -224,7 +224,7 @@ jobs:
           #command: cargo tarpaulin --out Xml --timeout 6000 --no-default-features --features pairing
           #command: cargo test --no-default-features --features pairing
           command: |
-            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests" cargo +<< pipeline.parameters.nightly-version >> test --lib
+            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests" cargo +<< pipeline.parameters.nightly-version >> test
             grcov ./target/debug -s . -t lcov --llvm --branch --ignore-not-existing --ignore="tests/*" --ignore="target/debug/build/*" --ignore="**/tests/*" -o lcov.info;
       - codecov/upload:
           file: lcov.info

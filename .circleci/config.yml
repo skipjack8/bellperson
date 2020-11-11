@@ -216,11 +216,14 @@ jobs:
           name: Generate coverage report
           #command: cargo tarpaulin --out Xml --timeout 6000 --no-default-features --features pairing
           #command: cargo test --no-default-features --features pairing
-          CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests" cargo +nightly test --lib
-          zip -0 ccov.zip `find . \( -name "bellperson*.gc*" \) -print`;
-          grcov ccov.zip -s . -t lcov --llvm --branch --ignore-not-existing --ignore "/*" --ignore="target/debug/build/*" --ignore="**/tests/*" -o lcov.info;
+          command: |
+            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests" cargo +nightly test --lib
+            #zip -0 ccov.zip `find . \( -name "bellperson*.gc*" \) -print`;
+            #grcov ccov.zip -s . -t lcov --llvm --branch --ignore-not-existing --ignore "/*" --ignore="target/debug/build/*" --ignore="**/tests/*" -o lcov.info;
+            grcov ./target/debug -s . -t lcov --llvm --branch --ignore-not-existing --ignore="tests/*" --ignore="target/debug/build/*" --ignore="**/tests/*" -o lcov.info;
+            #bash <(curl -s https://codecov.io/bash) -f lcov.info;
       - codecov/upload:
-          file: cobertura.xml
+          file: lcov.info
 
 workflows:
   version: 2.1

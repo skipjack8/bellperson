@@ -1,5 +1,10 @@
 version: 2.1
 
+parameters:
+  nightly-version:
+    type: string
+    default: "nightly-2020-11-11"
+
 orbs:
   codecov: codecov/codecov@1
 
@@ -96,7 +101,7 @@ jobs:
       - run: rustup install $(cat rust-toolchain)
       - run: rustup default $(cat rust-toolchain)
       # A nightly build is needed for code coverage reporting
-      - run: rustup install nightly-2020-11-11
+      - run: rustup toolchain install --profile minimal << pipeline.parameters.nightly-version >>
       - run: rustup component add rustfmt-preview
       - run: rustup component add clippy-preview
       - run: rustc --version
@@ -219,7 +224,7 @@ jobs:
           #command: cargo tarpaulin --out Xml --timeout 6000 --no-default-features --features pairing
           #command: cargo test --no-default-features --features pairing
           command: |
-            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests" cargo +nightly test --lib
+            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests" cargo +<< pipeline.parameters.nightly-version >> test --lib
             grcov ./target/debug -s . -t lcov --llvm --branch --ignore-not-existing --ignore="tests/*" --ignore="target/debug/build/*" --ignore="**/tests/*" -o lcov.info;
       - codecov/upload:
           file: lcov.info

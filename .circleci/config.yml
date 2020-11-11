@@ -95,6 +95,8 @@ jobs:
       - run: cargo fetch
       - run: rustup install $(cat rust-toolchain)
       - run: rustup default $(cat rust-toolchain)
+      # A nightly build is needed for code coverage reporting
+      - run: rustup install nightly-2020-11-11
       - run: rustup component add rustfmt-preview
       - run: rustup component add clippy-preview
       - run: rustc --version

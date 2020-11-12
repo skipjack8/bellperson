@@ -21,7 +21,7 @@ use bellperson::groth16::{
 };
 
 #[cfg(feature = "_coverage")]
-const MIMC_ROUNDS: usize = 5;
+const MIMC_ROUNDS: usize = 1;
 
 #[cfg(not(feature = "_coverage"))]
 const MIMC_ROUNDS: usize = 322;

@@ -52,6 +52,9 @@ criterion = "0.3.2"
 default = ["groth16", "pairing"]
 gpu = ["rust-gpu-tools", "ff-cl-gen", "fs2"]
 groth16 = []
+# This feature disables/modifies long running tests to make the suitable for
+# code coverage reporting
+_coverage = []
 
 blst = ["blstrs", "groth16"]
 blst-serde = ["blstrs/serde"]

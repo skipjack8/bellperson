@@ -20,6 +20,10 @@ use bellperson::groth16::{
     prepare_verifying_key, verify_proof, verify_proofs_batch, Proof,
 };
 
+#[cfg(feature = "_coverage")]
+const MIMC_ROUNDS: usize = 5;
+
+#[cfg(not(feature = "_coverage"))]
 const MIMC_ROUNDS: usize = 322;
 
 /// This is an implementation of MiMC, specifically a

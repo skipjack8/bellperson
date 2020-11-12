@@ -221,11 +221,17 @@ jobs:
       - run: source $BASH_ENV
       - run:
           name: Generate coverage report
-          #command: cargo tarpaulin --out Xml --timeout 6000 --no-default-features --features pairing
-          #command: cargo test --no-default-features --features pairing
           command: |
-            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests" cargo +<< pipeline.parameters.nightly-version >> test
-            grcov ./target/debug -s . -t lcov --llvm --branch --ignore-not-existing --ignore="tests/*" --ignore="target/debug/build/*" --ignore="**/tests/*" -o lcov.info;
+            # CARGO_INCREMENTAL=0: incremental build is not supported when profiling
+            # -Zprofile: enable gcov profiling
+            # -Ccodegen-units=1: building in parallel is not supported when profiling
+            # -Copt-level=0: disable optimizations for more accurate coverage
+            # -Clink-dead-code: dead code should be considered as not covered code
+            # -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
+            # -Cinline-threshold=0: disable inlining for more accurate coverage
+            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cinline-threshold=0" cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
+            # Don't include coverage of test files
+            grcov ./target/debug --source-dir . --output-type lcov --llvm --branch --ignore-not-existing --ignore="tests/*" --ignore="target/debug/build/*" --ignore="**/tests/*" --output-path lcov.info;
       - codecov/upload:
           file: lcov.info
 

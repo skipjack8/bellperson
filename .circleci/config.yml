@@ -223,13 +223,22 @@ jobs:
           name: Generate coverage report
           command: |
             # CARGO_INCREMENTAL=0: incremental build is not supported when profiling
+            export CARGO_INCREMENTAL=0
             # -Zprofile: enable gcov profiling
             # -Ccodegen-units=1: building in parallel is not supported when profiling
             # -Copt-level=0: disable optimizations for more accurate coverage
             # -Clink-dead-code: dead code should be considered as not covered code
             # -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
             # -Cinline-threshold=0: disable inlining for more accurate coverage
-            CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cinline-threshold=0" cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
+            export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cinline-threshold=0"
+
+            # Run the library tests which are part of the source files separate
+            # from the integration tests in the `tests` directory. This is
+            # needed in order to prevent a stack overflow error during the
+            # coverage creation.
+            cargo +<< pipeline.parameters.nightly-version >> test --lib --features _coverage
+            cargo +<< pipeline.parameters.nightly-version >> test  test --test '*' --features _coverage
+
             # Don't include coverage of test files
             grcov ./target/debug --source-dir . --output-type lcov --llvm --branch --ignore-not-existing --ignore="tests/*" --ignore="target/debug/build/*" --ignore="**/tests/*" --output-path lcov.info;
       - codecov/upload:

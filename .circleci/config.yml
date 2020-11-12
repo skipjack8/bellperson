@@ -229,8 +229,8 @@ jobs:
             # -Copt-level=0: disable optimizations for more accurate coverage
             # -Clink-dead-code: dead code should be considered as not covered code
             # -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
-            # -Cinline-threshold=0: disable inlining for more accurate coverage
-            export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cinline-threshold=0"
+            # Using `-Cinline-threshold=0` would be great, but it leads to stack overflows
+            export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off"
 
             # Run the library tests which are part of the source files separate
             # from the integration tests in the `tests` directory. This is

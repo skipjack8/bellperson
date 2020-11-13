@@ -233,12 +233,10 @@ jobs:
             export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off"
 
             # Run the library tests which are part of the source files separate
-            # from the integration tests in the `tests` directory. This is
-            # needed in order to prevent a stack overflow error during the
-            # coverage creation.
+            # from the integration tests in the `tests` directory. Without
+            # that separating some test will hang forever.
             cargo +<< pipeline.parameters.nightly-version >> test --test '*' --features _coverage
             cargo +<< pipeline.parameters.nightly-version >> test --lib --features _coverage
-            #cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
 
             # Don't include coverage of test files
             grcov ./target/debug --source-dir . --output-type lcov --llvm --branch --ignore-not-existing --ignore="tests/*" --ignore="target/debug/build/*" --ignore="**/tests/*" --output-path lcov.info;

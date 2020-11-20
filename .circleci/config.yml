@@ -104,7 +104,7 @@ jobs:
       - run: rustup toolchain install --profile minimal << pipeline.parameters.nightly-version >>
       - run: rustup component add rustfmt-preview
       - run: rustup component add clippy-preview
-      - run: rustup component add llvm-tools-preview
+      - run: rustup component add --toolchain << pipeline.parameters.nightly-version >> llvm-tools-preview
       - run: rustc --version
       - run: cargo install rustfilt
       - run: rm -rf .git

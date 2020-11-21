@@ -22,7 +22,7 @@ restore-workspace: &restore-workspace
 restore-cache: &restore-cache
   restore_cache:
     keys:
-      - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx4
+      - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx5
       - repo-source-{{ .Branch }}-{{ .Revision }}
 
 #commands:
@@ -95,7 +95,7 @@ jobs:
           command: cargo generate-lockfile
       - restore_cache:
           keys:
-            - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx4
+            - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx5
       - run: cargo update
       - run: cargo fetch
       - run: rustup install $(cat rust-toolchain)
@@ -113,7 +113,7 @@ jobs:
           paths:
             - gpuci
       - save_cache:
-          key: cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx4
+          key: cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx5
           paths:
             - "~/.cargo"
             - "~/.rustup"

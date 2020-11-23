@@ -224,7 +224,7 @@ jobs:
           name: Generate coverage report
           command: |
             export LLVM_TOOLS="/home/circleci/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin"
-            ls -R ~/.rustup/
+            ls -R ~/.cargo/bin
 
             # CARGO_INCREMENTAL=0: incremental build is not supported when profiling
             export CARGO_INCREMENTAL=0

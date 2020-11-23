@@ -240,8 +240,8 @@ jobs:
             # from the integration tests in the `tests` directory. Without
             # that separating some test will hang forever.
             #cargo +<< pipeline.parameters.nightly-version >> test --test '*' --features _coverage
-            #cargo +<< pipeline.parameters.nightly-version >> test --lib --features _coverage
-            cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
+            cargo +<< pipeline.parameters.nightly-version >> test --lib --features _coverage
+            #cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
 
             # Don't include coverage of test files
             llvm-profdata merge --sparse --output=default.profdata *.profraw

@@ -230,13 +230,13 @@ jobs:
 
             # CARGO_INCREMENTAL=0: incremental build is not supported when profiling
             export CARGO_INCREMENTAL=0
-            # -Zprofile: enable gcov profiling
             # -Ccodegen-units=1: building in parallel is not supported when profiling
             # -Copt-level=0: disable optimizations for more accurate coverage
             # -Clink-dead-code: dead code should be considered as not covered code
             # -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
+            # -Zinstrument-coverage: enable llvm coverage instrumentation
             # Using `-Cinline-threshold=0` would be great, but it leads to stack overflows
-            export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zinstrument-coverage"
+            export RUSTFLAGS="-Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zinstrument-coverage"
 
             # Run the library tests which are part of the source files separate
             # from the integration tests in the `tests` directory. Without

@@ -247,7 +247,8 @@ jobs:
 
             # Don't include coverage of test files
             llvm-profdata merge --sparse --output=default.profdata *.profraw
-            llvm-cov export --Xdemangler=rustfilt --ignore-filename-regex="/rustc" --format=lcov --instr-profile=default.profdata ./target/debug/deps/bellperson-* > lcov.info
+            #llvm-cov export --Xdemangler=rustfilt --ignore-filename-regex="/rustc" --format=lcov --instr-profile=default.profdata ./target/debug/deps/bellperson-* > lcov.info
+            llvm-cov export --ignore-filename-regex="/rustc" --format=lcov --instr-profile=default.profdata ./target/debug/deps/bellperson-* > lcov.info
       - codecov/upload:
           file: lcov.info
 

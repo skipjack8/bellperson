@@ -236,7 +236,7 @@ jobs:
             # -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
             # -Zinstrument-coverage: enable llvm coverage instrumentation
             # Using `-Cinline-threshold=0` would be great, but it leads to stack overflows
-            export RUSTFLAGS="-Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zinstrument-coverage"
+            export RUSTFLAGS="-Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zinstrument-coverage -Cinline-threshold=0"
 
             # Run the library tests which are part of the source files separate
             # from the integration tests in the `tests` directory. Without

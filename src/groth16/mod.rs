@@ -15,9 +15,7 @@ mod prover;
 mod verifier;
 mod verifying_key;
 
-mod msm;
 mod multiscalar;
-mod poly;
 
 pub use self::aggregate::*;
 pub use self::ext::*;

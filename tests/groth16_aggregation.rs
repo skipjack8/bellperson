@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use bellperson::bls::{Bls12, Engine, Fr};
+use bellperson::bls::{Bls12, Engine};
 use bellperson::groth16::{
     aggregate_proofs, create_random_proof, generate_random_parameters, prepare_verifying_key,
     setup_inner_product, verify_aggregate_proof, verify_proof,

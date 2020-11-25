@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use digest::Digest;
 use ff::{Field, PrimeField};
-use groupy::{CurveAffine, CurveProjective};
+use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use itertools::Itertools;
 
 use super::{msm, poly::DensePolynomial, Proof, VerifyingKey};
@@ -154,15 +154,13 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
     let r = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        // TODO: add serialize and deserialize to Fqk
-        // hash_input.extend_from_slice(&to_bytes![com_a, com_b, com_c]?);
-        // if let Some(r) = E::Fr::deserialize(&D::digest(&hash_input)) {
-        // break r;
-        // };
-        // fake
-        if counter_nonce == 10 {
-            break E::Fr::zero();
-        }
+        hash_input.extend_from_slice(&com_a.as_bytes());
+        hash_input.extend_from_slice(&com_b.as_bytes());
+        hash_input.extend_from_slice(&com_c.as_bytes());
+        if let Some(r) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+            break r;
+        };
+
         counter_nonce += 1;
     };
 
@@ -217,14 +215,12 @@ pub fn verify_aggregate_proof<E: Engine, D: Digest>(
     let r = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        // TODO:
-        // hash_input.extend_from_slice(&to_bytes![proof.com_a, proof.com_b, proof.com_c]?);
-        // if let Some(r) = <P::Fr>::from_random_bytes(&D::digest(&hash_input)) {
-        // break r;
-        // };
-        if counter_nonce == 10 {
-            break E::Fr::zero();
-        }
+        hash_input.extend_from_slice(&proof.com_a.as_bytes());
+        hash_input.extend_from_slice(&proof.com_b.as_bytes());
+        hash_input.extend_from_slice(&proof.com_c.as_bytes());
+        if let Some(r) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+            break r;
+        };
         counter_nonce += 1;
     };
 
@@ -352,18 +348,12 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        // TODO: serialization
-        // hash_input.extend_from_slice(&to_bytes![
-        //     transcript.first().unwrap(),
-        //     ck_a_final,
-        //     ck_b_final
-        // ]?);
-        // if let Some(c) = LMC::Scalar::from_random_bytes(&D::digest(&hash_input)) {
-        //     break c;
-        // };
-        if counter_nonce == 10 {
-            break E::Fr::zero();
-        }
+        hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
+        hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
+        hash_input.extend_from_slice(ck_b_final.into_affine().into_uncompressed().as_ref());
+        if let Some(c) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+            break c;
+        };
         counter_nonce += 1;
     };
 
@@ -486,22 +476,28 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-                    //TODO:
-                    // hash_input.extend_from_slice(&to_bytes![
-                    //     transcript, com_1.0, com_1.1, com_1.2, com_2.0, com_2.1, com_2.2
-                    // ]);
-                    // let c: LMC::Scalar = u128::from_be_bytes(
-                    //     D::digest(&hash_input).as_slice()[0..16].try_into().unwrap(),
-                    // )
-                    // .into();
-                    // if let Some(c_inv) = c.inverse() {
-                    //     // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                    //     // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                    //     break 'challenge (c_inv, c);
-                    // }
-                    if counter_nonce == 10 {
-                        break 'challenge (E::Fr::one(), E::Fr::one());
+                    hash_input.extend_from_slice(&transcript.as_bytes());
+                    hash_input.extend_from_slice(&com_1.0.as_bytes());
+                    hash_input.extend_from_slice(&com_1.1.as_bytes());
+                    for c in &com_1.2 {
+                        hash_input.extend_from_slice(&c.as_bytes());
                     }
+                    hash_input.extend_from_slice(&com_2.0.as_bytes());
+                    hash_input.extend_from_slice(&com_2.1.as_bytes());
+                    for c in &com_2.2 {
+                        hash_input.extend_from_slice(&c.as_bytes());
+                    }
+                    let c = E::Fr::from_bytes(
+                        &D::digest(&hash_input).as_slice()[0..E::Fr::SERIALIZED_BYTES],
+                    );
+                    if let Some(c) = c {
+                        if let Some(c_inv) = c.inverse() {
+                            // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                            // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                            break 'challenge (c_inv, c);
+                        }
+                    }
+
                     counter_nonce += 1;
                 };
 

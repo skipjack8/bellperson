@@ -22,6 +22,8 @@ impl fmt::Display for Fr {
 }
 
 impl Field for Fr {
+    const SERIALIZED_BYTES: usize = 4;
+
     fn random<R: RngCore>(rng: &mut R) -> Self {
         Fr(Wrapping(rng.next_u32()) % MODULUS_R)
     }
@@ -74,6 +76,20 @@ impl Field for Fr {
 
     fn frobenius_map(&mut self, _: usize) {
         // identity
+    }
+
+    fn as_bytes(&self) -> Vec<u8> {
+        self.0.0.to_be_bytes().to_vec()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        use std::convert::TryInto;
+
+        if bytes.len() != Self::SERIALIZED_BYTES {
+            return None;
+        }
+        let val = u32::from_be_bytes(bytes.try_into().unwrap()); 
+        Some(Self(Wrapping(val)))
     }
 }
 

@@ -29,6 +29,11 @@ thiserror = "1.0.10"
 rustc-hash = "1.1.0"
 num_cpus = "1"
 crossbeam-channel = "0.5.0"
+digest = "0.9.0"
+itertools = "0.9.0"
+bincode = "1.3.1"
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.9"
 
 # blst feature
 blstrs = { version = "0.2", optional = true }
@@ -43,10 +48,10 @@ fs2 = { version = "0.4.3", optional = true }
 
 [dev-dependencies]
 hex-literal = "0.3"
-rand_xorshift = "0.2"
-sha2 = "0.9"
+rand_xorshift = "0.2.0"
 env_logger = "0.8.1"
 criterion = "0.3.2"
+rand_chacha = "0.2.2"
 
 [features]
 default = ["pairing"]
@@ -54,9 +59,8 @@ gpu = ["rust-gpu-tools", "ff-cl-gen", "fs2"]
 groth16 = []
 
 blst = ["blstrs", "groth16"]
-blst-serde = ["blstrs/serde"]
 pairing = ["paired", "groth16"]
-pairing-serde = ["paired/serde"]
+
 
 # This feature disables/modifies long running tests to make the suitable for code coverage
 # reporting
@@ -74,3 +78,10 @@ maintenance = { status = "actively-developed" }
 [[bench]]
 name = "lc"
 harness = false
+
+
+[patch.crates-io]
+paired = { git = "https://github.com/filecoin-project/paired", branch = "ser-de" }
+fff = { git = "https://github.com/filecoin-project/ff", branch = "ser-de" }
+groupy = { git = "https://github.com/filecoin-project/group", branch = "ser-de" }
+blstrs = { git = "https://github.com/filecoin-project/blstrs", branch = "ser-de" }

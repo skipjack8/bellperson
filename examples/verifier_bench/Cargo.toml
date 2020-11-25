@@ -11,6 +11,8 @@ groupy = "0.3.1"
 structopt = { version = "0.3", default-features = false }
 pretty_env_logger = "0.4.0"
 rand = "0.7.3"
+sha2 = "0.9"
+bincode = "1.3.1"
 
 
 [features]
@@ -20,3 +22,8 @@ groth16 = ["bellperson/groth16"]
 blst = ["bellperson/blst"]
 pairing = ["bellperson/pairing"]
 
+[patch.crates-io]
+paired = { git = "https://github.com/filecoin-project/paired", branch = "ser-de" }
+fff = { git = "https://github.com/filecoin-project/ff", branch = "ser-de" }
+groupy = { git = "https://github.com/filecoin-project/group", branch = "ser-de" }
+blstrs = { git = "https://github.com/filecoin-project/blstrs", branch = "ser-de" }

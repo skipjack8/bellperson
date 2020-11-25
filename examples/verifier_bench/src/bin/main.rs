@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bellperson::groth16::{
-    create_random_proof_batch, generate_random_parameters, prepare_verifying_key,
-    verify_proofs_batch, Parameters, Proof, VerifyingKey,
+    aggregate_proofs, create_random_proof_batch, generate_random_parameters, prepare_verifying_key,
+    setup_inner_product, verify_aggregate_proof, verify_proofs_batch, Parameters, Proof,
+    VerifyingKey,
 };
 use bellperson::{
     bls::{Bls12, Engine, Fr},
@@ -151,6 +152,8 @@ struct Opts {
     prove: bool,
     #[structopt(long = "dummy")]
     dummy: bool,
+    #[structopt(long = "aggregate")]
+    aggregate: bool,
 }
 
 fn main() {
@@ -178,11 +181,17 @@ fn main() {
     };
     let pvk = prepare_verifying_key(&params.vk);
 
+    let srs = if opts.aggregate {
+        Some(setup_inner_product(rng, opts.proofs))
+    } else {
+        None
+    };
+
     if opts.prove {
         println!("Proving...");
 
         for _ in 0..opts.samples {
-            let (_, took) =
+            let (_proofs, took) =
                 timer!(create_random_proof_batch(circuits.clone(), &params, rng).unwrap());
             println!("Proof generation finished in {}ms", took);
         }
@@ -191,11 +200,18 @@ fn main() {
     if opts.verify {
         println!("Verifying...");
 
-        let (inputs, proofs) = if opts.dummy {
-            (
-                dummy_inputs::<Bls12, _>(opts.public, rng),
-                dummy_proofs::<Bls12, _>(opts.proofs, rng),
-            )
+        let (inputs, proofs, agg_proof) = if opts.dummy {
+            let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
+
+            let agg_proof = srs.as_ref().map(|srs| {
+                let (agg, took) = timer!(aggregate_proofs::<Bls12>(srs, &proofs).unwrap());
+                println!("Proof aggregation finished in {}ms", took);
+                agg
+            });
+
+            let inputs = dummy_inputs::<Bls12, _>(opts.public, rng);
+
+            (inputs, proofs, agg_proof)
         } else {
             let mut inputs = Vec::new();
             let mut num = Fr::one();
@@ -205,8 +221,17 @@ fn main() {
                 num.square();
             }
             println!("(Generating valid proofs...)");
-            let proofs = create_random_proof_batch(circuits.clone(), &params, rng).unwrap();
-            (inputs, proofs)
+            let (proofs, took) =
+                timer!(create_random_proof_batch(circuits.clone(), &params, rng).unwrap());
+            println!("Proof generation finished in {}ms", took);
+
+            let agg_proof = srs.as_ref().map(|srs| {
+                let (agg, took) = timer!(aggregate_proofs::<Bls12>(srs, &proofs).unwrap());
+                println!("Proof aggregation finished in {}ms", took);
+                agg
+            });
+
+            (inputs, proofs, agg_proof)
         };
 
         for _ in 0..opts.samples {
@@ -215,14 +240,30 @@ fn main() {
                 "{} proofs, each having {} public inputs...",
                 opts.proofs, opts.public
             );
-            let (valid, took) = timer!(verify_proofs_batch(
-                &pvk,
-                rng,
-                &pref[..],
-                &vec![inputs.clone(); opts.proofs]
-            )
-            .unwrap());
-            println!("Verification finished in {}ms (Valid: {})", took, valid);
+
+            let pis = vec![inputs.clone(); opts.proofs];
+            let (valid, took) = timer!(verify_proofs_batch(&pvk, rng, &pref[..], &pis).unwrap());
+            println!(
+                "Verification finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
+                took,
+                valid,
+                proofs.len() * Proof::<Bls12>::size(),
+            );
+
+            if let Some(ref agg_proof) = agg_proof {
+                let srs = srs.as_ref().unwrap();
+                let (valid, took) =
+                    timer!(
+                        verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &pis, agg_proof,)
+                            .unwrap()
+                    );
+                println!(
+                    "Verification aggregated finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
+                    took,
+                    valid,
+                    bincode::serialize(agg_proof).unwrap().len(),
+                );
+            }
         }
     }
 }

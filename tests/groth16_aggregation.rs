@@ -140,7 +140,6 @@ impl<'a, E: Engine> Circuit<E> for MiMCDemo<'a, E> {
 
 #[test]
 fn test_groth16_aggregation_mimc() {
-    const NUM_PUBLIC_INPUTS: usize = 4;
     const NUM_PROOFS_TO_AGGREGATE: usize = 1024;
     let rng = &mut thread_rng();
 

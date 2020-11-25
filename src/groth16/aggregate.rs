@@ -115,14 +115,20 @@ pub struct GIPAAux<E: Engine, D: Digest> {
 
 pub struct MultiExpInnerProductCProof<E: Engine, D: Digest> {
     gipa_proof: GIPAProofWithSSM<E, D>,
-    final_ck: E::G1,
+    final_ck: E::G2,
     final_ck_proof: E::G2,
     _marker: PhantomData<D>,
 }
 
 pub struct GIPAProofWithSSM<E: Engine, D: Digest> {
-    r_commitment_steps: Vec<((E::Fqk, E::Fr, E::Fqk), (E::Fqk, E::Fr, E::Fqk))>, // Output
-    r_base: (E::G1, E::Fr),                                                      // Message
+    r_commitment_steps: Vec<((E::Fqk, Vec<E::G1>), (E::Fqk, Vec<E::G1>))>, // Output
+    r_base: (E::G1, E::Fr),                                                // Message
+    _marker: PhantomData<D>,
+}
+
+pub struct GIPAAuxWithSSM<E: Engine, D: Digest> {
+    r_transcript: Vec<E::Fr>,
+    ck_base: E::G2,
     _marker: PhantomData<D>,
 }
 
@@ -551,6 +557,164 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
     }
 }
 
+// IPAWithSSMProof<
+//    MultiexponentiationInnerProduct<<P as PairingEngine>::G1Projective>,
+//    AFGHOCommitmentG1<P>,
+//    IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,
+//    P,
+//    D,
+// >;
+//
+// GIPAProof<
+//   IP = MultiexponentiationInnerProduct<<P as PairingEngine>::G1Projective>,
+//   LMC = AFGHOCommitmentG1<P>,
+//   RMC = SSMPlaceholderCommitment<LMC::Scalar>
+//   IPC = IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,,
+// D>,
+//
+// IP: MultiexponentiationInnerProduct<<P as PairingEngine>::G1Projective>,
+// LMC: AFGHOCommitmentG1<P>,
+// RMC: SSMPlaceholderCommitment<LMC::Scalar>,
+// IPC: IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,
+impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
+    fn prove(
+        values: (&[E::G1], &[E::Fr], &E::G1),
+        ck: (&[E::G2], E::Fr),
+        com: (&E::Fqk, &E::Fr, &Vec<E::G1>),
+    ) -> Self {
+        assert!(multiexponentiation_inner_product::<E::G1>(values.0, values.1) == values.2.clone());
+        assert_eq!(
+            values.0.len().count_ones(),
+            1,
+            "message length must be a power of two"
+        );
+        assert!(pairing_inner_product::<E>(values.0, ck.0) == *com.0);
+        assert!(
+            // &vec![ck.2.clone()],
+            &vec![values.2.clone()] == com.2
+        );
+
+        let (proof, _) = Self::prove_with_aux((values.0, values.1), (ck.0, &vec![ck.1.clone()]));
+        proof
+    }
+
+    pub fn prove_with_aux(
+        values: (&[E::G1], &[E::Fr]),
+        ck: (&[E::G2], &[E::Fr]),
+    ) -> (Self, GIPAAuxWithSSM<E, D>) {
+        let (m_a, m_b) = values;
+        let (ck_a, ck_t) = ck;
+        Self::_prove((m_a.to_vec(), m_b.to_vec()), (ck_a.to_vec(), ck_t.to_vec()))
+    }
+
+    /// Returns vector of recursive commitments and transcripts in reverse order.
+    fn _prove(
+        values: (Vec<E::G1>, Vec<E::Fr>),
+        ck: (Vec<E::G2>, Vec<E::Fr>),
+    ) -> (Self, GIPAAuxWithSSM<E, D>) {
+        let (mut m_a, mut m_b) = values;
+        let (mut ck_a, ck_t) = ck;
+        let mut r_commitment_steps = Vec::new();
+        let mut r_transcript = Vec::new();
+        assert!(m_a.len().is_power_of_two());
+        let (m_base, ck_base) = 'recurse: loop {
+            if m_a.len() == 1 {
+                // base case
+                break 'recurse ((m_a[0].clone(), m_b[0].clone()), ck_a[0].clone());
+            } else {
+                // recursive step
+                // Recurse with problem of half size
+                let split = m_a.len() / 2;
+
+                let m_a_1 = &m_a[split..];
+                let m_a_2 = &m_a[..split];
+                let ck_a_1 = &ck_a[..split];
+                let ck_a_2 = &ck_a[split..];
+
+                let m_b_1 = &m_b[..split];
+                let m_b_2 = &m_b[split..];
+
+                let com_1 = (
+                    pairing_inner_product::<E>(m_a_1, ck_a_1),
+                    vec![multiexponentiation_inner_product::<E::G1>(m_a_1, m_b_1)],
+                );
+                let com_2 = (
+                    pairing_inner_product::<E>(m_a_2, ck_a_2),
+                    vec![multiexponentiation_inner_product::<E::G1>(m_a_2, m_b_2)],
+                );
+
+                // Fiat-Shamir challenge
+                let mut counter_nonce: usize = 0;
+                let default_transcript = E::Fr::zero();
+                let transcript = r_transcript.last().unwrap_or(&default_transcript);
+                let (c, c_inv) = 'challenge: loop {
+                    let mut hash_input = Vec::new();
+                    hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
+                    hash_input.extend_from_slice(&transcript.as_bytes());
+                    hash_input.extend_from_slice(&com_1.0.as_bytes());
+                    for c in &com_1.1 {
+                        hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
+                    }
+                    hash_input.extend_from_slice(&com_2.0.as_bytes());
+                    for c in &com_2.1 {
+                        hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
+                    }
+                    let c = E::Fr::from_bytes(
+                        &D::digest(&hash_input).as_slice()[0..E::Fr::SERIALIZED_BYTES],
+                    );
+                    if let Some(c) = c {
+                        if let Some(c_inv) = c.inverse() {
+                            // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                            // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                            break 'challenge (c_inv, c);
+                        }
+                    }
+
+                    counter_nonce += 1;
+                };
+
+                // Set up values for next step of recursion
+                m_a = m_a_1
+                    .iter()
+                    .map(|a| mul!(*a, c))
+                    .zip(m_a_2)
+                    .map(|(a_1, a_2)| add!(a_1, a_2))
+                    .collect::<Vec<_>>();
+
+                m_b = m_b_2
+                    .iter()
+                    .map(|b| mul!(*b, &c_inv))
+                    .zip(m_b_1)
+                    .map(|(b_1, b_2)| add!(b_1, b_2))
+                    .collect::<Vec<_>>();
+
+                ck_a = ck_a_2
+                    .iter()
+                    .map(|a| mul!(*a, c_inv))
+                    .zip(ck_a_1)
+                    .map(|(a_1, a_2)| add!(a_1, a_2))
+                    .collect::<Vec<_>>();
+
+                r_commitment_steps.push((com_1, com_2));
+                r_transcript.push(c);
+            }
+        };
+        r_transcript.reverse();
+        r_commitment_steps.reverse();
+        (
+            GIPAProofWithSSM {
+                r_commitment_steps,
+                r_base: m_base,
+                _marker: PhantomData,
+            },
+            GIPAAuxWithSSM {
+                r_transcript,
+                ck_base,
+                _marker: PhantomData,
+            },
+        )
+    }
+}
 pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     srs_powers: &Vec<G>,
     transcript: &Vec<G::Scalar>,
@@ -621,7 +785,41 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
     values: (&[E::G1], &[E::Fr]),
     ck: &[E::G2],
 ) -> MultiExpInnerProductCProof<E, D> {
-    todo!()
+    // Run GIPA
+    let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(values, (ck, &vec![])); // TODO: add plaeholder value
+
+    // Prove final commitment key is wellformed
+    let ck_a_final = aux.ck_base;
+    let transcript = aux.r_transcript;
+    let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
+
+    // KZG challenge point
+    let mut counter_nonce: usize = 0;
+    let c = loop {
+        let mut hash_input = Vec::new();
+        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
+        hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
+        hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
+        if let Some(c) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+            break c;
+        };
+        counter_nonce += 1;
+    };
+
+    // Complete KZG proof
+    let ck_a_kzg_opening = prove_commitment_key_kzg_opening(
+        &srs.h_beta_powers,
+        &transcript_inverse,
+        &E::Fr::one(),
+        &c,
+    );
+
+    MultiExpInnerProductCProof {
+        gipa_proof: proof,
+        final_ck: ck_a_final,
+        final_ck_proof: ck_a_kzg_opening,
+        _marker: PhantomData,
+    }
 }
 
 fn verify_with_srs_shift<E: Engine, D: Digest>(

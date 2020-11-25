@@ -42,6 +42,7 @@ impl<E: Engine> SRS<E> {
 }
 
 pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize) -> SRS<E> {
+    println!("setup inner product");
     let alpha = E::Fr::random(rng);
     let beta = E::Fr::random(rng);
     let g = E::G1::one();
@@ -136,6 +137,7 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
 ) -> AggregateProof<E, D> {
+    println!("aggregate proofs");
     let a = proofs
         .iter()
         .map(|proof| proof.a.into_projective())
@@ -163,7 +165,9 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
         hash_input.extend_from_slice(&com_a.as_bytes());
         hash_input.extend_from_slice(&com_b.as_bytes());
         hash_input.extend_from_slice(&com_c.as_bytes());
-        if let Some(r) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+        if let Some(r) =
+            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+        {
             break r;
         };
 
@@ -195,8 +199,10 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
 
     assert_eq!(com_a, pairing_inner_product::<E>(&a_r, &ck_1_r));
 
+    println!("prove with srs shift");
     let tipa_proof_ab = prove_with_srs_shift::<E, D>(&ip_srs, (&a_r, &b), (&ck_1_r, &ck_2), &r);
 
+    println!("prove with structured scalar messages");
     let tipa_proof_c = prove_with_structured_scalar_message::<E, D>(&ip_srs, (&c, &r_vec), &ck_1);
 
     AggregateProof {
@@ -224,7 +230,9 @@ pub fn verify_aggregate_proof<E: Engine, D: Digest>(
         hash_input.extend_from_slice(&proof.com_a.as_bytes());
         hash_input.extend_from_slice(&proof.com_b.as_bytes());
         hash_input.extend_from_slice(&proof.com_c.as_bytes());
-        if let Some(r) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+        if let Some(r) =
+            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+        {
             break r;
         };
         counter_nonce += 1;
@@ -286,6 +294,7 @@ pub fn verify_aggregate_proof<E: Engine, D: Digest>(
 }
 
 fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
+    println!("structured scalar power");
     let mut powers = vec![F::one()];
     for i in 1..num {
         let mut x = powers[i - 1];
@@ -296,6 +305,7 @@ fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
 }
 
 fn pairing_inner_product<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
+    println!("pairing inner product {}", left.len());
     assert_eq!(left.len(), right.len());
     let pairs = left
         .iter()
@@ -310,6 +320,7 @@ fn pairing_inner_product<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
 }
 
 fn multiexponentiation_inner_product<G: CurveProjective>(left: &[G], right: &[G::Scalar]) -> G {
+    println!("multiexp inner product {}", left.len());
     assert_eq!(left.len(), right.len());
     msm::variable_base::multi_scalar_mul(
         &left.iter().map(|b| b.into_affine()).collect::<Vec<_>>(),
@@ -318,6 +329,7 @@ fn multiexponentiation_inner_product<G: CurveProjective>(left: &[G], right: &[G:
 }
 
 fn scalar_inner_product<F: Field>(left: &[F], right: &[F]) -> F {
+    println!("scalar inner product {}", left.len());
     assert_eq!(left.len(), right.len());
     left.iter()
         .zip(right)
@@ -357,7 +369,9 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
         hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
         hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
         hash_input.extend_from_slice(ck_b_final.into_affine().into_uncompressed().as_ref());
-        if let Some(c) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+        if let Some(c) =
+            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+        {
             break c;
         };
         counter_nonce += 1;
@@ -802,7 +816,9 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
         hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
-        if let Some(c) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+        if let Some(c) =
+            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+        {
             break c;
         };
         counter_nonce += 1;
@@ -847,7 +863,9 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
         hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
         hash_input.extend_from_slice(&ck_b_final.into_affine().into_uncompressed().as_ref());
 
-        if let Some(c) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+        if let Some(c) =
+            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+        {
             break c;
         };
         counter_nonce += 1;
@@ -1013,7 +1031,9 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
         //TODO: Should use CanonicalSerialize instead of ToBytes
         hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
         hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
-        if let Some(c) = E::Fr::from_bytes(&D::digest(&hash_input)) {
+        if let Some(c) =
+            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+        {
             break c;
         };
         counter_nonce += 1;

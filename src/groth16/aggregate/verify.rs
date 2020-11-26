@@ -198,7 +198,9 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
                 break 'challenge (c_inv, c);
             }
             counter_nonce += 1;
+            dbg!(counter_nonce);
         };
+        dbg!(c, c_inv);
 
         #[inline]
         /// (x * c) + y + (z * c_inv)
@@ -217,17 +219,19 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             add!(add!(x_c, y), &z_c_inv)
         }
 
+        dbg!(com_1.0, &c, &com_a);
         com_a = lambda::<E>(com_1.0, &com_a, &com_2.0, &c, &c_inv);
         com_b = lambda::<E>(com_1.1, &com_b, &com_2.1, &c, &c_inv);
         assert_eq!(com_1.2.len(), com_t.len());
         assert_eq!(com_2.2.len(), com_t.len());
-        com_t = com_1
-            .2
-            .iter()
-            .zip(com_t.iter())
-            .zip(com_2.2.iter())
-            .map(|((com_1_2, com_t), com_2_2)| lambda::<E>(*com_1_2, com_t, &com_2_2, &c, &c_inv))
-            .collect();
+        com_t = {
+            let x_c = com_1.2.iter().map(|com_1_2| com_1_2.pow(c.into_repr()));
+            let z_c_inv = com_2.2.iter().map(|com_2_2| com_2_2.pow(c_inv.into_repr()));
+            x_c.zip(com_t.iter())
+                .zip(z_c_inv)
+                .map(|((x_c, y), z_c_inv)| add!(add!(x_c, y), &z_c_inv))
+                .collect()
+        };
 
         r_transcript.push(c);
     }

@@ -32,6 +32,7 @@ pub struct GIPAProof<E: Engine, D: Digest> {
     pub r_base: (E::G1, E::G2), // Message
     pub _marker: PhantomData<D>,
 }
+
 pub struct GIPAAux<E: Engine, D: Digest> {
     pub r_transcript: Vec<E::Fr>,
     pub ck_base: (E::G2, E::G1),
@@ -68,11 +69,12 @@ impl<T> std::ops::MulAssign<T> for HomomorphicPlaceholderValue {
     fn mul_assign(&mut self, _rhs: T) {}
 }
 
-pub fn aggregate_proofs<E: Engine, D: Digest>(
+pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
 ) -> AggregateProof<E, D> {
     println!("aggregate proofs");
+    dbg!(proofs);
     let a = proofs
         .iter()
         .map(|proof| proof.a.into_projective())
@@ -92,6 +94,8 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
     let com_b = inner_product::pairing::<E>(&ck_2, &b);
     let com_c = inner_product::pairing::<E>(&c, &ck_1);
 
+    // dbg!(com_a, com_b, com_c);
+
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
     let r = loop {
@@ -108,7 +112,7 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
 
         counter_nonce += 1;
     };
-
+    dbg!(&r);
     let r_vec = structured_scalar_power(proofs.len(), &r);
     let a_r = a
         .iter()
@@ -125,7 +129,7 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
         .collect::<Vec<E::G2>>();
 
     assert_eq!(com_a, inner_product::pairing::<E>(&a_r, &ck_1_r));
-
+    //    dbg!(&ck_1_r, &a_r, &b, &ck_2,);
     println!("prove with srs shift");
     let tipa_proof_ab = prove_with_srs_shift::<E, D>(
         &ip_srs,
@@ -162,6 +166,8 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
 ) -> PairingInnerProductABProof<E, D> {
     // Run GIPA
     let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1, &vec![ck.2.clone()]));
+    // dbg!(&proof.r_commitment_steps, &proof.r_base);
+    // dbg!(&aux.r_transcript, &aux.ck_base);
 
     // Prove final commitment keys are wellformed
     let (ck_a_final, ck_b_final) = aux.ck_base;
@@ -263,6 +269,15 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let mut counter_nonce: usize = 0;
                 let default_transcript = E::Fr::zero();
                 let transcript = r_transcript.last().unwrap_or(&default_transcript);
+                dbg!(
+                    &transcript,
+                    &com_1.0,
+                    &com_1.1,
+                    &com_1.2,
+                    &com_2.0,
+                    &com_2.1,
+                    &com_2.2
+                );
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);

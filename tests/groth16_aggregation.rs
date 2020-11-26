@@ -1,14 +1,15 @@
 use std::time::{Duration, Instant};
 
-use bellperson::bls::{Bls12, Engine};
+use bellperson::bls::{Bls12, Engine, Fr, FrRepr};
+use bellperson::gadgets::num::AllocatedNum;
 use bellperson::groth16::{
     aggregate_proofs, create_random_proof, generate_random_parameters, prepare_verifying_key,
     setup_inner_product, verify_aggregate_proof, verify_proof,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use blake2::Blake2b;
-use ff::{Field, ScalarEngine};
-use rand::thread_rng;
+use ff::{Field, PrimeField, ScalarEngine};
+use rand::{rngs::StdRng, thread_rng, SeedableRng};
 
 const MIMC_ROUNDS: usize = 322;
 
@@ -42,8 +43,6 @@ fn mimc<E: Engine>(mut xl: E::Fr, mut xr: E::Fr, constants: &[E::Fr]) -> E::Fr {
     xl
 }
 
-/// This is our demo circuit for proving knowledge of the
-/// preimage of a MiMC hash invocation.
 #[derive(Clone)]
 struct MiMCDemo<'a, E: Engine> {
     xl: Option<E::Fr>,
@@ -51,9 +50,6 @@ struct MiMCDemo<'a, E: Engine> {
     constants: &'a [E::Fr],
 }
 
-/// Our demo circuit implements this `Circuit` trait which
-/// is used during paramgen and proving in order to
-/// synthesize the constraint system.
 impl<'a, E: Engine> Circuit<E> for MiMCDemo<'a, E> {
     fn synthesize<CS: ConstraintSystem<E>>(self, cs: &mut CS) -> Result<(), SynthesisError> {
         assert_eq!(self.constants.len(), MIMC_ROUNDS);
@@ -138,9 +134,150 @@ impl<'a, E: Engine> Circuit<E> for MiMCDemo<'a, E> {
     }
 }
 
+#[derive(Clone)]
+struct TestCircuit<E: Engine> {
+    public_inputs: Vec<Option<E::Fr>>,
+    witness_input: Option<E::Fr>,
+    public_product: Option<E::Fr>,
+}
+impl<E: Engine> Circuit<E> for TestCircuit<E> {
+    fn synthesize<CS: ConstraintSystem<E>>(self, mut cs: &mut CS) -> Result<(), SynthesisError> {
+        let input_variables: Vec<_> = self
+            .public_inputs
+            .iter()
+            .enumerate()
+            .map(|(_i, input)| -> Result<AllocatedNum<_>, SynthesisError> {
+                let num = AllocatedNum::alloc(&mut cs, || {
+                    input.ok_or(SynthesisError::AssignmentMissing)
+                })?;
+                num.inputize(&mut cs)?;
+                Ok(num)
+            })
+            .collect::<Result<_, _>>()?;
+        let product = AllocatedNum::alloc(&mut cs, || {
+            self.public_product.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        product.inputize(&mut cs)?;
+        let witness = AllocatedNum::alloc(&mut cs, || {
+            self.witness_input.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let mut computed_product = witness;
+        for x in &input_variables {
+            computed_product = computed_product.mul(&mut cs, x)?;
+        }
+        cs.enforce(
+            || "product = computed product",
+            |lc| lc + CS::one(),
+            |lc| lc + computed_product.get_variable(),
+            |lc| lc + product.get_variable(),
+        );
+
+        Ok(())
+    }
+}
+
+#[test]
+fn test_groth16_aggregation_min() {
+    const NUM_PUBLIC_INPUTS: usize = 2;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 2; //1024;
+    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+
+    println!("Creating parameters...");
+
+    // Generate parameters for inner product aggregation
+    let srs = setup_inner_product(&mut rng, NUM_PROOFS_TO_AGGREGATE);
+
+    // Create parameters for our circuit
+    let params = {
+        let c = TestCircuit::<Bls12> {
+            public_inputs: vec![Default::default(); NUM_PUBLIC_INPUTS],
+            public_product: Default::default(),
+            witness_input: Default::default(),
+        };
+
+        generate_random_parameters(c, &mut rng).unwrap()
+    };
+
+    // Prepare the verification key (for proof verification)
+    let pvk = prepare_verifying_key(&params.vk);
+
+    println!("Creating proofs...");
+
+    // Generate proofs
+    println!("Generating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
+
+    let mut proofs = Vec::new();
+    let mut statements = Vec::new();
+    let mut generation_time = Duration::new(0, 0);
+    let mut individual_verification_time = Duration::new(0, 0);
+
+    for _ in 0..NUM_PROOFS_TO_AGGREGATE {
+        // Generate random inputs to product together
+        let mut public_inputs = Vec::new();
+        let mut statement = Vec::new();
+        let mut prod = Fr::one();
+        for _i in 0..NUM_PUBLIC_INPUTS {
+            let x = Fr::from_str("4").unwrap();
+            public_inputs.push(Some(x));
+            statement.push(x);
+            prod.mul_assign(&x);
+        }
+        let w = Fr::from_repr(FrRepr::from(3)).unwrap();
+
+        let mut product: Fr = w.clone();
+        product.mul_assign(&prod);
+        statement.push(product.clone());
+
+        let start = Instant::now();
+        // Create an instance of our circuit (with the
+        // witness)
+        dbg!(&public_inputs);
+        let c = TestCircuit {
+            public_inputs,
+            public_product: Some(dbg!(product)),
+            witness_input: Some(dbg!(w)),
+        };
+
+        // Create a groth16 proof with our parameters.
+        let proof = create_random_proof(c, &params, &mut rng).unwrap();
+        generation_time += start.elapsed();
+
+        assert!(verify_proof(&pvk, &proof, &statement).unwrap());
+        individual_verification_time += start.elapsed();
+
+        proofs.push(proof);
+        statements.push(statement);
+    }
+
+    // Aggregate proofs using inner product proofs
+    let start = Instant::now();
+    println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
+    let aggregate_proof = aggregate_proofs::<Bls12, Blake2b>(&srs, &proofs);
+    let prover_time = start.elapsed().as_millis();
+
+    println!("Verifying aggregated proof...");
+    let start = Instant::now();
+    let result = verify_aggregate_proof(
+        &srs.get_verifier_key(),
+        &params.vk,
+        &statements,
+        &aggregate_proof,
+    );
+    let verifier_time = start.elapsed().as_millis();
+    assert!(result);
+
+    println!("Proof generation time: {} ms", generation_time.as_millis());
+    println!("Proof aggregation time: {} ms", prover_time);
+    println!("Proof aggregation verification time: {} ms", verifier_time);
+    println!(
+        "Proof individual verification time: {} ms",
+        individual_verification_time.as_millis()
+    );
+}
+
 #[test]
 fn test_groth16_aggregation_mimc() {
-    const NUM_PROOFS_TO_AGGREGATE: usize = 4; //1024;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 2; //1024;
     let rng = &mut thread_rng();
 
     // Generate the MiMC round constants

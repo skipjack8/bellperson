@@ -399,5 +399,5 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         r_transcript.push(c);
     }
     r_transcript.reverse();
-    ((com_a, com_b, com_t), r_transcript)
+    ((com_a, com_t), r_transcript)
 }

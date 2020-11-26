@@ -39,8 +39,8 @@ impl<E: Engine> SRS<E> {
 
 pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize) -> SRS<E> {
     println!("setup inner product");
-    let alpha = E::Fr::random(rng);
-    let beta = E::Fr::random(rng);
+    let alpha = dbg!(E::Fr::random(rng));
+    let beta = dbg!(E::Fr::random(rng));
     let g = E::G1::one();
     let mut g_beta = g;
     g_beta.mul_assign(beta);

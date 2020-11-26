@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::ops::{AddAssign, MulAssign};
 
 use digest::Digest;
-use ff::Field;
+use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use itertools::Itertools;
 
@@ -292,19 +292,18 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                     for c in &com_2.2 {
                         hash_input.extend_from_slice(&c.as_bytes());
                     }
-                    let c = E::Fr::from_bytes(
-                        &D::digest(&hash_input).as_slice()[0..E::Fr::SERIALIZED_BYTES],
-                    );
-                    if let Some(c) = c {
-                        if let Some(c_inv) = c.inverse() {
-                            // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                            // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                            break 'challenge (c_inv, c);
-                        }
+                    let d = D::digest(&hash_input);
+                    let c = fr_from_u128::<E::Fr>(d.as_slice());
+                    if let Some(c_inv) = c.inverse() {
+                        // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                        // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                        break 'challenge (c_inv, c);
                     }
 
                     counter_nonce += 1;
+                    dbg!(counter_nonce);
                 };
+                dbg!(c, c_inv);
 
                 // Set up values for next step of recursion
                 m_a = m_a_1
@@ -457,15 +456,12 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                     for c in &com_2.2 {
                         hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
                     }
-                    let c = E::Fr::from_bytes(
-                        &D::digest(&hash_input).as_slice()[0..E::Fr::SERIALIZED_BYTES],
-                    );
-                    if let Some(c) = c {
-                        if let Some(c_inv) = c.inverse() {
-                            // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                            // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                            break 'challenge (c_inv, c);
-                        }
+                    let d = D::digest(&hash_input);
+                    let c = fr_from_u128::<E::Fr>(d.as_slice());
+                    if let Some(c_inv) = c.inverse() {
+                        // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                        // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                        break 'challenge (c_inv, c);
                     }
 
                     counter_nonce += 1;
@@ -634,4 +630,15 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         final_ck_proof: ck_a_kzg_opening,
         _marker: PhantomData,
     }
+}
+
+pub(super) fn fr_from_u128<F: PrimeField>(bytes: &[u8]) -> F {
+    use std::convert::TryInto;
+
+    let mut repr = F::Repr::default();
+    for (i, chunk) in repr.as_mut().iter_mut().take(2).enumerate() {
+        *chunk = u64::from_be_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
+    }
+    let c = F::from_repr(repr).unwrap();
+    c
 }

@@ -4,7 +4,8 @@ use groupy::{CurveAffine, CurveProjective};
 
 use super::HomomorphicPlaceholderValue;
 use super::{
-    inner_product, prove::polynomial_evaluation_product_form_from_transcript,
+    inner_product,
+    prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
     structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
     MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
 };
@@ -187,14 +188,14 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             for c in &com_2.2 {
                 hash_input.extend_from_slice(&c.as_bytes());
             }
-            let c =
-                E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES]);
-            if let Some(c) = c {
-                if let Some(c_inv) = c.inverse() {
-                    // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                    // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                    break 'challenge (c_inv, c);
-                }
+
+            let d = D::digest(&hash_input);
+            let c = fr_from_u128::<E::Fr>(d.as_slice());
+
+            if let Some(c_inv) = c.inverse() {
+                // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                break 'challenge (c_inv, c);
             }
             counter_nonce += 1;
         };
@@ -364,14 +365,14 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             for c in &com_2.2 {
                 hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
             }
-            let c =
-                E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES]);
-            if let Some(c) = c {
-                if let Some(c_inv) = c.inverse() {
-                    // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                    // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                    break 'challenge (c_inv, c);
-                }
+
+            let d = D::digest(&hash_input);
+            let c = fr_from_u128::<E::Fr>(d.as_slice());
+
+            if let Some(c_inv) = c.inverse() {
+                // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                break 'challenge (c_inv, c);
             }
             counter_nonce += 1;
         };
@@ -399,5 +400,5 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         r_transcript.push(c);
     }
     r_transcript.reverse();
-    ((com_a, com_t), r_transcript)
+    ((com_a, com_b, com_t), r_transcript)
 }

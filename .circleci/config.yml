@@ -230,13 +230,13 @@ jobs:
 
             # CARGO_INCREMENTAL=0: incremental build is not supported when profiling
             export CARGO_INCREMENTAL=0
+            # -Zinstrument-coverage: enable llvm coverage instrumentation
             # -Ccodegen-units=1: building in parallel is not supported when profiling
             # -Copt-level=0: disable optimizations for more accurate coverage
             # -Clink-dead-code: dead code should be considered as not covered code
             # -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
-            # -Zinstrument-coverage: enable llvm coverage instrumentation
-            # Using `-Cinline-threshold=0` would be great, but it leads to stack overflows
-            export RUSTFLAGS="-Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zinstrument-coverage -Cinline-threshold=0"
+            # -Cinline-threshold=0: do not inline
+            export RUSTFLAGS="-Zinstrument-coverage -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cinline-threshold=0"
 
             # Run the library tests which are part of the source files separate
             # from the integration tests in the `tests` directory. Without
@@ -246,7 +246,7 @@ jobs:
             #cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
 
             # Don't include coverage of test files
-            llvm-profdata merge --sparse --output=default.profdata *.profraw
+            llvm-profdata merge --output=default.profdata default.profraw
             #llvm-cov export --Xdemangler=rustfilt --ignore-filename-regex="/rustc" --format=lcov --instr-profile=default.profdata ./target/debug/deps/bellperson-* > lcov.info
             llvm-cov export --ignore-filename-regex="/rustc" --format=lcov --instr-profile=default.profdata ./target/debug/deps/bellperson-* > lcov.info
       - codecov/upload:

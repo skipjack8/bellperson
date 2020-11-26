@@ -5,7 +5,6 @@ use super::msm;
 use crate::bls::{Engine, PairingCurveAffine};
 
 pub fn pairing<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
-    println!("pairing inner product {}", left.len());
     assert_eq!(left.len(), right.len());
     let pairs = left
         .iter()
@@ -20,7 +19,6 @@ pub fn pairing<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
 }
 
 pub fn multiexponentiation<G: CurveProjective>(left: &[G], right: &[G::Scalar]) -> G {
-    println!("multiexp inner product {}", left.len());
     assert_eq!(left.len(), right.len());
     msm::variable_base::multi_scalar_mul(
         &left.iter().map(|b| b.into_affine()).collect::<Vec<_>>(),
@@ -29,7 +27,6 @@ pub fn multiexponentiation<G: CurveProjective>(left: &[G], right: &[G::Scalar]) 
 }
 
 pub fn scalar<F: Field>(left: &[F], right: &[F]) -> F {
-    println!("scalar inner product {}", left.len());
     assert_eq!(left.len(), right.len());
     left.iter()
         .zip(right)

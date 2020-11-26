@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use std::ops::{AddAssign, MulAssign};
 
 use digest::Digest;
 use ff::Field;
@@ -45,15 +46,26 @@ pub struct MultiExpInnerProductCProof<E: Engine, D: Digest> {
 }
 
 pub struct GIPAProofWithSSM<E: Engine, D: Digest> {
-    pub r_commitment_steps: Vec<((E::Fqk, Vec<E::G1>), (E::Fqk, Vec<E::G1>))>, // Output
-    pub r_base: (E::G1, E::Fr),                                                // Message
+    pub r_commitment_steps: Vec<((E::Fqk, E::Fr, Vec<E::G1>), (E::Fqk, E::Fr, Vec<E::G1>))>, // Output
+    pub r_base: (E::G1, E::Fr), // Message
     pub _marker: PhantomData<D>,
 }
 
 pub struct GIPAAuxWithSSM<E: Engine, D: Digest> {
     pub r_transcript: Vec<E::Fr>,
-    pub ck_base: E::G2,
+    pub ck_base: (E::G2, HomomorphicPlaceholderValue),
     pub _marker: PhantomData<D>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HomomorphicPlaceholderValue;
+
+impl std::ops::AddAssign<Self> for HomomorphicPlaceholderValue {
+    fn add_assign(&mut self, _rhs: Self) {}
+}
+
+impl<T> std::ops::MulAssign<T> for HomomorphicPlaceholderValue {
+    fn mul_assign(&mut self, _rhs: T) {}
 }
 
 pub fn aggregate_proofs<E: Engine, D: Digest>(
@@ -101,11 +113,7 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
     let a_r = a
         .iter()
         .zip(&r_vec)
-        .map(|(a, r)| {
-            let mut a = *a;
-            a.mul_assign(*r);
-            a
-        })
+        .map(|(a, r)| mul!(*a, *r))
         .collect::<Vec<E::G1>>();
     let ip_ab = inner_product::pairing::<E>(&a_r, &b);
     let agg_c = inner_product::multiexponentiation::<E::G1>(&c, &r_vec);
@@ -113,20 +121,25 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
     let ck_1_r = ck_1
         .iter()
         .zip(&r_vec)
-        .map(|(ck, r)| {
-            let mut ck = *ck;
-            ck.mul_assign(r.inverse().unwrap());
-            ck
-        })
+        .map(|(ck, r)| mul!(*ck, r.inverse().unwrap()))
         .collect::<Vec<E::G2>>();
 
     assert_eq!(com_a, inner_product::pairing::<E>(&a_r, &ck_1_r));
 
     println!("prove with srs shift");
-    let tipa_proof_ab = prove_with_srs_shift::<E, D>(&ip_srs, (&a_r, &b), (&ck_1_r, &ck_2), &r);
+    let tipa_proof_ab = prove_with_srs_shift::<E, D>(
+        &ip_srs,
+        (&a_r, &b),
+        (&ck_1_r, &ck_2, &HomomorphicPlaceholderValue),
+        &r,
+    );
 
     println!("prove with structured scalar messages");
-    let tipa_proof_c = prove_with_structured_scalar_message::<E, D>(&ip_srs, (&c, &r_vec), &ck_1);
+    let tipa_proof_c = prove_with_structured_scalar_message::<E, D>(
+        &ip_srs,
+        (&c, &r_vec),
+        (&ck_1, &HomomorphicPlaceholderValue),
+    );
 
     AggregateProof {
         com_a,
@@ -144,11 +157,11 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
 fn prove_with_srs_shift<E: Engine, D: Digest>(
     srs: &SRS<E>,
     values: (&[E::G1], &[E::G2]),
-    ck: (&[E::G2], &[E::G1]),
+    ck: (&[E::G2], &[E::G1], &HomomorphicPlaceholderValue),
     r_shift: &E::Fr,
 ) -> PairingInnerProductABProof<E, D> {
     // Run GIPA
-    let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1));
+    let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1, &vec![ck.2.clone()]));
 
     // Prove final commitment keys are wellformed
     let (ck_a_final, ck_b_final) = aux.ck_base;
@@ -193,20 +206,23 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
 impl<E: Engine, D: Digest> GIPAProof<E, D> {
     pub fn prove_with_aux(
         values: (&[E::G1], &[E::G2]),
-        ck: (&[E::G2], &[E::G1]),
+        ck: (&[E::G2], &[E::G1], &[HomomorphicPlaceholderValue]),
     ) -> (Self, GIPAAux<E, D>) {
         let (m_a, m_b) = values;
-        let (ck_a, ck_b) = ck;
-        Self::_prove((m_a.to_vec(), m_b.to_vec()), (ck_a.to_vec(), ck_b.to_vec()))
+        let (ck_a, ck_b, ck_t) = ck;
+        Self::_prove(
+            (m_a.to_vec(), m_b.to_vec()),
+            (ck_a.to_vec(), ck_b.to_vec(), ck_t.to_vec()),
+        )
     }
 
     /// Returns vector of recursive commitments and transcripts in reverse order.
     fn _prove(
         values: (Vec<E::G1>, Vec<E::G2>),
-        ck: (Vec<E::G2>, Vec<E::G1>),
+        ck: (Vec<E::G2>, Vec<E::G1>, Vec<HomomorphicPlaceholderValue>),
     ) -> (Self, GIPAAux<E, D>) {
         let (mut m_a, mut m_b) = values;
-        let (mut ck_a, mut ck_b) = ck;
+        let (mut ck_a, mut ck_b, _ck_t) = ck;
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
         assert!(m_a.len().is_power_of_two());
@@ -233,14 +249,14 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let ck_b_2 = &ck_b[..split];
 
                 let com_1 = (
-                    inner_product::pairing::<E>(m_a_1, ck_a_1),
-                    inner_product::pairing::<E>(ck_b_1, m_b_1),
-                    vec![inner_product::pairing::<E>(m_a_1, m_b_1)],
+                    inner_product::pairing::<E>(m_a_1, ck_a_1),      // LMC
+                    inner_product::pairing::<E>(ck_b_1, m_b_1),      // RMC
+                    vec![inner_product::pairing::<E>(m_a_1, m_b_1)], // IPC
                 );
                 let com_2 = (
-                    inner_product::pairing::<E>(m_a_2, ck_a_2),
-                    inner_product::pairing::<E>(ck_b_2, m_b_2),
-                    vec![inner_product::pairing::<E>(m_a_2, m_b_2)],
+                    inner_product::pairing::<E>(m_a_2, ck_a_2),      // LLMC
+                    inner_product::pairing::<E>(ck_b_2, m_b_2),      // RMC
+                    vec![inner_product::pairing::<E>(m_a_2, m_b_2)], // IPC
                 );
 
                 // Fiat-Shamir challenge
@@ -347,27 +363,41 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
     pub fn prove_with_aux(
         values: (&[E::G1], &[E::Fr]),
-        ck: (&[E::G2], &[E::Fr]),
+        ck: (
+            &[E::G2],
+            &[HomomorphicPlaceholderValue],
+            &[HomomorphicPlaceholderValue],
+        ),
     ) -> (Self, GIPAAuxWithSSM<E, D>) {
         let (m_a, m_b) = values;
-        let (ck_a, ck_t) = ck;
-        Self::_prove((m_a.to_vec(), m_b.to_vec()), (ck_a.to_vec(), ck_t.to_vec()))
+        let (ck_a, ck_b, ck_t) = ck;
+        Self::_prove(
+            (m_a.to_vec(), m_b.to_vec()),
+            (ck_a.to_vec(), ck_b.to_vec(), ck_t.to_vec()),
+        )
     }
 
     /// Returns vector of recursive commitments and transcripts in reverse order.
     fn _prove(
         values: (Vec<E::G1>, Vec<E::Fr>),
-        ck: (Vec<E::G2>, Vec<E::Fr>),
+        ck: (
+            Vec<E::G2>,
+            Vec<HomomorphicPlaceholderValue>,
+            Vec<HomomorphicPlaceholderValue>,
+        ),
     ) -> (Self, GIPAAuxWithSSM<E, D>) {
         let (mut m_a, mut m_b) = values;
-        let (mut ck_a, _ck_t) = ck;
+        let (mut ck_a, mut ck_b, _ck_t) = ck;
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
         assert!(m_a.len().is_power_of_two());
         let (m_base, ck_base) = 'recurse: loop {
             if m_a.len() == 1 {
                 // base case
-                break 'recurse ((m_a[0].clone(), m_b[0].clone()), ck_a[0].clone());
+                break 'recurse (
+                    (m_a[0].clone(), m_b[0].clone()),
+                    (ck_a[0].clone(), ck_b[0].clone()),
+                );
             } else {
                 // recursive step
                 // Recurse with problem of half size
@@ -380,13 +410,17 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
 
                 let m_b_1 = &m_b[..split];
                 let m_b_2 = &m_b[split..];
+                let ck_b_1 = &ck_b[split..];
+                let ck_b_2 = &ck_b[..split];
 
                 let com_1 = (
-                    inner_product::pairing::<E>(m_a_1, ck_a_1),
-                    vec![inner_product::multiexponentiation::<E::G1>(m_a_1, m_b_1)],
+                    inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC::commit
+                    E::Fr::zero(),                              // RMC::commit
+                    vec![inner_product::multiexponentiation::<E::G1>(m_a_1, m_b_1)], // IPC::commit
                 );
                 let com_2 = (
                     inner_product::pairing::<E>(m_a_2, ck_a_2),
+                    E::Fr::zero(),
                     vec![inner_product::multiexponentiation::<E::G1>(m_a_2, m_b_2)],
                 );
 
@@ -399,11 +433,13 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
                     hash_input.extend_from_slice(&transcript.as_bytes());
                     hash_input.extend_from_slice(&com_1.0.as_bytes());
-                    for c in &com_1.1 {
+                    hash_input.extend_from_slice(&com_1.1.as_bytes());
+                    for c in &com_1.2 {
                         hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
                     }
                     hash_input.extend_from_slice(&com_2.0.as_bytes());
-                    for c in &com_2.1 {
+                    hash_input.extend_from_slice(&com_2.1.as_bytes());
+                    for c in &com_2.2 {
                         hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
                     }
                     let c = E::Fr::from_bytes(
@@ -440,6 +476,13 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                     .map(|a| mul!(*a, c_inv))
                     .zip(ck_a_1)
                     .map(|(a_1, a_2)| add!(a_1, a_2))
+                    .collect::<Vec<_>>();
+
+                ck_b = ck_b_1
+                    .iter()
+                    .map(|b| mul!(*b, c_inv))
+                    .zip(ck_b_2)
+                    .map(|(b_1, b_2)| add!(b_1, *b_2))
                     .collect::<Vec<_>>();
 
                 r_commitment_steps.push((com_1, com_2));
@@ -530,13 +573,20 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &Vec<F>, r_shif
 fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
     srs: &SRS<E>,
     values: (&[E::G1], &[E::Fr]),
-    ck: &[E::G2],
+    ck: (&[E::G2], &HomomorphicPlaceholderValue),
 ) -> MultiExpInnerProductCProof<E, D> {
     // Run GIPA
-    let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(values, (ck, &vec![])); // TODO: add plaeholder value
+    let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(
+        values,
+        (
+            ck.0,
+            &vec![HomomorphicPlaceholderValue; values.1.len()],
+            &vec![ck.1.clone()],
+        ),
+    ); // TODO: add plaeholder value
 
     // Prove final commitment key is wellformed
-    let ck_a_final = aux.ck_base;
+    let (ck_a_final, _) = aux.ck_base;
     let transcript = aux.r_transcript;
     let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
 

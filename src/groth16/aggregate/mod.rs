@@ -36,12 +36,9 @@ pub use self::srs::*;
 pub use self::verify::*;
 
 fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
-    println!("structured scalar power");
     let mut powers = vec![F::one()];
     for i in 1..num {
-        let mut x = powers[i - 1];
-        x.mul_assign(s);
-        powers.push(x);
+        powers.push(mul!(powers[i - 1], s));
     }
     powers
 }

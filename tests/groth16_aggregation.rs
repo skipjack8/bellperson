@@ -140,7 +140,7 @@ impl<'a, E: Engine> Circuit<E> for MiMCDemo<'a, E> {
 
 #[test]
 fn test_groth16_aggregation_mimc() {
-    const NUM_PROOFS_TO_AGGREGATE: usize = 1024;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 4; //1024;
     let rng = &mut thread_rng();
 
     // Generate the MiMC round constants

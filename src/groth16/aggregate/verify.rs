@@ -70,13 +70,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             );
         });
 
-        let (r_vec_sender, r_vec_receiver) = channel();
-        s.spawn(move |_| {
-            r_vec_sender
-                .send(structured_scalar_power(public_inputs.len(), &r))
-                .unwrap();
-        });
-
         // Check aggregate pairing product equation
         info!("checking aggregate pairing");
         let r_sum = {
@@ -99,38 +92,65 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         s.spawn(move |_| {
             *p3 = E::pairing(proof.agg_c, vk.delta_g2);
         });
-
         let mut g_ic = vk.ic[0].into_projective();
         g_ic.mul_assign(r_sum);
 
-        let r_vec = r_vec_receiver.recv().unwrap();
-        let b = vk
-            .ic
-            .par_iter()
-            .skip(1)
-            .enumerate()
-            .map(|(i, b)| {
-                let ip = inner_product::scalar(
-                    &public_inputs
-                        .iter()
-                        .map(|inputs| inputs[i].clone())
-                        .collect::<Vec<E::Fr>>(),
-                    &r_vec,
+        let (r_vec_sender, r_vec_receiver) = channel();
+        s.spawn(move |_| {
+            let l = public_inputs[0].len();
+            // We want to compute MUL(i:0 -> l) S_i ^ (SUM(j:0 -> n) ai,j * r^j)
+            // this table keeps tracks of incremental computation of each i-th
+            // exponent to later multiply with S_i
+            // The index of the table is i, which is an index of the public
+            // input element
+            // We incrementally build the r vector and the table
+            // NOTE: in this version it's not r^2j but simply r^j
+            //
+            let mut table: Vec<E::Fr> = (0..l).map(|i| public_inputs[0][i]).collect();
+            let mut powers = vec![E::Fr::one()];
+            println!("Length of table {} - l = {}", table.len(), l);
+            println!("Length of vk.ic {}", vk.ic.len());
+            for j in 1..public_inputs.len() {
+                let rj = mul!(powers[j - 1], &r);
+                powers.push(rj);
+                table = table
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        // i denotes the column of the public input, and j
+                        // denotes which public input
+                        let mut ai = public_inputs[j][i].clone();
+                        ai.mul_assign(&rj);
+                        ai.add_assign(&c);
+                        ai
+                    })
+                    .collect();
+            }
+            // now we do the multi exponentiation
+            let mut totsi = vk
+                .ic
+                .par_iter()
+                .skip(1)
+                .enumerate()
+                .map(|(i, si)| {
+                    let mut b = si.into_projective();
+                    b.mul_assign(table[i]);
+                    b
+                })
+                .reduce(
+                    || E::G1::zero(),
+                    |mut acc, curr| {
+                        acc.add_assign(&curr);
+                        acc
+                    },
                 );
-                let mut b = b.into_projective();
-                b.mul_assign(ip);
-                b
-            })
-            .reduce(
-                || E::G1::zero(),
-                |mut acc, curr| {
-                    acc.add_assign(&curr);
-                    acc
-                },
-            );
+            let mut g_ic = vk.ic[0].into_projective();
+            g_ic.mul_assign(r_sum);
+            totsi.add_assign(&g_ic);
+            r_vec_sender.send(totsi).unwrap();
+        });
 
-        g_ic.add_assign(&b);
-
+        let g_ic: E::G1 = r_vec_receiver.recv().unwrap();
         p2 = E::pairing(g_ic, vk.gamma_g2);
     });
 

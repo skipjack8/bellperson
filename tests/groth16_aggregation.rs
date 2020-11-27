@@ -276,7 +276,7 @@ fn test_groth16_aggregation_min() {
 
 #[test]
 fn test_groth16_aggregation_mimc() {
-    const NUM_PROOFS_TO_AGGREGATE: usize = 1024;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 8; //1024;
     let rng = &mut thread_rng();
 
     // Generate the MiMC round constants

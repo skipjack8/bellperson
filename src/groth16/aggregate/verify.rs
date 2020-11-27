@@ -1,6 +1,9 @@
 use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
+use log::*;
+use rayon::prelude::*;
+use std::sync::mpsc::channel;
 
 use super::HomomorphicPlaceholderValue;
 use super::{
@@ -12,12 +15,13 @@ use super::{
 use crate::bls::Engine;
 use crate::groth16::VerifyingKey;
 
-pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest>(
+pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
     vk: &VerifyingKey<E>,
     public_inputs: &Vec<Vec<E::Fr>>,
     proof: &AggregateProof<E, D>,
 ) -> bool {
+    info!("verify_aggregate_proof");
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
     let r = loop {
@@ -34,60 +38,106 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest>(
         counter_nonce += 1;
     };
 
-    // Check TIPA proofs
-    let tipa_proof_ab_valid = verify_with_srs_shift::<E, D>(
-        ip_verifier_srs,
-        &HomomorphicPlaceholderValue,
-        (&proof.com_a, &proof.com_b, &vec![proof.ip_ab]),
-        &proof.tipa_proof_ab,
-        &r,
-    );
-    let tipa_proof_c_valid = verify_with_structured_scalar_message::<E, D>(
-        ip_verifier_srs,
-        &HomomorphicPlaceholderValue,
-        (&proof.com_c, &vec![proof.agg_c]),
-        &r,
-        &proof.tipa_proof_c,
-    );
-
-    // Check aggregate pairing product equation
-
-    let r_sum = {
-        let a = sub!(r.pow(&[public_inputs.len() as u64]), &E::Fr::one());
-        let b = sub!(r, &E::Fr::one());
-        let b = b.inverse().unwrap();
-        mul!(a, &b)
-    };
-    let p1 = {
-        let mut alpha_g1_r_sum = vk.alpha_g1.into_projective();
-        alpha_g1_r_sum.mul_assign(r_sum);
-        E::pairing(alpha_g1_r_sum, vk.beta_g2)
-    };
+    let mut tipa_proof_ab_valid = false;
+    let mut tipa_proof_c_valid = false;
+    let mut p1 = E::Fqk::zero();
+    let mut p2 = E::Fqk::zero();
+    let mut p3 = E::Fqk::zero();
 
     assert_eq!(vk.ic.len(), public_inputs[0].len() + 1);
 
-    let r_vec = structured_scalar_power(public_inputs.len(), &r);
-    let mut g_ic = vk.ic[0].into_projective();
-    g_ic.mul_assign(r_sum);
+    rayon::scope(|s| {
+        // Check TIPA proofs
+        let valid = &mut tipa_proof_ab_valid;
+        s.spawn(move |_| {
+            *valid = verify_with_srs_shift::<E, D>(
+                ip_verifier_srs,
+                &HomomorphicPlaceholderValue,
+                (&proof.com_a, &proof.com_b, &vec![proof.ip_ab]),
+                &proof.tipa_proof_ab,
+                &r,
+            );
+        });
 
-    for (i, b) in vk.ic.iter().skip(1).enumerate() {
-        let ip = inner_product::scalar(
-            &public_inputs
-                .iter()
-                .map(|inputs| inputs[i].clone())
-                .collect::<Vec<E::Fr>>(),
-            &r_vec,
-        );
-        let mut b = b.into_projective();
-        b.mul_assign(ip);
+        let valid = &mut tipa_proof_c_valid;
+        s.spawn(move |_| {
+            *valid = verify_with_structured_scalar_message::<E, D>(
+                ip_verifier_srs,
+                &HomomorphicPlaceholderValue,
+                (&proof.com_c, &vec![proof.agg_c]),
+                &r,
+                &proof.tipa_proof_c,
+            );
+        });
+
+        let (r_vec_sender, r_vec_receiver) = channel();
+        s.spawn(move |_| {
+            r_vec_sender
+                .send(structured_scalar_power(public_inputs.len(), &r))
+                .unwrap();
+        });
+
+        // Check aggregate pairing product equation
+        info!("checking aggregate pairing");
+        let r_sum = {
+            let a = sub!(r.pow(&[public_inputs.len() as u64]), &E::Fr::one());
+            let b = sub!(r, &E::Fr::one());
+            let b = b.inverse().unwrap();
+            mul!(a, &b)
+        };
+
+        let p1 = &mut p1;
+        s.spawn(move |_| {
+            *p1 = {
+                let mut alpha_g1_r_sum = vk.alpha_g1.into_projective();
+                alpha_g1_r_sum.mul_assign(r_sum);
+                E::pairing(alpha_g1_r_sum, vk.beta_g2)
+            };
+        });
+
+        let p3 = &mut p3;
+        s.spawn(move |_| {
+            *p3 = E::pairing(proof.agg_c, vk.delta_g2);
+        });
+
+        let mut g_ic = vk.ic[0].into_projective();
+        g_ic.mul_assign(r_sum);
+
+        let r_vec = r_vec_receiver.recv().unwrap();
+        let b = vk
+            .ic
+            .par_iter()
+            .skip(1)
+            .enumerate()
+            .map(|(i, b)| {
+                let ip = inner_product::scalar(
+                    &public_inputs
+                        .iter()
+                        .map(|inputs| inputs[i].clone())
+                        .collect::<Vec<E::Fr>>(),
+                    &r_vec,
+                );
+                let mut b = b.into_projective();
+                b.mul_assign(ip);
+                b
+            })
+            .reduce(
+                || E::G1::zero(),
+                |mut acc, curr| {
+                    acc.add_assign(&curr);
+                    acc
+                },
+            );
+
         g_ic.add_assign(&b);
-    }
-    let p2 = E::pairing(g_ic, vk.gamma_g2);
-    let p3 = E::pairing(proof.agg_c, vk.delta_g2);
+
+        p2 = E::pairing(g_ic, vk.gamma_g2);
+    });
 
     let p1_p2_p3 = mul!(p1, &mul!(p2, &p3));
     let ppe_valid = proof.ip_ab == p1_p2_p3;
 
+    info!("aggregate verify done");
     tipa_proof_ab_valid && tipa_proof_c_valid && ppe_valid
 }
 
@@ -98,6 +148,7 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     proof: &PairingInnerProductABProof<E, D>,
     r_shift: &E::Fr,
 ) -> bool {
+    info!("verify with srs shift");
     let (base_com, transcript) = gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
     let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
 
@@ -163,6 +214,7 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
     com: (&E::Fqk, &E::Fqk, &Vec<E::Fqk>),
     proof: &GIPAProof<E, D>,
 ) -> ((E::Fqk, E::Fqk, Vec<E::Fqk>), Vec<E::Fr>) {
+    info!("gipa verify recursive challenge transcript");
     let (com_0, com_1, com_2) = com.clone();
     let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.clone());
     let mut r_transcript = Vec::new();
@@ -278,6 +330,7 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     scalar_b: &E::Fr,
     proof: &MultiExpInnerProductCProof<E, D>,
 ) -> bool {
+    info!("verify with structured scalar message");
     let (base_com, transcript) = gipa_with_ssm_verify_recursive_challenge_transcript(
         (com.0, scalar_b, com.1),
         &proof.gipa_proof,
@@ -339,6 +392,7 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
     com: (&E::Fqk, &E::Fr, &Vec<E::G1>),
     proof: &GIPAProofWithSSM<E, D>,
 ) -> ((E::Fqk, E::Fr, Vec<E::G1>), Vec<E::Fr>) {
+    info!("gipa ssm verify recursive challenge transcript");
     let (com_0, com_1, com_2) = com.clone();
     let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.clone());
     let mut r_transcript = Vec::new();

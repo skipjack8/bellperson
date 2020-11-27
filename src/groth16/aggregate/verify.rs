@@ -9,12 +9,12 @@ use super::HomomorphicPlaceholderValue;
 use super::{
     inner_product,
     prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
-    structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
-    MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
+    AggregateProof, GIPAProof, GIPAProofWithSSM, MultiExpInnerProductCProof,
+    PairingInnerProductABProof, VerifierSRS,
 };
 use crate::bls::Engine;
 use crate::groth16::{
-    multiscalar::{par_multiscalar, precompute_fixed_window, Getter, ScalarList},
+    multiscalar::{par_multiscalar, precompute_fixed_window, ScalarList},
     VerifyingKey,
 };
 use paired::PairingCurveAffine;
@@ -108,33 +108,27 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             // We incrementally build the r vector and the table
             // NOTE: in this version it's not r^2j but simply r^j
             //
-            let mut table: Vec<E::Fr> = (0..l).map(|i| public_inputs[0][i]).collect();
+            let mut table: Vec<_> = (0..l).map(|i| public_inputs[0][i]).collect();
             let mut powers = vec![E::Fr::one()];
             println!("Length of table {} - l = {}", table.len(), l);
             println!("Length of vk.ic {}", vk.ic.len());
             for j in 1..public_inputs.len() {
                 let rj = mul!(powers[j - 1], &r);
                 powers.push(rj);
-                table = table
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        // i denotes the column of the public input, and j
-                        // denotes which public input
-                        let mut ai = public_inputs[j][i].clone();
-                        ai.mul_assign(&rj);
-                        ai.add_assign(&c);
-                        ai
-                    })
-                    .collect();
+                table.par_iter_mut().enumerate().for_each(|(i, c)| {
+                    // i denotes the column of the public input, and j
+                    // denotes which public input
+                    let mut ai = public_inputs[j][i];
+                    ai.mul_assign(&rj);
+                    c.add_assign(&ai);
+                });
             }
             // now we do the multi exponentiation
-            let tableW = precompute_fixed_window::<E>(&vk.ic[1..], 2);
-            let tableRepr: Vec<<E::Fr as PrimeField>::Repr> =
-                table.iter().map(|c| c.into_repr()).collect();
-            let mut totsi = par_multiscalar::<&Getter<E>, E>(
-                &ScalarList::Slice(&tableRepr),
-                &tableW,
+            let table_w = precompute_fixed_window::<E>(&vk.ic[1..], 2);
+            let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { table[i].into_repr() };
+            let mut totsi = par_multiscalar::<_, E>(
+                &ScalarList::Getter(getter, l),
+                &table_w,
                 std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
             );
             let mut g_ic = vk.ic[0].into_projective();

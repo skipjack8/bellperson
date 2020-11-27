@@ -114,7 +114,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             let mut power = E::Fr::one();
             for j in 1..public_inputs.len() {
                 power = mul!(power.clone(), &r);
-                table.par_iter_mut().enumerate().for_each(|(i, c)| {
+                table.iter_mut().enumerate().for_each(|(i, c)| {
                     // i denotes the column of the public input, and j
                     // denotes which public input
                     let mut ai = public_inputs[j][i];
@@ -220,15 +220,14 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
 
         a && b && c
     };
-    let base = if base_valid {
-        E::Fqk::one()
-    } else {
-        E::Fqk::zero()
-    };
 
     // we return a Fqk element that is supposed to be equal to Fqk::one when
     // put into the final exponentiation
-    mul!(mul!(aid, &bid), &base)
+    if base_valid {
+        mul!(aid, &bid)
+    } else {
+        E::Fqk::zero()
+    }
 }
 
 fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
@@ -416,16 +415,13 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     let (com_a, _, com_t) = base_com;
     let a_base = vec![proof.gipa_proof.r_base.0.clone()];
     let t_base = vec![inner_product::multiexponentiation(&a_base, &vec![b_base])];
-    let base_valid = {
-        let a = inner_product::pairing::<E>(&a_base, &vec![ck_a_final.clone()]) == com_a;
-        let b = &t_base == &com_t;
-        if a && b {
-            E::Fqk::one()
-        } else {
-            E::Fqk::zero()
-        }
-    };
-    mul!(aid, &base_valid)
+    let a = inner_product::pairing::<E>(&a_base, &vec![ck_a_final.clone()]) == com_a;
+    let b = &t_base == &com_t;
+    if a && b {
+        aid
+    } else {
+        E::Fqk::zero()
+    }
 }
 
 fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(

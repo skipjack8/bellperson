@@ -178,8 +178,8 @@ impl<E: Engine> Circuit<E> for TestCircuit<E> {
 
 #[test]
 fn test_groth16_aggregation_min() {
-    const NUM_PUBLIC_INPUTS: usize = 1000;
-    const NUM_PROOFS_TO_AGGREGATE: usize = 256; //1024;
+    const NUM_PUBLIC_INPUTS: usize = 5000;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 512; //1024;
     let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
 
     println!("Creating parameters...");
@@ -265,6 +265,11 @@ fn test_groth16_aggregation_min() {
     let verifier_time = start.elapsed().as_millis();
     assert!(result);
 
+    let start = Instant::now();
+    let proofs: Vec<_> = proofs.iter().collect();
+    assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements).unwrap());
+    let batch_verifier_time = start.elapsed().as_millis();
+
     println!("Proof generation time: {} ms", generation_time.as_millis());
     println!("Proof aggregation time: {} ms", prover_time);
     println!("Proof aggregation verification time: {} ms", verifier_time);
@@ -272,12 +277,13 @@ fn test_groth16_aggregation_min() {
         "Proof individual verification time: {} ms",
         individual_verification_time.as_millis()
     );
+    println!("Proof batch verification: {} ms", batch_verifier_time);
 }
 
 #[test]
 fn test_groth16_aggregation_mimc() {
     const NUM_PROOFS_TO_AGGREGATE: usize = 256; //1024;
-    let rng = &mut thread_rng();
+    let mut rng = &mut thread_rng();
 
     // Generate the MiMC round constants
     let constants = (0..MIMC_ROUNDS)
@@ -358,7 +364,7 @@ fn test_groth16_aggregation_mimc() {
 
     let start = Instant::now();
     let proofs: Vec<_> = proofs.iter().collect();
-    assert!(verify_proofs_batch(&pvk, rng, &proofs, &images).unwrap());
+    assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &images).unwrap());
     let batch_verifier_time = start.elapsed().as_millis();
 
     println!("Proof generation time: {} ms", generation_time.as_millis());

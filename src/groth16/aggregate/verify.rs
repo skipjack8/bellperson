@@ -9,12 +9,12 @@ use super::HomomorphicPlaceholderValue;
 use super::{
     inner_product,
     prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
-    structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
-    MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
+    AggregateProof, GIPAProof, GIPAProofWithSSM, MultiExpInnerProductCProof,
+    PairingInnerProductABProof, VerifierSRS,
 };
 use crate::bls::Engine;
 use crate::groth16::{
-    multiscalar::{par_multiscalar, precompute_fixed_window, Getter, ScalarList, WINDOW_SIZE},
+    multiscalar::{par_multiscalar, precompute_fixed_window, ScalarList},
     VerifyingKey,
 };
 use paired::PairingCurveAffine;
@@ -42,8 +42,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         counter_nonce += 1;
     };
 
-    let mut tipa_proof_ab_valid = false;
-    let mut tipa_proof_c_valid = false;
+    let mut tipa_proof_ab_valid = E::Fqk::zero();
+    let mut tipa_proof_c_valid = E::Fqk::zero();
     let mut p1 = E::Fqk::zero();
     let mut p2 = E::Fqk::zero();
     let mut p3 = E::Fqk::zero();
@@ -108,33 +108,26 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             // We incrementally build the r vector and the table
             // NOTE: in this version it's not r^2j but simply r^j
             //
-            let mut table: Vec<E::Fr> = (0..l).map(|i| public_inputs[0][i]).collect();
-            let mut powers = vec![E::Fr::one()];
-            println!("Length of table {} - l = {}", table.len(), l);
-            println!("Length of vk.ic {}", vk.ic.len());
+            let mut table: Vec<_> = (0..l).map(|i| public_inputs[0][i]).collect();
+            info!("Length of table {} - l = {}", table.len(), l);
+            info!("Length of vk.ic {}", vk.ic.len());
+            let mut power = E::Fr::one();
             for j in 1..public_inputs.len() {
-                let rj = mul!(powers[j - 1], &r);
-                powers.push(rj);
-                table = table
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        // i denotes the column of the public input, and j
-                        // denotes which public input
-                        let mut ai = public_inputs[j][i].clone();
-                        ai.mul_assign(&rj);
-                        ai.add_assign(&c);
-                        ai
-                    })
-                    .collect();
+                power = mul!(power.clone(), &r);
+                table.par_iter_mut().enumerate().for_each(|(i, c)| {
+                    // i denotes the column of the public input, and j
+                    // denotes which public input
+                    let mut ai = public_inputs[j][i];
+                    ai.mul_assign(&power);
+                    c.add_assign(&ai);
+                });
             }
             // now we do the multi exponentiation
-            let tableW = precompute_fixed_window::<E>(&vk.ic[1..], 1);
-            let tableRepr: Vec<<E::Fr as PrimeField>::Repr> =
-                table.iter().map(|c| c.into_repr()).collect();
-            let mut totsi = par_multiscalar::<&Getter<E>, E>(
-                &ScalarList::Slice(&tableRepr),
-                &tableW,
+            let table_w = precompute_fixed_window::<E>(&vk.ic[1..], 1);
+            let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { table[i].into_repr() };
+            let mut totsi = par_multiscalar::<_, E>(
+                &ScalarList::Getter(getter, l),
+                &table_w,
                 std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
             );
             // XXX include in the multiscalar above
@@ -149,11 +142,15 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     });
 
     let p1_p2_p3 = mul!(p1, &mul!(p2, &p3));
-    let p123 = E::final_exponentiation(&p1_p2_p3).unwrap();
+    // if proofs are valid, proof_ab and proof_ac are equal to 1 (after final
+    // exponentiation) so multiply
+    // won't change the results, it's still p1_p2_p3
+    let proof_and_p123 = mul!(mul!(tipa_proof_ab_valid, &tipa_proof_c_valid), &p1_p2_p3);
+    let p123 = E::final_exponentiation(&proof_and_p123).unwrap();
     let ppe_valid = proof.ip_ab == p123;
 
     info!("aggregate verify done");
-    tipa_proof_ab_valid && tipa_proof_c_valid && ppe_valid
+    ppe_valid
 }
 
 fn verify_with_srs_shift<E: Engine, D: Digest>(
@@ -162,7 +159,7 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     com: (&E::Fqk, &E::Fqk, &Vec<E::Fqk>),
     proof: &PairingInnerProductABProof<E, D>,
     r_shift: &E::Fr,
-) -> bool {
+) -> E::Fqk {
     info!("verify with srs shift");
     let (base_com, transcript) = gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
     let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
@@ -188,7 +185,8 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
         counter_nonce += 1;
     };
 
-    let ck_a_valid = verify_commitment_key_g2_kzg_opening(
+    // if valid aid == 1
+    let aid = verify_commitment_key_g2_kzg_opening(
         v_srs,
         &ck_a_final,
         &ck_a_proof,
@@ -196,7 +194,8 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
         &r_shift.inverse().unwrap(),
         &c,
     );
-    let ck_b_valid = verify_commitment_key_g1_kzg_opening(
+    // if valid bid == 1
+    let bid = verify_commitment_key_g1_kzg_opening(
         v_srs,
         &ck_b_final,
         &ck_b_proof,
@@ -221,8 +220,15 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
 
         a && b && c
     };
+    let base = if base_valid {
+        E::Fqk::one()
+    } else {
+        E::Fqk::zero()
+    };
 
-    ck_a_valid && ck_b_valid && base_valid
+    // we return a Fqk element that is supposed to be equal to Fqk::one when
+    // put into the final exponentiation
+    mul!(mul!(aid, &bid), &base)
 }
 
 fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
@@ -307,7 +313,7 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
     transcript: &Vec<E::Fr>,
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
-) -> bool {
+) -> E::Fqk {
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
 
@@ -324,7 +330,7 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
         &ck_opening.into_affine().prepare(),
     )]);
     let mut ip1 = p1.inverse().unwrap();
-    E::final_exponentiation(&mul!(ip1, &p2)).unwrap() == E::Fqk::one()
+    mul!(ip1, &p2)
 }
 
 pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
@@ -334,7 +340,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
     transcript: &Vec<E::Fr>,
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
-) -> bool {
+) -> E::Fqk {
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
     let mut p1 = E::miller_loop(&[(
@@ -350,7 +356,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
             .prepare(),
     )]);
     let mut ip1 = p1.inverse().unwrap();
-    E::final_exponentiation(&mul!(ip1, &p2)).unwrap() == E::Fqk::one()
+    mul!(ip1, &p2)
 }
 
 fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
@@ -359,7 +365,7 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     com: (&E::Fqk, &Vec<E::G1>),
     scalar_b: &E::Fr,
     proof: &MultiExpInnerProductCProof<E, D>,
-) -> bool {
+) -> E::Fqk {
     info!("verify with structured scalar message");
     let (base_com, transcript) = gipa_with_ssm_verify_recursive_challenge_transcript(
         (com.0, scalar_b, com.1),
@@ -386,7 +392,7 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     };
 
     // Check commitment key
-    let ck_a_valid = verify_commitment_key_g2_kzg_opening(
+    let aid = verify_commitment_key_g2_kzg_opening(
         v_srs,
         &ck_a_final,
         &ck_a_proof,
@@ -413,9 +419,13 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     let base_valid = {
         let a = inner_product::pairing::<E>(&a_base, &vec![ck_a_final.clone()]) == com_a;
         let b = &t_base == &com_t;
-        a && b
+        if a && b {
+            E::Fqk::one()
+        } else {
+            E::Fqk::zero()
+        }
     };
-    ck_a_valid && base_valid
+    mul!(aid, &base_valid)
 }
 
 fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(

@@ -14,7 +14,7 @@ use super::{
 };
 use crate::bls::Engine;
 use crate::groth16::{
-    multiscalar::{par_multiscalar, precompute_fixed_window, Getter, ScalarList},
+    multiscalar::{par_multiscalar, precompute_fixed_window, Getter, ScalarList, WINDOW_SIZE},
     VerifyingKey,
 };
 use paired::PairingCurveAffine;
@@ -129,7 +129,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                     .collect();
             }
             // now we do the multi exponentiation
-            let tableW = precompute_fixed_window::<E>(&vk.ic[1..], 2);
+            let tableW = precompute_fixed_window::<E>(&vk.ic[1..], 1);
             let tableRepr: Vec<<E::Fr as PrimeField>::Repr> =
                 table.iter().map(|c| c.into_repr()).collect();
             let mut totsi = par_multiscalar::<&Getter<E>, E>(
@@ -137,6 +137,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 &tableW,
                 std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
             );
+            // XXX include in the multiscalar above
             let mut g_ic = vk.ic[0].into_projective();
             g_ic.mul_assign(r_sum);
             totsi.add_assign(&g_ic);
@@ -309,13 +310,21 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
 ) -> bool {
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
-    E::pairing(
-        v_srs.g.clone(),
-        sub!(*ck_final, &mul!(v_srs.h, ck_polynomial_c_eval)),
-    ) == E::pairing(
-        sub!(v_srs.g_beta, &mul!(v_srs.g, kzg_challenge.clone())),
-        ck_opening.clone(),
-    )
+
+    let mut p1 = E::miller_loop(&[(
+        &v_srs.g.into_affine().prepare(),
+        &sub!(*ck_final, &mul!(v_srs.h, ck_polynomial_c_eval))
+            .into_affine()
+            .prepare(),
+    )]);
+    let p2 = E::miller_loop(&[(
+        &sub!(v_srs.g_beta, &mul!(v_srs.g, kzg_challenge.clone()))
+            .into_affine()
+            .prepare(),
+        &ck_opening.into_affine().prepare(),
+    )]);
+    let mut ip1 = p1.inverse().unwrap();
+    E::final_exponentiation(&mul!(ip1, &p2)).unwrap() == E::Fqk::one()
 }
 
 pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
@@ -328,13 +337,20 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
 ) -> bool {
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
-    E::pairing(
-        sub!(*ck_final, &mul!(v_srs.g, ck_polynomial_c_eval)),
-        v_srs.h,
-    ) == E::pairing(
-        *ck_opening,
-        sub!(v_srs.h_alpha, &mul!(v_srs.h, *kzg_challenge)),
-    )
+    let mut p1 = E::miller_loop(&[(
+        &sub!(*ck_final, &mul!(v_srs.g, ck_polynomial_c_eval))
+            .into_affine()
+            .prepare(),
+        &v_srs.h.into_affine().prepare(),
+    )]);
+    let p2 = E::miller_loop(&[(
+        &ck_opening.into_affine().prepare(),
+        &sub!(v_srs.h_alpha, &mul!(v_srs.h, *kzg_challenge))
+            .into_affine()
+            .prepare(),
+    )]);
+    let mut ip1 = p1.inverse().unwrap();
+    E::final_exponentiation(&mul!(ip1, &p2)).unwrap() == E::Fqk::one()
 }
 
 fn verify_with_structured_scalar_message<E: Engine, D: Digest>(

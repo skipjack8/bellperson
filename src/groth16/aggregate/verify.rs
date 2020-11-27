@@ -114,7 +114,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             let mut power = E::Fr::one();
             for j in 1..public_inputs.len() {
                 power = mul!(power.clone(), &r);
-                table.iter_mut().enumerate().for_each(|(i, c)| {
+                table.par_iter_mut().enumerate().for_each(|(i, c)| {
                     // i denotes the column of the public input, and j
                     // denotes which public input
                     let mut ai = public_inputs[j][i];

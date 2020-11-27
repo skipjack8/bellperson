@@ -13,7 +13,10 @@ use super::{
     MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
 };
 use crate::bls::Engine;
-use crate::groth16::VerifyingKey;
+use crate::groth16::{
+    multiscalar::{par_multiscalar, precompute_fixed_window, Getter, ScalarList},
+    VerifyingKey,
+};
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -92,8 +95,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         s.spawn(move |_| {
             *p3 = E::pairing(proof.agg_c, vk.delta_g2);
         });
-        let mut g_ic = vk.ic[0].into_projective();
-        g_ic.mul_assign(r_sum);
 
         let (r_vec_sender, r_vec_receiver) = channel();
         s.spawn(move |_| {
@@ -127,23 +128,14 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                     .collect();
             }
             // now we do the multi exponentiation
-            let mut totsi = vk
-                .ic
-                .par_iter()
-                .skip(1)
-                .enumerate()
-                .map(|(i, si)| {
-                    let mut b = si.into_projective();
-                    b.mul_assign(table[i]);
-                    b
-                })
-                .reduce(
-                    || E::G1::zero(),
-                    |mut acc, curr| {
-                        acc.add_assign(&curr);
-                        acc
-                    },
-                );
+            let tableW = precompute_fixed_window::<E>(&vk.ic[1..], 2);
+            let tableRepr: Vec<<E::Fr as PrimeField>::Repr> =
+                table.iter().map(|c| c.into_repr()).collect();
+            let mut totsi = par_multiscalar::<&Getter<E>, E>(
+                &ScalarList::Slice(&tableRepr),
+                &tableW,
+                std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
+            );
             let mut g_ic = vk.ic[0].into_projective();
             g_ic.mul_assign(r_sum);
             totsi.add_assign(&g_ic);

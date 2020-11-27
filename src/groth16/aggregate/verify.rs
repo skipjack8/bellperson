@@ -109,17 +109,16 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             // NOTE: in this version it's not r^2j but simply r^j
             //
             let mut table: Vec<_> = (0..l).map(|i| public_inputs[0][i]).collect();
-            let mut powers = vec![E::Fr::one()];
-            println!("Length of table {} - l = {}", table.len(), l);
-            println!("Length of vk.ic {}", vk.ic.len());
+            info!("Length of table {} - l = {}", table.len(), l);
+            info!("Length of vk.ic {}", vk.ic.len());
+            let mut power = E::Fr::one();
             for j in 1..public_inputs.len() {
-                let rj = mul!(powers[j - 1], &r);
-                powers.push(rj);
+                power = mul!(power.clone(), &r);
                 table.par_iter_mut().enumerate().for_each(|(i, c)| {
                     // i denotes the column of the public input, and j
                     // denotes which public input
                     let mut ai = public_inputs[j][i];
-                    ai.mul_assign(&rj);
+                    ai.mul_assign(&power);
                     c.add_assign(&ai);
                 });
             }

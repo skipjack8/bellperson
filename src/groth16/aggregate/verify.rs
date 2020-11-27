@@ -17,6 +17,7 @@ use crate::groth16::{
     multiscalar::{par_multiscalar, precompute_fixed_window, Getter, ScalarList},
     VerifyingKey,
 };
+use paired::PairingCurveAffine;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -83,17 +84,17 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         };
 
         let p1 = &mut p1;
+        let p3 = &mut p3;
         s.spawn(move |_| {
             *p1 = {
                 let mut alpha_g1_r_sum = vk.alpha_g1.into_projective();
                 alpha_g1_r_sum.mul_assign(r_sum);
-                E::pairing(alpha_g1_r_sum, vk.beta_g2)
+                E::miller_loop(&[(
+                    &alpha_g1_r_sum.into_affine().prepare(),
+                    &vk.beta_g2.prepare(),
+                )])
             };
-        });
-
-        let p3 = &mut p3;
-        s.spawn(move |_| {
-            *p3 = E::pairing(proof.agg_c, vk.delta_g2);
+            *p3 = E::miller_loop(&[(&proof.agg_c.into_affine().prepare(), &vk.delta_g2.prepare())]);
         });
 
         let (r_vec_sender, r_vec_receiver) = channel();
@@ -143,11 +144,12 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         });
 
         let g_ic: E::G1 = r_vec_receiver.recv().unwrap();
-        p2 = E::pairing(g_ic, vk.gamma_g2);
+        p2 = E::miller_loop(&[(&g_ic.into_affine().prepare(), &vk.gamma_g2.prepare())]);
     });
 
     let p1_p2_p3 = mul!(p1, &mul!(p2, &p3));
-    let ppe_valid = proof.ip_ab == p1_p2_p3;
+    let p123 = E::final_exponentiation(&p1_p2_p3).unwrap();
+    let ppe_valid = proof.ip_ab == p123;
 
     info!("aggregate verify done");
     tipa_proof_ab_valid && tipa_proof_c_valid && ppe_valid

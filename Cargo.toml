@@ -80,6 +80,5 @@ harness = false
 
 [patch.crates-io]
 paired = { git = "https://github.com/filecoin-project/paired", branch = "ser-de" }
-# blstrs = { path = "../blstrs" }
-# fff = { git = "https://github.com/filecoin-project/ff", branch = "ser-de" }
-fff = { path = "../fff" }
+fff = { git = "https://github.com/filecoin-project/ff", branch = "ser-de" }
+groupy = { git = "https://github.com/filecoin-project/group", branch = "ser-de" }

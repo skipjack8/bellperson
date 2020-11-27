@@ -4,12 +4,12 @@ use bellperson::bls::{Bls12, Engine, Fr, FrRepr};
 use bellperson::gadgets::num::AllocatedNum;
 use bellperson::groth16::{
     aggregate_proofs, create_random_proof, generate_random_parameters, prepare_verifying_key,
-    setup_inner_product, verify_aggregate_proof, verify_proof,
+    setup_inner_product, verify_aggregate_proof, verify_proof, verify_proofs_batch,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use blake2::Blake2b;
 use ff::{Field, PrimeField, ScalarEngine};
-use rand::{rngs::StdRng, thread_rng, SeedableRng};
+use rand::{thread_rng, SeedableRng};
 
 const MIMC_ROUNDS: usize = 322;
 
@@ -231,11 +231,10 @@ fn test_groth16_aggregation_min() {
         let start = Instant::now();
         // Create an instance of our circuit (with the
         // witness)
-        dbg!(&public_inputs);
         let c = TestCircuit {
             public_inputs,
-            public_product: Some(dbg!(product)),
-            witness_input: Some(dbg!(w)),
+            public_product: Some(product),
+            witness_input: Some(w),
         };
 
         // Create a groth16 proof with our parameters.
@@ -277,7 +276,7 @@ fn test_groth16_aggregation_min() {
 
 #[test]
 fn test_groth16_aggregation_mimc() {
-    const NUM_PROOFS_TO_AGGREGATE: usize = 2; //1024;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 1024;
     let rng = &mut thread_rng();
 
     // Generate the MiMC round constants
@@ -357,6 +356,11 @@ fn test_groth16_aggregation_mimc() {
     let verifier_time = start.elapsed().as_millis();
     assert!(result);
 
+    let start = Instant::now();
+    let proofs: Vec<_> = proofs.iter().collect();
+    assert!(verify_proofs_batch(&pvk, rng, &proofs, &images).unwrap());
+    let batch_verifier_time = start.elapsed().as_millis();
+
     println!("Proof generation time: {} ms", generation_time.as_millis());
     println!("Proof aggregation time: {} ms", prover_time);
     println!("Proof aggregation verification time: {} ms", verifier_time);
@@ -364,4 +368,6 @@ fn test_groth16_aggregation_mimc() {
         "Proof individual verification time: {} ms",
         individual_verification_time.as_millis()
     );
+
+    println!("Proof batch verification time: {} ms", batch_verifier_time);
 }

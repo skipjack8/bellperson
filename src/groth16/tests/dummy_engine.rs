@@ -82,6 +82,10 @@ impl Field for Fr {
         self.0.0.to_be_bytes().to_vec()
     }
 
+    fn from_random_bytes(_bytes: &[u8]) -> Option<Self> {
+        todo!()
+    }
+    
     fn from_bytes(bytes: &[u8]) -> Option<Self> {
         use std::convert::TryInto;
 
@@ -374,6 +378,9 @@ impl CurveProjective for Fr {
     fn hash(_input: &[u8]) -> Self {
         unimplemented!()
     }
+    fn as_bytes(&self) -> Vec<u8> {
+        unimplemented!()
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
@@ -456,6 +463,10 @@ impl CurveAffine for Fr {
 
     fn into_projective(&self) -> Self::Projective {
         *self
+    }
+
+    fn as_bytes(&self) -> Vec<u8> {
+        unimplemented!()
     }
 }
 

@@ -73,8 +73,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
 ) -> AggregateProof<E, D> {
-    println!("aggregate proofs");
-    dbg!(proofs);
     let a = proofs
         .iter()
         .map(|proof| proof.a.into_projective())
@@ -94,25 +92,25 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
     let com_b = inner_product::pairing::<E>(&ck_2, &b);
     let com_c = inner_product::pairing::<E>(&c, &ck_1);
 
-    // dbg!(com_a, com_b, com_c);
-
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
     let r = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        hash_input.extend_from_slice(&com_a.as_bytes());
-        hash_input.extend_from_slice(&com_b.as_bytes());
-        hash_input.extend_from_slice(&com_c.as_bytes());
+        let mut b = Vec::new();
+        b.extend_from_slice(&com_a.as_bytes());
+        b.extend_from_slice(&com_b.as_bytes());
+        b.extend_from_slice(&com_c.as_bytes());
+
+        hash_input.extend_from_slice(&b);
         if let Some(r) =
-            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
         {
             break r;
         };
 
         counter_nonce += 1;
     };
-    dbg!(&r);
     let r_vec = structured_scalar_power(proofs.len(), &r);
     let a_r = a
         .iter()
@@ -129,8 +127,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
         .collect::<Vec<E::G2>>();
 
     assert_eq!(com_a, inner_product::pairing::<E>(&a_r, &ck_1_r));
-    //    dbg!(&ck_1_r, &a_r, &b, &ck_2,);
-    println!("prove with srs shift");
     let tipa_proof_ab = prove_with_srs_shift::<E, D>(
         &ip_srs,
         (&a_r, &b),
@@ -138,7 +134,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
         &r,
     );
 
-    println!("prove with structured scalar messages");
     let tipa_proof_c = prove_with_structured_scalar_message::<E, D>(
         &ip_srs,
         (&c, &r_vec),
@@ -166,8 +161,6 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
 ) -> PairingInnerProductABProof<E, D> {
     // Run GIPA
     let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1, &vec![ck.2.clone()]));
-    // dbg!(&proof.r_commitment_steps, &proof.r_base);
-    // dbg!(&aux.r_transcript, &aux.ck_base);
 
     // Prove final commitment keys are wellformed
     let (ck_a_final, ck_b_final) = aux.ck_base;
@@ -181,10 +174,10 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
-        hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
-        hash_input.extend_from_slice(ck_b_final.into_affine().into_uncompressed().as_ref());
+        hash_input.extend_from_slice(&ck_a_final.as_bytes());
+        hash_input.extend_from_slice(&ck_b_final.as_bytes());
         if let Some(c) =
-            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
         {
             break c;
         };
@@ -269,15 +262,6 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let mut counter_nonce: usize = 0;
                 let default_transcript = E::Fr::zero();
                 let transcript = r_transcript.last().unwrap_or(&default_transcript);
-                dbg!(
-                    &transcript,
-                    &com_1.0,
-                    &com_1.1,
-                    &com_1.2,
-                    &com_2.0,
-                    &com_2.1,
-                    &com_2.2
-                );
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
@@ -301,9 +285,7 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                     }
 
                     counter_nonce += 1;
-                    dbg!(counter_nonce);
                 };
-                dbg!(c, c_inv);
 
                 // Set up values for next step of recursion
                 m_a = m_a_1
@@ -437,11 +419,11 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                     E::Fr::zero(),
                     vec![inner_product::multiexponentiation::<E::G1>(m_a_2, m_b_2)],
                 );
-
                 // Fiat-Shamir challenge
                 let mut counter_nonce: usize = 0;
                 let default_transcript = E::Fr::zero();
                 let transcript = r_transcript.last().unwrap_or(&default_transcript);
+
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
@@ -449,12 +431,12 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                     hash_input.extend_from_slice(&com_1.0.as_bytes());
                     hash_input.extend_from_slice(&com_1.1.as_bytes());
                     for c in &com_1.2 {
-                        hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
+                        hash_input.extend_from_slice(&c.as_bytes());
                     }
                     hash_input.extend_from_slice(&com_2.0.as_bytes());
                     hash_input.extend_from_slice(&com_2.1.as_bytes());
                     for c in &com_2.2 {
-                        hash_input.extend_from_slice(c.into_affine().into_uncompressed().as_ref());
+                        hash_input.extend_from_slice(&c.as_bytes());
                     }
                     let d = D::digest(&hash_input);
                     let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -502,6 +484,7 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
         };
         r_transcript.reverse();
         r_commitment_steps.reverse();
+
         (
             GIPAProofWithSSM {
                 r_commitment_steps,
@@ -607,9 +590,9 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
-        hash_input.extend_from_slice(ck_a_final.into_affine().into_uncompressed().as_ref());
+        hash_input.extend_from_slice(&ck_a_final.as_bytes());
         if let Some(c) =
-            E::Fr::from_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
+            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
         {
             break c;
         };
@@ -635,10 +618,13 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
 pub(super) fn fr_from_u128<F: PrimeField>(bytes: &[u8]) -> F {
     use std::convert::TryInto;
 
+    let other = u128::from_be_bytes(bytes[..16].try_into().unwrap());
+    let upper = (other >> 64) as u64;
+    let lower = ((other << 64) >> 64) as u64;
+
     let mut repr = F::Repr::default();
-    for (i, chunk) in repr.as_mut().iter_mut().take(2).enumerate() {
-        *chunk = u64::from_be_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
-    }
-    let c = F::from_repr(repr).unwrap();
-    c
+    repr.as_mut()[0] = lower;
+    repr.as_mut()[1] = upper;
+
+    F::from_repr(repr).unwrap()
 }

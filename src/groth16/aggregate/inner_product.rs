@@ -33,10 +33,10 @@ pub fn scalar<F: Field>(left: &[F], right: &[F]) -> F {
         .map(|(x, y)| {
             let mut x = *x;
             x.mul_assign(y);
-            y
+            x
         })
         .fold(F::zero(), |mut acc, curr| {
-            acc.add_assign(curr);
+            acc.add_assign(&curr);
             acc
         })
 }

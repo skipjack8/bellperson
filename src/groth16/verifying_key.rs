@@ -8,7 +8,7 @@ use std::mem;
 
 use super::multiscalar;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct VerifyingKey<E: Engine> {
     // alpha in g1 for verifying and for creating A/C elements of
     // proof. Never the point at infinity.

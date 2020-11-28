@@ -9,14 +9,11 @@ use super::HomomorphicPlaceholderValue;
 use super::{
     inner_product,
     prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
-    AggregateProof, GIPAProof, GIPAProofWithSSM, MultiExpInnerProductCProof,
-    PairingInnerProductABProof, VerifierSRS,
+    structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
+    MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
 };
 use crate::bls::Engine;
-use crate::groth16::{
-    multiscalar::{par_multiscalar, precompute_fixed_window, ScalarList},
-    VerifyingKey,
-};
+use crate::groth16::VerifyingKey;
 use paired::PairingCurveAffine;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
@@ -84,7 +81,9 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         };
 
         let p1 = &mut p1;
+        let p2 = &mut p2;
         let p3 = &mut p3;
+
         s.spawn(move |_| {
             *p1 = {
                 let mut alpha_g1_r_sum = vk.alpha_g1.into_projective();
@@ -99,46 +98,46 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
         let (r_vec_sender, r_vec_receiver) = channel();
         s.spawn(move |_| {
-            let l = public_inputs[0].len();
-            // We want to compute MUL(i:0 -> l) S_i ^ (SUM(j:0 -> n) ai,j * r^j)
-            // this table keeps tracks of incremental computation of each i-th
-            // exponent to later multiply with S_i
-            // The index of the table is i, which is an index of the public
-            // input element
-            // We incrementally build the r vector and the table
-            // NOTE: in this version it's not r^2j but simply r^j
-            //
-            let mut table: Vec<_> = (0..l).map(|i| public_inputs[0][i]).collect();
-            info!("Length of table {} - l = {}", table.len(), l);
-            info!("Length of vk.ic {}", vk.ic.len());
-            let mut power = E::Fr::one();
-            for j in 1..public_inputs.len() {
-                power = mul!(power.clone(), &r);
-                table.par_iter_mut().enumerate().for_each(|(i, c)| {
-                    // i denotes the column of the public input, and j
-                    // denotes which public input
-                    let mut ai = public_inputs[j][i];
-                    ai.mul_assign(&power);
-                    c.add_assign(&ai);
-                });
-            }
-            // now we do the multi exponentiation
-            let table_w = precompute_fixed_window::<E>(&vk.ic[1..], 1);
-            let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { table[i].into_repr() };
-            let mut totsi = par_multiscalar::<_, E>(
-                &ScalarList::Getter(getter, l),
-                &table_w,
-                std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
-            );
-            // XXX include in the multiscalar above
-            let mut g_ic = vk.ic[0].into_projective();
-            g_ic.mul_assign(r_sum);
-            totsi.add_assign(&g_ic);
-            r_vec_sender.send(totsi).unwrap();
+            r_vec_sender
+                .send(structured_scalar_power(public_inputs.len(), &r))
+                .unwrap();
         });
 
-        let g_ic: E::G1 = r_vec_receiver.recv().unwrap();
-        p2 = E::miller_loop(&[(&g_ic.into_affine().prepare(), &vk.gamma_g2.prepare())]);
+        s.spawn(move |_| {
+            let mut g_ic = vk.ic[0].into_projective();
+            g_ic.mul_assign(r_sum);
+
+            let r_vec = r_vec_receiver.recv().unwrap();
+            let b = vk
+                .ic
+                .par_iter()
+                .skip(1)
+                .enumerate()
+                .map(|(i, b)| (i, b.into_projective()))
+                .map(|(i, b)| {
+                    let ip = inner_product::scalar(
+                        &public_inputs
+                            .iter()
+                            .map(|inputs| inputs[i].clone())
+                            .collect::<Vec<E::Fr>>(),
+                        &r_vec,
+                    );
+
+                    let mut b = b;
+                    b.mul_assign(ip);
+                    b
+                })
+                .reduce(
+                    || E::G1::zero(),
+                    |mut acc, curr| {
+                        acc.add_assign(&curr);
+                        acc
+                    },
+                );
+
+            g_ic.add_assign(&b);
+            *p2 = E::miller_loop(&[(&g_ic.into_affine().prepare(), &vk.gamma_g2.prepare())]);
+        });
     });
 
     let p1_p2_p3 = mul!(p1, &mul!(p2, &p3));
@@ -316,7 +315,7 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
 
-    let mut p1 = E::miller_loop(&[(
+    let p1 = E::miller_loop(&[(
         &v_srs.g.into_affine().prepare(),
         &sub!(*ck_final, &mul!(v_srs.h, ck_polynomial_c_eval))
             .into_affine()
@@ -328,7 +327,7 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
             .prepare(),
         &ck_opening.into_affine().prepare(),
     )]);
-    let mut ip1 = p1.inverse().unwrap();
+    let ip1 = p1.inverse().unwrap();
     mul!(ip1, &p2)
 }
 
@@ -342,7 +341,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
 ) -> E::Fqk {
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
-    let mut p1 = E::miller_loop(&[(
+    let p1 = E::miller_loop(&[(
         &sub!(*ck_final, &mul!(v_srs.g, ck_polynomial_c_eval))
             .into_affine()
             .prepare(),
@@ -354,7 +353,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
             .into_affine()
             .prepare(),
     )]);
-    let mut ip1 = p1.inverse().unwrap();
+    let ip1 = p1.inverse().unwrap();
     mul!(ip1, &p2)
 }
 

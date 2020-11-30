@@ -4,7 +4,7 @@ use groupy::CurveProjective;
 use super::msm;
 use crate::bls::{Engine, PairingCurveAffine};
 
-pub fn pairing<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
+pub fn pairing_miller<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
     assert_eq!(left.len(), right.len());
     let pairs = left
         .iter()
@@ -14,8 +14,12 @@ pub fn pairing<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
         .collect::<Vec<_>>();
     let pairs_ref: Vec<_> = pairs.iter().map(|(a, b)| (a, b)).collect();
 
-    let ml: E::Fqk = E::miller_loop(pairs_ref.iter());
-    E::final_exponentiation(&ml).expect("invalid pairing")
+    E::miller_loop(pairs_ref.iter())
+}
+
+/// Returns the miller loop result of the inner pairing product
+pub fn pairing<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
+    E::final_exponentiation(&pairing_miller::<E>(left, right)).expect("invalid pairing")
 }
 
 pub fn multiexponentiation<G: CurveProjective>(left: &[G], right: &[G::Scalar]) -> G {

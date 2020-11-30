@@ -250,7 +250,7 @@ jobs:
             llvm-profdata merge --output=default.profdata default.profraw
             #llvm-cov export --Xdemangler=rustfilt --ignore-filename-regex="/rustc" --format=lcov --instr-profile=default.profdata ./target/debug/deps/bellperson-* > lcov.info
             ls -l ./target/debug/deps/bellperson-*
-            llvm-cov export --ignore-filename-regex="\.cargo" --ignore-filename-regex="\.rustup" --format=lcov -instr-profile=default.profdata ./target/debug/deps/bellperson-* > lcov.info
+            llvm-cov export --ignore-filename-regex="\.cargo" --ignore-filename-regex="\.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
       - codecov/upload:
           file: lcov.info
 

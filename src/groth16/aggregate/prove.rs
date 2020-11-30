@@ -97,15 +97,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
     let r = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        let mut b = Vec::new();
-        b.extend_from_slice(&com_a.as_bytes());
-        b.extend_from_slice(&com_b.as_bytes());
-        b.extend_from_slice(&com_c.as_bytes());
+        bincode::serialize_into(&mut hash_input, &com_a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_b).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_c).expect("vec");
 
-        hash_input.extend_from_slice(&b);
-        if let Some(r) =
-            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
-        {
+        if let Some(r) = E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..]) {
             break r;
         };
 
@@ -173,12 +169,14 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
-        hash_input.extend_from_slice(&ck_a_final.as_bytes());
-        hash_input.extend_from_slice(&ck_b_final.as_bytes());
-        if let Some(c) =
-            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
-        {
+        bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
+        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
+        bincode::serialize_into(&mut hash_input, &ck_b_final).expect("vec");
+
+        if let Some(c) = E::Fr::from_random_bytes(
+            &D::digest(&hash_input).as_slice()
+                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        ) {
             break c;
         };
         counter_nonce += 1;
@@ -265,17 +263,16 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-                    hash_input.extend_from_slice(&transcript.as_bytes());
-                    hash_input.extend_from_slice(&com_1.0.as_bytes());
-                    hash_input.extend_from_slice(&com_1.1.as_bytes());
-                    for c in &com_1.2 {
-                        hash_input.extend_from_slice(&c.as_bytes());
-                    }
-                    hash_input.extend_from_slice(&com_2.0.as_bytes());
-                    hash_input.extend_from_slice(&com_2.1.as_bytes());
-                    for c in &com_2.2 {
-                        hash_input.extend_from_slice(&c.as_bytes());
-                    }
+                    bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+
+                    bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
+
+                    bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
+
                     let d = D::digest(&hash_input);
                     let c = fr_from_u128::<E::Fr>(d.as_slice());
                     if let Some(c_inv) = c.inverse() {
@@ -427,17 +424,16 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-                    hash_input.extend_from_slice(&transcript.as_bytes());
-                    hash_input.extend_from_slice(&com_1.0.as_bytes());
-                    hash_input.extend_from_slice(&com_1.1.as_bytes());
-                    for c in &com_1.2 {
-                        hash_input.extend_from_slice(&c.as_bytes());
-                    }
-                    hash_input.extend_from_slice(&com_2.0.as_bytes());
-                    hash_input.extend_from_slice(&com_2.1.as_bytes());
-                    for c in &com_2.2 {
-                        hash_input.extend_from_slice(&c.as_bytes());
-                    }
+                    bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+
+                    bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
+
+                    bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
+
                     let d = D::digest(&hash_input);
                     let c = fr_from_u128::<E::Fr>(d.as_slice());
                     if let Some(c_inv) = c.inverse() {
@@ -589,11 +585,13 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
-        hash_input.extend_from_slice(&ck_a_final.as_bytes());
-        if let Some(c) =
-            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
-        {
+        bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
+        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
+
+        if let Some(c) = E::Fr::from_random_bytes(
+            &D::digest(&hash_input).as_slice()
+                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        ) {
             break c;
         };
         counter_nonce += 1;

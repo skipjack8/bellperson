@@ -12,7 +12,7 @@ use std::num::Wrapping;
 
 const MODULUS_R: Wrapping<u32> = Wrapping(64513);
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Fr(Wrapping<u32>);
 
 impl fmt::Display for Fr {
@@ -22,8 +22,6 @@ impl fmt::Display for Fr {
 }
 
 impl Field for Fr {
-    const SERIALIZED_BYTES: usize = 4;
-
     fn random<R: RngCore>(rng: &mut R) -> Self {
         Fr(Wrapping(rng.next_u32()) % MODULUS_R)
     }
@@ -76,24 +74,6 @@ impl Field for Fr {
 
     fn frobenius_map(&mut self, _: usize) {
         // identity
-    }
-
-    fn as_bytes(&self) -> Vec<u8> {
-        self.0.0.to_be_bytes().to_vec()
-    }
-
-    fn from_random_bytes(_bytes: &[u8]) -> Option<Self> {
-        todo!()
-    }
-    
-    fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        use std::convert::TryInto;
-
-        if bytes.len() != Self::SERIALIZED_BYTES {
-            return None;
-        }
-        let val = u32::from_be_bytes(bytes.try_into().unwrap()); 
-        Some(Self(Wrapping(val)))
     }
 }
 
@@ -153,7 +133,7 @@ impl SqrtField for Fr {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FrRepr([u64; 1]);
 
 impl Ord for FrRepr {
@@ -267,6 +247,10 @@ impl PrimeField for Fr {
     fn root_of_unity() -> Fr {
         Fr(Wrapping(57751))
     }
+
+    fn from_random_bytes(_bytes: &[u8]) -> Option<Self> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -378,9 +362,6 @@ impl CurveProjective for Fr {
     fn hash(_input: &[u8]) -> Self {
         unimplemented!()
     }
-    fn as_bytes(&self) -> Vec<u8> {
-        unimplemented!()
-    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
@@ -463,10 +444,6 @@ impl CurveAffine for Fr {
 
     fn into_projective(&self) -> Self::Projective {
         *self
-    }
-
-    fn as_bytes(&self) -> Vec<u8> {
-        unimplemented!()
     }
 }
 

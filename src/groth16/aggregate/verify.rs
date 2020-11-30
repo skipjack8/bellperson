@@ -12,9 +12,8 @@ use super::{
     structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
     MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
 };
-use crate::bls::Engine;
+use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::VerifyingKey;
-use paired::PairingCurveAffine;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -28,12 +27,15 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     let r = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        hash_input.extend_from_slice(&proof.com_a.as_bytes());
-        hash_input.extend_from_slice(&proof.com_b.as_bytes());
-        hash_input.extend_from_slice(&proof.com_c.as_bytes());
-        if let Some(r) =
-            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
-        {
+
+        bincode::serialize_into(&mut hash_input, &proof.com_a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.com_b).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.com_c).expect("vec");
+
+        if let Some(r) = E::Fr::from_random_bytes(
+            &D::digest(&hash_input).as_slice()
+                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        ) {
             break r;
         };
         counter_nonce += 1;
@@ -122,7 +124,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                             .collect::<Vec<E::Fr>>(),
                         &r_vec,
                     );
-
                     let mut b = b;
                     b.mul_assign(ip);
                     b
@@ -172,13 +173,14 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
-        hash_input.extend_from_slice(&ck_a_final.as_bytes());
-        hash_input.extend_from_slice(&ck_b_final.as_bytes());
+        bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
+        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
+        bincode::serialize_into(&mut hash_input, &ck_b_final).expect("vec");
 
-        if let Some(c) =
-            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
-        {
+        if let Some(c) = E::Fr::from_random_bytes(
+            &D::digest(&hash_input).as_slice()
+                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        ) {
             break c;
         };
         counter_nonce += 1;
@@ -245,17 +247,16 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         let (c, c_inv) = 'challenge: loop {
             let mut hash_input = Vec::new();
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-            hash_input.extend_from_slice(&transcript.as_bytes());
-            hash_input.extend_from_slice(&com_1.0.as_bytes());
-            hash_input.extend_from_slice(&com_1.1.as_bytes());
-            for c in &com_1.2 {
-                hash_input.extend_from_slice(&c.as_bytes());
-            }
-            hash_input.extend_from_slice(&com_2.0.as_bytes());
-            hash_input.extend_from_slice(&com_2.1.as_bytes());
-            for c in &com_2.2 {
-                hash_input.extend_from_slice(&c.as_bytes());
-            }
+
+            bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+
+            bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
+
+            bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
 
             let d = D::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -379,11 +380,14 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        hash_input.extend_from_slice(&transcript.first().unwrap().as_bytes());
-        hash_input.extend_from_slice(&ck_a_final.as_bytes());
-        if let Some(c) =
-            E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..E::Fr::SERIALIZED_BYTES])
-        {
+
+        bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
+        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
+
+        if let Some(c) = E::Fr::from_random_bytes(
+            &D::digest(&hash_input).as_slice()
+                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        ) {
             break c;
         };
         counter_nonce += 1;
@@ -439,17 +443,16 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         let (c, c_inv) = 'challenge: loop {
             let mut hash_input = Vec::new();
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-            hash_input.extend_from_slice(&transcript.as_bytes());
-            hash_input.extend_from_slice(&com_1.0.as_bytes());
-            hash_input.extend_from_slice(&com_1.1.as_bytes());
-            for c in &com_1.2 {
-                hash_input.extend_from_slice(&c.as_bytes());
-            }
-            hash_input.extend_from_slice(&com_2.0.as_bytes());
-            hash_input.extend_from_slice(&com_2.1.as_bytes());
-            for c in &com_2.2 {
-                hash_input.extend_from_slice(&c.as_bytes());
-            }
+
+            bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+
+            bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
+
+            bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
 
             let d = D::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());

@@ -364,10 +364,8 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     proof: &MultiExpInnerProductCProof<E, D>,
 ) -> E::Fqk {
     info!("verify with structured scalar message");
-    let (base_com, transcript) = gipa_with_ssm_verify_recursive_challenge_transcript(
-        (com.0, scalar_b, com.1),
-        &proof.gipa_proof,
-    );
+    let (base_com, transcript) =
+        gipa_with_ssm_verify_recursive_challenge_transcript((com.0, com.1), &proof.gipa_proof);
     let transcript_inverse = transcript
         .iter()
         .map(|x| x.inverse().unwrap())
@@ -416,7 +414,7 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     }
 
     // Verify base inner product commitment
-    let (com_a, _, com_t) = base_com;
+    let (com_a, com_t) = base_com;
     let a_base = vec![proof.gipa_proof.r_base.0.clone()];
     let t_base = vec![inner_product::multiexponentiation(&a_base, &vec![b_base])];
     let a = inner_product::pairing::<E>(&a_base, &vec![ck_a_final.clone()]) == com_a;
@@ -429,12 +427,12 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
 }
 
 fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
-    com: (&E::Fqk, &E::Fr, &[E::G1]),
+    com: (&E::Fqk, &[E::G1]),
     proof: &GIPAProofWithSSM<E, D>,
-) -> ((E::Fqk, E::Fr, Vec<E::G1>), Vec<E::Fr>) {
+) -> ((E::Fqk, Vec<E::G1>), Vec<E::Fr>) {
     info!("gipa ssm verify recursive challenge transcript");
-    let (com_0, com_1, com_2) = com.clone();
-    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.to_vec());
+    let (com_0, com_2) = com.clone();
+    let (mut com_a, mut com_t) = (*com_0, com_2.to_vec());
     let mut r_transcript = Vec::new();
     for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
         // Fiat-Shamir challenge
@@ -449,11 +447,9 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
 
             bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
             bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
 
             bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
             bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
 
             let d = D::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -470,14 +466,14 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             mul!(com_1.0.pow(c.into_repr()), &com_a),
             &com_2.0.pow(c_inv.into_repr())
         );
-        com_b = mul!(mul!(mul!(com_1.1, &c), &com_b), &mul!(com_2.1, &c_inv));
-        assert_eq!(com_1.2.len(), com_t.len());
-        assert_eq!(com_2.2.len(), com_t.len());
+
+        assert_eq!(com_1.1.len(), com_t.len());
+        assert_eq!(com_2.1.len(), com_t.len());
         com_t = com_1
-            .2
+            .1
             .iter()
             .zip(com_t.iter())
-            .zip(com_2.2.iter())
+            .zip(com_2.1.iter())
             .map(|((com_1_2, com_t), com_2_2)| {
                 let a = mul!(*com_1_2, c.into_repr());
                 let b = mul!(*com_2_2, c_inv.into_repr());
@@ -488,5 +484,5 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         r_transcript.push(c);
     }
     r_transcript.reverse();
-    ((com_a, com_b, com_t), r_transcript)
+    ((com_a, com_t), r_transcript)
 }

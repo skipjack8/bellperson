@@ -97,7 +97,7 @@ pub struct GIPAProofWithSSM<E: Engine, D: Digest> {
         serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
         deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
     ))]
-    pub r_commitment_steps: Vec<((E::Fqk, E::Fr, Vec<E::G1>), (E::Fqk, E::Fr, Vec<E::G1>))>, // Output
+    pub r_commitment_steps: Vec<((E::Fqk, Vec<E::G1>), (E::Fqk, Vec<E::G1>))>, // Output
     pub r_base: (E::G1, E::Fr), // Message
     pub _marker: PhantomData<D>,
 }
@@ -414,12 +414,10 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
 
                 let com_1 = (
                     inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC::commit
-                    E::Fr::zero(),                              // RMC::commit
                     vec![inner_product::multiexponentiation::<E::G1>(m_a_1, m_b_1)], // IPC::commit
                 );
                 let com_2 = (
                     inner_product::pairing::<E>(m_a_2, ck_a_2),
-                    E::Fr::zero(),
                     vec![inner_product::multiexponentiation::<E::G1>(m_a_2, m_b_2)],
                 );
                 // Fiat-Shamir challenge
@@ -434,11 +432,9 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
 
                     bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
                     bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
 
                     bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
                     bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
 
                     let d = D::digest(&hash_input);
                     let c = fr_from_u128::<E::Fr>(d.as_slice());

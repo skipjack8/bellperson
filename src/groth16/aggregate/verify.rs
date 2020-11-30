@@ -5,7 +5,6 @@ use log::*;
 use rayon::prelude::*;
 use std::sync::mpsc::channel;
 
-use super::HomomorphicPlaceholderValue;
 use super::{
     inner_product,
     prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
@@ -55,7 +54,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         s.spawn(move |_| {
             *valid = verify_with_srs_shift::<E, D>(
                 ip_verifier_srs,
-                &HomomorphicPlaceholderValue,
                 (&proof.com_a, &proof.com_b, &vec![proof.ip_ab]),
                 &proof.tipa_proof_ab,
                 &r,
@@ -66,7 +64,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         s.spawn(move |_| {
             *valid = verify_with_structured_scalar_message::<E, D>(
                 ip_verifier_srs,
-                &HomomorphicPlaceholderValue,
                 (&proof.com_c, &vec![proof.agg_c]),
                 &r,
                 &proof.tipa_proof_c,
@@ -155,7 +152,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
 fn verify_with_srs_shift<E: Engine, D: Digest>(
     v_srs: &VerifierSRS<E>,
-    _ck_t: &HomomorphicPlaceholderValue,
     com: (&E::Fqk, &E::Fqk, &Vec<E::Fqk>),
     proof: &PairingInnerProductABProof<E, D>,
     r_shift: &E::Fr,
@@ -360,7 +356,6 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
 
 fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     v_srs: &VerifierSRS<E>,
-    _ck_t: &HomomorphicPlaceholderValue,
     com: (&E::Fqk, &Vec<E::G1>),
     scalar_b: &E::Fr,
     proof: &MultiExpInnerProductCProof<E, D>,

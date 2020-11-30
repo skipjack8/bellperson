@@ -252,7 +252,7 @@ fn main() {
                 let srs = srs.as_ref().unwrap();
                 let (valid, took) = timer!(verify_aggregate_proof(
                     &srs.get_verifier_key(),
-                    &params.vk,
+                    &pvk,
                     &pis,
                     agg_proof,
                 ));

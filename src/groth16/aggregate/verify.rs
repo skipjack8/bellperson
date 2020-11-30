@@ -1,6 +1,6 @@
 use digest::Digest;
 use ff::{Field, PrimeField};
-use groupy::{CurveAffine, CurveProjective};
+use groupy::CurveProjective;
 use log::*;
 use rayon::prelude::*;
 use std::sync::mpsc::channel;
@@ -12,11 +12,11 @@ use super::{
     MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
 };
 use crate::bls::{Engine, PairingCurveAffine};
-use crate::groth16::VerifyingKey;
+use crate::groth16::PreparedVerifyingKey;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
-    vk: &VerifyingKey<E>,
+    pvk: &PreparedVerifyingKey<E>,
     public_inputs: &[Vec<E::Fr>],
     proof: &AggregateProof<E, D>,
 ) -> bool {
@@ -46,7 +46,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     let mut p2 = E::Fqk::zero();
     let mut p3 = E::Fqk::zero();
 
-    assert_eq!(vk.ic.len(), public_inputs[0].len() + 1);
+    assert_eq!(pvk.ic.len(), public_inputs[0].len() + 1);
 
     rayon::scope(|s| {
         // Check TIPA proofs
@@ -85,14 +85,11 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
         s.spawn(move |_| {
             *p1 = {
-                let mut alpha_g1_r_sum = vk.alpha_g1.into_projective();
+                let mut alpha_g1_r_sum = pvk.alpha_g1;
                 alpha_g1_r_sum.mul_assign(r_sum);
-                E::miller_loop(&[(
-                    &alpha_g1_r_sum.into_affine().prepare(),
-                    &vk.beta_g2.prepare(),
-                )])
+                E::miller_loop(&[(&alpha_g1_r_sum.into_affine().prepare(), &pvk.beta_g2)])
             };
-            *p3 = E::miller_loop(&[(&proof.agg_c.into_affine().prepare(), &vk.delta_g2.prepare())]);
+            *p3 = E::miller_loop(&[(&proof.agg_c.into_affine().prepare(), &pvk.delta_g2)]);
         });
 
         let (r_vec_sender, r_vec_receiver) = channel();
@@ -103,16 +100,15 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         });
 
         s.spawn(move |_| {
-            let mut g_ic = vk.ic[0].into_projective();
+            let mut g_ic = pvk.ic_projective[0];
             g_ic.mul_assign(r_sum);
 
             let r_vec = r_vec_receiver.recv().unwrap();
-            let b = vk
-                .ic
+            let b = pvk
+                .ic_projective
                 .par_iter()
                 .skip(1)
                 .enumerate()
-                .map(|(i, b)| (i, b.into_projective()))
                 .map(|(i, b)| {
                     let ip = inner_product::scalar(
                         &public_inputs
@@ -121,7 +117,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                             .collect::<Vec<E::Fr>>(),
                         &r_vec,
                     );
-                    let mut b = b;
+                    let mut b = *b;
                     b.mul_assign(ip);
                     b
                 })
@@ -134,7 +130,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 );
 
             g_ic.add_assign(&b);
-            *p2 = E::miller_loop(&[(&g_ic.into_affine().prepare(), &vk.gamma_g2.prepare())]);
+            *p2 = E::miller_loop(&[(&g_ic.into_affine().prepare(), &pvk.gamma_g2)]);
         });
     });
 

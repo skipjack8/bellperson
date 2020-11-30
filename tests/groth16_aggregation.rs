@@ -256,12 +256,8 @@ fn test_groth16_aggregation_min() {
 
     println!("Verifying aggregated proof...");
     let start = Instant::now();
-    let result = verify_aggregate_proof(
-        &srs.get_verifier_key(),
-        &params.vk,
-        &statements,
-        &aggregate_proof,
-    );
+    let result =
+        verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &statements, &aggregate_proof);
     let verifier_time = start.elapsed().as_millis();
     assert!(result);
 
@@ -353,12 +349,7 @@ fn test_groth16_aggregation_mimc() {
 
     println!("Verifying aggregated proof...");
     let start = Instant::now();
-    let result = verify_aggregate_proof(
-        &srs.get_verifier_key(),
-        &params.vk,
-        &images,
-        &aggregate_proof,
-    );
+    let result = verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &images, &aggregate_proof);
     let verifier_time = start.elapsed().as_millis();
     assert!(result);
 

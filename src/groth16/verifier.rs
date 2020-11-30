@@ -24,6 +24,9 @@ pub fn prepare_verifying_key<E: Engine>(vk: &VerifyingKey<E>) -> PreparedVerifyi
         delta_g2: vk.delta_g2.prepare(),
         ic: vk.ic.clone(),
         multiscalar,
+        alpha_g1: vk.alpha_g1.into_projective(),
+        beta_g2: vk.beta_g2.prepare(),
+        ic_projective: vk.ic.par_iter().map(|i| i.into_projective()).collect(),
     }
 }
 

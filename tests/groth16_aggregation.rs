@@ -179,7 +179,7 @@ impl<E: Engine> Circuit<E> for TestCircuit<E> {
 #[test]
 fn test_groth16_aggregation_min() {
     const NUM_PUBLIC_INPUTS: usize = 1000;
-    const NUM_PROOFS_TO_AGGREGATE: usize = 512; //1024;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 1024; //1024;
     let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
 
     println!("Creating parameters...");

@@ -5,60 +5,120 @@ use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 
 use super::{inner_product, poly::DensePolynomial, structured_scalar_power, SRS};
 use crate::bls::Engine;
 use crate::groth16::Proof;
 
+#[derive(Serialize, Deserialize)]
 pub struct AggregateProof<E: Engine, D: Digest> {
     pub com_a: E::Fqk,
     pub com_b: E::Fqk,
     pub com_c: E::Fqk,
     pub ip_ab: E::Fqk,
     pub agg_c: E::G1,
+    #[serde(bound(
+        serialize = "PairingInnerProductABProof<E, D>: Serialize",
+        deserialize = "PairingInnerProductABProof<E, D>: Deserialize<'de>",
+    ))]
     pub tipa_proof_ab: PairingInnerProductABProof<E, D>,
+    #[serde(bound(
+        serialize = "MultiExpInnerProductCProof<E, D>: Serialize",
+        deserialize = "MultiExpInnerProductCProof<E, D>: Deserialize<'de>",
+    ))]
     pub tipa_proof_c: MultiExpInnerProductCProof<E, D>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct PairingInnerProductABProof<E: Engine, D: Digest> {
+    #[serde(bound(
+        serialize = "GIPAProof<E, D>: Serialize",
+        deserialize = "GIPAProof<E, D>: Deserialize<'de>",
+    ))]
     pub gipa_proof: GIPAProof<E, D>,
+    #[serde(bound(
+        serialize = "E::G1: Serialize, E::G2: Serialize",
+        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
+    ))]
     pub final_ck: (E::G2, E::G1), // Key
+    #[serde(bound(
+        serialize = "E::G1: Serialize, E::G2: Serialize",
+        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
+    ))]
     pub final_ck_proof: (E::G2, E::G1),
     pub _marker: PhantomData<D>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct GIPAProof<E: Engine, D: Digest> {
+    #[serde(bound(
+        serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
+        deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
+    ))]
     pub r_commitment_steps: Vec<((E::Fqk, E::Fqk, Vec<E::Fqk>), (E::Fqk, E::Fqk, Vec<E::Fqk>))>, // Output
+    #[serde(bound(
+        serialize = "E::G1: Serialize, E::G2: Serialize",
+        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
+    ))]
     pub r_base: (E::G1, E::G2), // Message
     pub _marker: PhantomData<D>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct GIPAAux<E: Engine, D: Digest> {
+    #[serde(bound(
+        serialize = "E::Fr: Serialize",
+        deserialize = "E::Fr: Deserialize<'de>",
+    ))]
     pub r_transcript: Vec<E::Fr>,
+    #[serde(bound(
+        serialize = "E::G1: Serialize, E::G2: Serialize",
+        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
+    ))]
     pub ck_base: (E::G2, E::G1),
     pub _marker: PhantomData<D>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct MultiExpInnerProductCProof<E: Engine, D: Digest> {
+    #[serde(bound(
+        serialize = "GIPAProofWithSSM<E, D>: Serialize",
+        deserialize = "GIPAProofWithSSM<E, D>: Deserialize<'de>",
+    ))]
     pub gipa_proof: GIPAProofWithSSM<E, D>,
     pub final_ck: E::G2,
     pub final_ck_proof: E::G2,
     pub _marker: PhantomData<D>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct GIPAProofWithSSM<E: Engine, D: Digest> {
+    #[serde(bound(
+        serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
+        deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
+    ))]
     pub r_commitment_steps: Vec<((E::Fqk, E::Fr, Vec<E::G1>), (E::Fqk, E::Fr, Vec<E::G1>))>, // Output
     pub r_base: (E::G1, E::Fr), // Message
     pub _marker: PhantomData<D>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct GIPAAuxWithSSM<E: Engine, D: Digest> {
+    #[serde(bound(
+        serialize = "E::Fr: Serialize",
+        deserialize = "E::Fr: Deserialize<'de>",
+    ))]
     pub r_transcript: Vec<E::Fr>,
+    #[serde(bound(
+        serialize = "E::G2: Serialize",
+        deserialize = "E::G2: Deserialize<'de>",
+    ))]
     pub ck_base: (E::G2, HomomorphicPlaceholderValue),
     pub _marker: PhantomData<D>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct HomomorphicPlaceholderValue;
 
 impl std::ops::AddAssign<Self> for HomomorphicPlaceholderValue {

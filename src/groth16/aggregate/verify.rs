@@ -17,7 +17,7 @@ use crate::groth16::VerifyingKey;
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
     vk: &VerifyingKey<E>,
-    public_inputs: &Vec<Vec<E::Fr>>,
+    public_inputs: &[Vec<E::Fr>],
     proof: &AggregateProof<E, D>,
 ) -> bool {
     info!("verify_aggregate_proof");
@@ -152,13 +152,16 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
 fn verify_with_srs_shift<E: Engine, D: Digest>(
     v_srs: &VerifierSRS<E>,
-    com: (&E::Fqk, &E::Fqk, &Vec<E::Fqk>),
+    com: (&E::Fqk, &E::Fqk, &[E::Fqk]),
     proof: &PairingInnerProductABProof<E, D>,
     r_shift: &E::Fr,
 ) -> E::Fqk {
     info!("verify with srs shift");
     let (base_com, transcript) = gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
-    let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
+    let transcript_inverse = transcript
+        .iter()
+        .map(|x| x.inverse().unwrap())
+        .collect::<Vec<_>>();
 
     // Verify commitment keys wellformed
     let (ck_a_final, ck_b_final) = &proof.final_ck;
@@ -228,12 +231,12 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
 }
 
 fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
-    com: (&E::Fqk, &E::Fqk, &Vec<E::Fqk>),
+    com: (&E::Fqk, &E::Fqk, &[E::Fqk]),
     proof: &GIPAProof<E, D>,
 ) -> ((E::Fqk, E::Fqk, Vec<E::Fqk>), Vec<E::Fr>) {
     info!("gipa verify recursive challenge transcript");
     let (com_0, com_1, com_2) = com.clone();
-    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.clone());
+    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.to_vec());
     let mut r_transcript = Vec::new();
     for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
         // Fiat-Shamir challenge
@@ -292,7 +295,7 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             x_c.zip(com_t.iter())
                 .zip(z_c_inv)
                 .map(|((x_c, y), z_c_inv)| mul!(mul!(x_c, y), &z_c_inv))
-                .collect()
+                .collect::<Vec<_>>()
         };
 
         r_transcript.push(c);
@@ -305,7 +308,7 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
     v_srs: &VerifierSRS<E>,
     ck_final: &E::G2,
     ck_opening: &E::G2,
-    transcript: &Vec<E::Fr>,
+    transcript: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
 ) -> E::Fqk {
@@ -332,7 +335,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
     v_srs: &VerifierSRS<E>,
     ck_final: &E::G1,
     ck_opening: &E::G1,
-    transcript: &Vec<E::Fr>,
+    transcript: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
 ) -> E::Fqk {
@@ -356,7 +359,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
 
 fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     v_srs: &VerifierSRS<E>,
-    com: (&E::Fqk, &Vec<E::G1>),
+    com: (&E::Fqk, &[E::G1]),
     scalar_b: &E::Fr,
     proof: &MultiExpInnerProductCProof<E, D>,
 ) -> E::Fqk {
@@ -365,7 +368,10 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
         (com.0, scalar_b, com.1),
         &proof.gipa_proof,
     );
-    let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
+    let transcript_inverse = transcript
+        .iter()
+        .map(|x| x.inverse().unwrap())
+        .collect::<Vec<_>>();
 
     let ck_a_final = &proof.final_ck;
     let ck_a_proof = &proof.final_ck_proof;
@@ -423,12 +429,12 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
 }
 
 fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
-    com: (&E::Fqk, &E::Fr, &Vec<E::G1>),
+    com: (&E::Fqk, &E::Fr, &[E::G1]),
     proof: &GIPAProofWithSSM<E, D>,
 ) -> ((E::Fqk, E::Fr, Vec<E::G1>), Vec<E::Fr>) {
     info!("gipa ssm verify recursive challenge transcript");
     let (com_0, com_1, com_2) = com.clone();
-    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.clone());
+    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.to_vec());
     let mut r_transcript = Vec::new();
     for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
         // Fiat-Shamir challenge
@@ -477,7 +483,7 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
                 let b = mul!(*com_2_2, c_inv.into_repr());
                 add!(add!(a, &com_t), &b)
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         r_transcript.push(c);
     }

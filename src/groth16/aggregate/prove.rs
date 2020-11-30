@@ -200,7 +200,10 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     // Prove final commitment keys are wellformed
     let (ck_a_final, ck_b_final) = aux.ck_base;
     let transcript = aux.r_transcript;
-    let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
+    let transcript_inverse = transcript
+        .iter()
+        .map(|x| x.inverse().unwrap())
+        .collect::<Vec<_>>();
     let r_inverse = r_shift.inverse().unwrap();
 
     // KZG challenge point
@@ -240,22 +243,13 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
 // RMC: AFGHOCommitmentG2<E>
 // IPC: IdentityCommitment<E::Fqk, E::Fr>
 impl<E: Engine, D: Digest> GIPAProof<E, D> {
+    /// Returns vector of recursive commitments and transcripts in reverse order.
     pub fn prove_with_aux(
         values: (&[E::G1], &[E::G2]),
         ck: (&[E::G2], &[E::G1]),
     ) -> (Self, GIPAAux<E, D>) {
-        let (m_a, m_b) = values;
-        let (ck_a, ck_b) = ck;
-        Self::_prove((m_a.to_vec(), m_b.to_vec()), (ck_a.to_vec(), ck_b.to_vec()))
-    }
-
-    /// Returns vector of recursive commitments and transcripts in reverse order.
-    fn _prove(
-        values: (Vec<E::G1>, Vec<E::G2>),
-        ck: (Vec<E::G2>, Vec<E::G1>),
-    ) -> (Self, GIPAAux<E, D>) {
-        let (mut m_a, mut m_b) = values;
-        let (mut ck_a, mut ck_b) = ck;
+        let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
+        let (mut ck_a, mut ck_b) = (ck.0.to_vec(), ck.1.to_vec());
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
         assert!(m_a.len().is_power_of_two());
@@ -390,25 +384,21 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 // RMC: SSMPlaceholderCommitment<LMC::Scalar>,
 // IPC: IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,
 impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
+    /// Returns vector of recursive commitments and transcripts in reverse order.
     pub fn prove_with_aux(
         values: (&[E::G1], &[E::Fr]),
         ck: &[E::G2],
     ) -> (Self, GIPAAuxWithSSM<E, D>) {
-        let (m_a, m_b) = values;
-        Self::_prove((m_a.to_vec(), m_b.to_vec()), ck.to_vec())
-    }
+        let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
+        let mut ck_a = ck.to_vec();
 
-    /// Returns vector of recursive commitments and transcripts in reverse order.
-    fn _prove(values: (Vec<E::G1>, Vec<E::Fr>), ck: Vec<E::G2>) -> (Self, GIPAAuxWithSSM<E, D>) {
-        let (mut m_a, mut m_b) = values;
-        let mut ck_a = ck;
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
         assert!(m_a.len().is_power_of_two());
         let (m_base, ck_base) = 'recurse: loop {
             if m_a.len() == 1 {
                 // base case
-                break 'recurse ((m_a[0].clone(), m_b[0].clone()), ck_a[0].clone());
+                break 'recurse ((m_a[0], m_b[0]), ck_a[0]);
             } else {
                 // recursive step
                 // Recurse with problem of half size
@@ -505,8 +495,8 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
     }
 }
 pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
-    srs_powers: &Vec<G>,
-    transcript: &Vec<G::Scalar>,
+    srs_powers: &[G],
+    transcript: &[G::Scalar],
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
 ) -> G {
@@ -532,7 +522,7 @@ pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
 }
 
 pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
-    transcript: &Vec<F>,
+    transcript: &[F],
     z: &F,
     r_shift: &F,
 ) -> F {
@@ -552,7 +542,7 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
         })
 }
 
-fn polynomial_coefficients_from_transcript<F: Field>(transcript: &Vec<F>, r_shift: &F) -> Vec<F> {
+fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: &F) -> Vec<F> {
     let mut coefficients = vec![F::one()];
     let mut power_2_r = r_shift.clone();
     for (i, x) in transcript.iter().enumerate() {
@@ -580,7 +570,10 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
     // Prove final commitment key is wellformed
     let ck_a_final = aux.ck_base;
     let transcript = aux.r_transcript;
-    let transcript_inverse = transcript.iter().map(|x| x.inverse().unwrap()).collect();
+    let transcript_inverse = transcript
+        .iter()
+        .map(|x| x.inverse().unwrap())
+        .collect::<Vec<_>>();
 
     // KZG challenge point
     let mut counter_nonce: usize = 0;

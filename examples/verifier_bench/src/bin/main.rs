@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use bellperson::groth16::{
     aggregate_proofs, create_random_proof_batch, generate_random_parameters, prepare_verifying_key,
-    setup_inner_product, verify_aggregate_proof, verify_proofs_batch, AggregateProof, Parameters,
-    Proof, VerifyingKey,
+    setup_inner_product, verify_aggregate_proof, verify_proofs_batch, Parameters, Proof,
+    VerifyingKey,
 };
 use bellperson::{
     bls::{Bls12, Engine, Fr},
@@ -245,7 +245,7 @@ fn main() {
                 "Verification finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
                 took,
                 valid,
-                proofs.len() * std::mem::size_of::<Proof<Bls12>>()
+                proofs.len() * Proof::<Bls12>::size(),
             );
 
             if let Some(ref agg_proof) = agg_proof {
@@ -260,7 +260,7 @@ fn main() {
                     "Verification aggregated finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
                     took,
                     valid,
-                    std::mem::size_of::<AggregateProof<Bls12, sha2::Sha256>>(),
+                    bincode::serialize(agg_proof).unwrap().len(),
                 );
             }
         }

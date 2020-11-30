@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use bellperson::groth16::{
     aggregate_proofs, create_random_proof_batch, generate_random_parameters, prepare_verifying_key,
-    setup_inner_product, verify_aggregate_proof, verify_proofs_batch, Parameters, Proof,
-    VerifyingKey,
+    setup_inner_product, verify_aggregate_proof, verify_proofs_batch, AggregateProof, Parameters,
+    Proof, VerifyingKey,
 };
 use bellperson::{
     bls::{Bls12, Engine, Fr},
@@ -238,26 +238,29 @@ fn main() {
                 "{} proofs, each having {} public inputs...",
                 opts.proofs, opts.public
             );
-            let (valid, took) = timer!(verify_proofs_batch(
-                &pvk,
-                rng,
-                &pref[..],
-                &vec![inputs.clone(); opts.proofs]
-            )
-            .unwrap());
-            println!("Verification finished in {}ms (Valid: {})", took, valid);
+
+            let pis = vec![inputs.clone(); opts.proofs];
+            let (valid, took) = timer!(verify_proofs_batch(&pvk, rng, &pref[..], &pis).unwrap());
+            println!(
+                "Verification finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
+                took,
+                valid,
+                proofs.len() * std::mem::size_of::<Proof<Bls12>>()
+            );
 
             if let Some(ref agg_proof) = agg_proof {
                 let srs = srs.as_ref().unwrap();
                 let (valid, took) = timer!(verify_aggregate_proof(
                     &srs.get_verifier_key(),
                     &params.vk,
-                    &vec![inputs.clone(); opts.proofs],
-                    &agg_proof,
+                    &pis,
+                    agg_proof,
                 ));
                 println!(
-                    "Verification aggregated finished in {}ms (Valid: {})",
-                    took, valid
+                    "Verification aggregated finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
+                    took,
+                    valid,
+                    std::mem::size_of::<AggregateProof<Bls12, sha2::Sha256>>(),
                 );
             }
         }

@@ -241,9 +241,9 @@ jobs:
             # Run the library tests which are part of the source files separate
             # from the integration tests in the `tests` directory. Without
             # that separating some test will hang forever.
-            #cargo +<< pipeline.parameters.nightly-version >> test --test '*' --features _coverage
-            #cargo +<< pipeline.parameters.nightly-version >> test --lib --features _coverage
-            cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
+            cargo +<< pipeline.parameters.nightly-version >> test --test '*' --features _coverage
+            cargo +<< pipeline.parameters.nightly-version >> test --lib --features _coverage
+            #cargo +<< pipeline.parameters.nightly-version >> test --features _coverage
 
             # Do *not* use sparse output. It leads to more lines that are not
             # taken into account at all

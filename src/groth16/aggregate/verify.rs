@@ -54,7 +54,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         s.spawn(move |_| {
             *valid = verify_with_srs_shift::<E, D>(
                 ip_verifier_srs,
-                (&proof.com_a, &proof.com_b, &vec![proof.ip_ab]),
+                (&proof.com_a, &proof.com_b, &proof.ip_ab),
                 &proof.tipa_proof_ab,
                 &r,
             );
@@ -64,7 +64,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         s.spawn(move |_| {
             *valid = verify_with_structured_scalar_message::<E, D>(
                 ip_verifier_srs,
-                (&proof.com_c, &vec![proof.agg_c]),
+                (&proof.com_c, &proof.agg_c),
                 &r,
                 &proof.tipa_proof_c,
             );
@@ -152,16 +152,13 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
 fn verify_with_srs_shift<E: Engine, D: Digest>(
     v_srs: &VerifierSRS<E>,
-    com: (&E::Fqk, &E::Fqk, &[E::Fqk]),
+    com: (&E::Fqk, &E::Fqk, &E::Fqk),
     proof: &PairingInnerProductABProof<E, D>,
     r_shift: &E::Fr,
 ) -> E::Fqk {
     info!("verify with srs shift");
-    let (base_com, transcript) = gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
-    let transcript_inverse = transcript
-        .iter()
-        .map(|x| x.inverse().unwrap())
-        .collect::<Vec<_>>();
+    let (base_com, transcript, transcript_inverse) =
+        gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
 
     // Verify commitment keys wellformed
     let (ck_a_final, ck_b_final) = &proof.final_ck;
@@ -206,15 +203,15 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
 
     // Verify base inner product commitment
     let (com_a, com_b, com_t) = base_com;
-    let a_base = vec![proof.gipa_proof.r_base.0.clone()];
-    let b_base = vec![proof.gipa_proof.r_base.1.clone()];
-    let t_base = vec![inner_product::pairing::<E>(&a_base, &b_base)];
+    let a_base = [proof.gipa_proof.r_base.0.clone()];
+    let b_base = [proof.gipa_proof.r_base.1.clone()];
+    let t_base = inner_product::pairing::<E>(&a_base, &b_base);
 
     let base_valid = {
         // LMC::verify - pairing inner product<E>
-        let a = inner_product::pairing::<E>(&a_base, &vec![ck_a_final.clone()]) == com_a;
+        let a = inner_product::pairing::<E>(&a_base, &[ck_a_final.clone()]) == com_a;
         // RMC::verify - afgho commitment G1
-        let b = inner_product::pairing::<E>(&vec![ck_b_final.clone()], &b_base) == com_b;
+        let b = inner_product::pairing::<E>(&[ck_b_final.clone()], &b_base) == com_b;
         // IPC::verify - identity commitment<Fqk, Fr>
         let c = t_base == com_t;
 
@@ -231,13 +228,14 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
 }
 
 fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
-    com: (&E::Fqk, &E::Fqk, &[E::Fqk]),
+    com: (&E::Fqk, &E::Fqk, &E::Fqk),
     proof: &GIPAProof<E, D>,
-) -> ((E::Fqk, E::Fqk, Vec<E::Fqk>), Vec<E::Fr>) {
+) -> ((E::Fqk, E::Fqk, E::Fqk), Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa verify recursive challenge transcript");
     let (com_0, com_1, com_2) = com.clone();
-    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, com_2.to_vec());
+    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, *com_2);
     let mut r_transcript = Vec::new();
+    let mut r_transcript_inverse = Vec::new();
     for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
         // Fiat-Shamir challenge
         let mut counter_nonce: usize = 0;
@@ -287,21 +285,19 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
 
         com_a = lambda::<E>(com_1.0, &com_a, &com_2.0, &c, &c_inv);
         com_b = lambda::<E>(com_1.1, &com_b, &com_2.1, &c, &c_inv);
-        assert_eq!(com_1.2.len(), com_t.len());
-        assert_eq!(com_2.2.len(), com_t.len());
+
         com_t = {
-            let x_c = com_1.2.iter().map(|com_1_2| com_1_2.pow(c.into_repr()));
-            let z_c_inv = com_2.2.iter().map(|com_2_2| com_2_2.pow(c_inv.into_repr()));
-            x_c.zip(com_t.iter())
-                .zip(z_c_inv)
-                .map(|((x_c, y), z_c_inv)| mul!(mul!(x_c, y), &z_c_inv))
-                .collect::<Vec<_>>()
+            let x_c = com_1.2.pow(c.into_repr());
+            let z_c_inv = com_2.2.pow(c_inv.into_repr());
+            mul!(mul!(x_c, &com_t), &z_c_inv)
         };
 
         r_transcript.push(c);
+        r_transcript_inverse.push(c_inv);
     }
     r_transcript.reverse();
-    ((com_a, com_b, com_t), r_transcript)
+    r_transcript_inverse.reverse();
+    ((com_a, com_b, com_t), r_transcript, r_transcript_inverse)
 }
 
 pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
@@ -359,17 +355,13 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
 
 fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     v_srs: &VerifierSRS<E>,
-    com: (&E::Fqk, &[E::G1]),
+    com: (&E::Fqk, &E::G1),
     scalar_b: &E::Fr,
     proof: &MultiExpInnerProductCProof<E, D>,
 ) -> E::Fqk {
     info!("verify with structured scalar message");
-    let (base_com, transcript) =
+    let (base_com, transcript, transcript_inverse) =
         gipa_with_ssm_verify_recursive_challenge_transcript((com.0, com.1), &proof.gipa_proof);
-    let transcript_inverse = transcript
-        .iter()
-        .map(|x| x.inverse().unwrap())
-        .collect::<Vec<_>>();
 
     let ck_a_final = &proof.final_ck;
     let ck_a_proof = &proof.final_ck_proof;
@@ -415,10 +407,10 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
 
     // Verify base inner product commitment
     let (com_a, com_t) = base_com;
-    let a_base = vec![proof.gipa_proof.r_base.0.clone()];
-    let t_base = vec![inner_product::multiexponentiation(&a_base, &vec![b_base])];
-    let a = inner_product::pairing::<E>(&a_base, &vec![ck_a_final.clone()]) == com_a;
-    let b = &t_base == &com_t;
+    let a_base = [proof.gipa_proof.r_base.0.clone()];
+    let t_base = inner_product::multiexponentiation(&a_base, &[b_base]);
+    let a = inner_product::pairing::<E>(&a_base, &[ck_a_final.clone()]) == com_a;
+    let b = t_base == com_t;
     if a && b {
         aid
     } else {
@@ -427,13 +419,14 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
 }
 
 fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
-    com: (&E::Fqk, &[E::G1]),
+    com: (&E::Fqk, &E::G1),
     proof: &GIPAProofWithSSM<E, D>,
-) -> ((E::Fqk, Vec<E::G1>), Vec<E::Fr>) {
+) -> ((E::Fqk, E::G1), Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa ssm verify recursive challenge transcript");
-    let (com_0, com_2) = com.clone();
-    let (mut com_a, mut com_t) = (*com_0, com_2.to_vec());
+    let (com_0, com_1) = com.clone();
+    let (mut com_a, mut com_t) = (*com_0, *com_1);
     let mut r_transcript = Vec::new();
+    let mut r_transcript_inverse = Vec::new();
     for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
         // Fiat-Shamir challenge
         let mut counter_nonce: usize = 0;
@@ -467,22 +460,17 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             &com_2.0.pow(c_inv.into_repr())
         );
 
-        assert_eq!(com_1.1.len(), com_t.len());
-        assert_eq!(com_2.1.len(), com_t.len());
-        com_t = com_1
-            .1
-            .iter()
-            .zip(com_t.iter())
-            .zip(com_2.1.iter())
-            .map(|((com_1_2, com_t), com_2_2)| {
-                let a = mul!(*com_1_2, c.into_repr());
-                let b = mul!(*com_2_2, c_inv.into_repr());
-                add!(add!(a, &com_t), &b)
-            })
-            .collect::<Vec<_>>();
+        com_t = {
+            let a = mul!(com_1.1, c.into_repr());
+            let b = mul!(com_2.1, c_inv.into_repr());
+            add!(add!(a, &com_t), &b)
+        };
 
         r_transcript.push(c);
+        r_transcript_inverse.push(c_inv);
     }
+
     r_transcript.reverse();
-    ((com_a, com_t), r_transcript)
+    r_transcript_inverse.reverse();
+    ((com_a, com_t), r_transcript, r_transcript_inverse)
 }

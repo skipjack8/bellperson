@@ -55,7 +55,7 @@ pub struct GIPAProof<E: Engine, D: Digest> {
         serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
         deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
     ))]
-    pub r_commitment_steps: Vec<((E::Fqk, E::Fqk, Vec<E::Fqk>), (E::Fqk, E::Fqk, Vec<E::Fqk>))>, // Output
+    pub r_commitment_steps: Vec<((E::Fqk, E::Fqk, E::Fqk), (E::Fqk, E::Fqk, E::Fqk))>, // Output
     #[serde(bound(
         serialize = "E::G1: Serialize, E::G2: Serialize",
         deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
@@ -97,7 +97,7 @@ pub struct GIPAProofWithSSM<E: Engine, D: Digest> {
         serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
         deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
     ))]
-    pub r_commitment_steps: Vec<((E::Fqk, Vec<E::G1>), (E::Fqk, Vec<E::G1>))>, // Output
+    pub r_commitment_steps: Vec<((E::Fqk, E::G1), (E::Fqk, E::G1))>, // Output
     pub r_base: (E::G1, E::Fr), // Message
     pub _marker: PhantomData<D>,
 }
@@ -276,14 +276,14 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let ck_b_2 = &ck_b[..split];
 
                 let com_1 = (
-                    inner_product::pairing::<E>(m_a_1, ck_a_1),      // LMC
-                    inner_product::pairing::<E>(ck_b_1, m_b_1),      // RMC
-                    vec![inner_product::pairing::<E>(m_a_1, m_b_1)], // IPC
+                    inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC
+                    inner_product::pairing::<E>(ck_b_1, m_b_1), // RMC
+                    inner_product::pairing::<E>(m_a_1, m_b_1),  // IPC
                 );
                 let com_2 = (
-                    inner_product::pairing::<E>(m_a_2, ck_a_2),      // LLMC
-                    inner_product::pairing::<E>(ck_b_2, m_b_2),      // RMC
-                    vec![inner_product::pairing::<E>(m_a_2, m_b_2)], // IPC
+                    inner_product::pairing::<E>(m_a_2, ck_a_2), // LLMC
+                    inner_product::pairing::<E>(ck_b_2, m_b_2), // RMC
+                    inner_product::pairing::<E>(m_a_2, m_b_2),  // IPC
                 );
 
                 // Fiat-Shamir challenge
@@ -414,11 +414,11 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
 
                 let com_1 = (
                     inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC::commit
-                    vec![inner_product::multiexponentiation::<E::G1>(m_a_1, m_b_1)], // IPC::commit
+                    inner_product::multiexponentiation::<E::G1>(m_a_1, m_b_1), // IPC::commit
                 );
                 let com_2 = (
                     inner_product::pairing::<E>(m_a_2, ck_a_2),
-                    vec![inner_product::multiexponentiation::<E::G1>(m_a_2, m_b_2)],
+                    inner_product::multiexponentiation::<E::G1>(m_a_2, m_b_2),
                 );
                 // Fiat-Shamir challenge
                 let mut counter_nonce: usize = 0;

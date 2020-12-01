@@ -16,7 +16,6 @@ use ff::{Field, PrimeField};
 use groupy::CurveProjective;
 use log::*;
 use rayon::prelude::*;
-use std::sync::Arc;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -116,40 +115,38 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 acc = mul!(acc, &r);
                 send_r.send((i, acc));
             }
-            drop(send_r);
         });
 
         // This channel is used to send the values of MUL_i S_i^r^ĵ as soon as
         // they're ready to the next routine that aggregates them
         let (send_gi, rcv_gi) = bounded(n);
         let NUM_WORKER = 4;
-        let table_si = Arc::new(precompute_fixed_window::<E>(&pvk.ic[1..], 1));
+
         let l = public_inputs[0].len(); // length of one public input instance
-        for i in (0..4) {
-            let recvri = rcv_r.clone();
-            let tablei = Arc::clone(&table_si);
-            s.spawn(move |_| {
-                while let Ok((power, ri)) = recvri.recv() {
-                    let ais = public_inputs
-                        .iter()
-                        .map(|inputs| {
-                            let mut ai = inputs[power].clone();
-                            ai.mul_assign(&ri);
-                            ai
-                        })
-                        .collect::<Vec<_>>();
-                    // MUL_i S_power ^ (a_i,power * r^power)
-                    let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { ais[i].into_repr() };
-                    let mut totsi = par_multiscalar::<_, E>(
-                        &ScalarList::Getter(getter, l),
-                        &tablei,
-                        std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
-                    );
-                    send_gi.send(totsi);
-                }
-                drop(send_gi);
-            });
-        }
+        let table_si = precompute_fixed_window::<E>(&pvk.ic[1..], 1);
+
+        s.spawn(move |_| {
+            let table_si = &table_si;
+
+            while let Ok((power, ri)) = rcv_r.recv() {
+                let ais = public_inputs
+                    .iter()
+                    .map(|inputs| {
+                        let mut ai = inputs[power];
+                        ai.mul_assign(&ri);
+                        ai
+                    })
+                    .collect::<Vec<_>>();
+                // MUL_i S_power ^ (a_i,power * r^power)
+                let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { ais[i].into_repr() };
+                let totsi = par_multiscalar::<_, E>(
+                    &ScalarList::Getter(getter, l),
+                    table_si,
+                    std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
+                );
+                send_gi.send(totsi).unwrap();
+            }
+        });
 
         // this routine simply aggregates all final values together
         s.spawn(move |_| {

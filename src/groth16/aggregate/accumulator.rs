@@ -1,4 +1,4 @@
-use crate::bls::{Engine, PairingCurveAffine};
+use crate::bls::Engine;
 use ff::Field;
 
 /// PairingTuple is an alias to a pair of
@@ -14,19 +14,19 @@ where
 {
     pub fn new() -> PairingTuple<E> {
         // "1" when final exponentiated / in target group, will be equal to 1 !
-        return Self(E::Fqk::one(), E::Fqk::one());
+        Self(E::Fqk::one(), E::Fqk::one())
     }
 
     pub fn new_invalid() -> PairingTuple<E> {
-        return Self(E::Fqk::one(), E::Fqk::zero());
+        Self(E::Fqk::one(), E::Fqk::zero())
     }
 
     pub fn from_miller(miller: E::Fqk) -> PairingTuple<E> {
-        return Self(miller, E::Fqk::one());
+        Self(miller, E::Fqk::one())
     }
 
     pub fn from_pair(miller: E::Fqk, exp: E::Fqk) -> PairingTuple<E> {
-        return Self(miller, exp);
+        Self(miller, exp)
     }
 
     pub fn merge(&mut self, p2: &PairingTuple<E>) {

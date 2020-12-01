@@ -7,13 +7,12 @@ use super::{
 };
 use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::PreparedVerifyingKey;
-use crossbeam_channel::unbounded;
+use crossbeam_channel::bounded;
 use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::CurveProjective;
 use log::*;
 use rayon::prelude::*;
-use std::sync::mpsc::channel;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -44,75 +43,61 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     assert_eq!(pvk.ic.len(), public_inputs[0].len() + 1);
 
     // channel used to aggregate all pairing tuples
-    let (send_tuple, rcv_tuple) = unbounded();
-    // channel used to send the final aggregated result
-    let (send_result, rcv_result) = unbounded();
+    let (send_tuple, rcv_tuple) = bounded(10);
 
-    rayon::scope(|s| {
-        s.spawn(move |_| {
-            // final value ip_ab is what we want to compare in the groth16
-            // aggregated equation A * B
-            let mut acc = PairingTuple::from_pair(E::Fqk::one(), proof.ip_ab.clone());
-            while let Ok(tuple) = rcv_tuple.recv() {
-                acc.merge(&tuple);
-            }
-            send_result.send(acc.verify());
-        });
-
+    rayon::scope(move |s| {
         // 1.Check TIPA proof ab
         let tipa_ab = send_tuple.clone();
         s.spawn(move |_| {
-            tipa_ab.send(verify_with_srs_shift::<E, D>(
+            let tuple = verify_with_srs_shift::<E, D>(
                 ip_verifier_srs,
                 (&proof.com_a, &proof.com_b, &proof.ip_ab),
                 &proof.tipa_proof_ab,
                 &r,
-            ));
+            );
+            tipa_ab.send(tuple).unwrap();
         });
 
         // 2.Check TIPA proof c
         let tipa_c = send_tuple.clone();
         s.spawn(move |_| {
-            tipa_c.send(verify_with_structured_scalar_message::<E, D>(
+            let tuple = verify_with_structured_scalar_message::<E, D>(
                 ip_verifier_srs,
                 (&proof.com_c, &proof.agg_c),
                 &r,
                 &proof.tipa_proof_c,
-            ));
+            );
+            tipa_c.send(tuple).unwrap();
         });
 
         // Check aggregate pairing product equation
         info!("checking aggregate pairing");
-        let r_sum = {
-            let a = sub!(r.pow(&[public_inputs.len() as u64]), &E::Fr::one());
-            let b = sub!(r, &E::Fr::one());
-            let b = b.inverse().unwrap();
-            mul!(a, &b)
-        };
+        let mut r_sum = r.pow(&[public_inputs.len() as u64]);
+        r_sum.sub_assign(&E::Fr::one());
+        let b = sub!(r, &E::Fr::one()).inverse().unwrap();
+        r_sum.mul_assign(&b);
 
         // 3. Compute left part of the final pairing equation
         let p1 = send_tuple.clone();
         s.spawn(move |_| {
-            p1.send({
-                let mut alpha_g1_r_sum = pvk.alpha_g1;
-                alpha_g1_r_sum.mul_assign(r_sum);
-                PairingTuple::from_miller(E::miller_loop(&[(
-                    &alpha_g1_r_sum.into_affine().prepare(),
-                    &pvk.beta_g2,
-                )]))
-            });
+            let mut alpha_g1_r_sum = pvk.alpha_g1;
+            alpha_g1_r_sum.mul_assign(r_sum);
+            let tuple = E::miller_loop(&[(&alpha_g1_r_sum.into_affine().prepare(), &pvk.beta_g2)]);
+
+            p1.send(PairingTuple::from_miller(tuple)).unwrap();
         });
 
         // 4. Compute right part of the final pairing equation
         let p3 = send_tuple.clone();
         s.spawn(move |_| {
-            p3.send(PairingTuple::from_miller(E::miller_loop(&[(
+            let tuple = PairingTuple::from_miller(E::miller_loop(&[(
                 &proof.agg_c.into_affine().prepare(),
                 &pvk.delta_g2,
-            )])));
+            )]));
+            p3.send(tuple).unwrap();
         });
 
-        let (r_vec_sender, r_vec_receiver) = channel();
+        let (r_vec_sender, r_vec_receiver) = bounded(1);
         s.spawn(move |_| {
             r_vec_sender
                 .send(structured_scalar_power(public_inputs.len(), &r))
@@ -153,15 +138,26 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 );
 
             g_ic.add_assign(&b);
-            send_tuple.send(PairingTuple::from_miller(E::miller_loop(&[(
+            let tuple = PairingTuple::from_miller(E::miller_loop(&[(
                 &g_ic.into_affine().prepare(),
                 &pvk.gamma_g2,
-            )])));
+            )]));
+
+            send_tuple.send(tuple).unwrap();
         });
     });
 
+    // final value ip_ab is what we want to compare in the groth16
+    // aggregated equation A * B
+    let mut acc = PairingTuple::from_pair(E::Fqk::one(), proof.ip_ab.clone());
+    while let Ok(tuple) = rcv_tuple.recv() {
+        acc.merge(&tuple);
+    }
+
+    let res = acc.verify();
     info!("aggregate verify done");
-    rcv_result.recv().expect("result should come")
+
+    res
 }
 
 fn verify_with_srs_shift<E: Engine, D: Digest>(

@@ -6,13 +6,17 @@ use super::{
     MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
 };
 use crate::bls::{Engine, PairingCurveAffine};
-use crate::groth16::PreparedVerifyingKey;
+use crate::groth16::{
+    multiscalar::{par_multiscalar, precompute_fixed_window, ScalarList},
+    PreparedVerifyingKey,
+};
 use crossbeam_channel::bounded;
 use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::CurveProjective;
 use log::*;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -97,54 +101,140 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             p3.send(tuple).unwrap();
         });
 
-        let (r_vec_sender, r_vec_receiver) = bounded(1);
-        s.spawn(move |_| {
-            r_vec_sender
-                .send(structured_scalar_power(public_inputs.len(), &r))
-                .unwrap();
-        });
-
         // 5. compute the middle part of the final pairing equation, the one
         //    with the public inputs
-        //let p2 = send_tuple.clone();
+        //
+        let n = public_inputs.len();
+        // This channel is used to send the values of r as soon as they are
+        // computed
+        let (send_r, rcv_r) = bounded(n);
+        s.spawn(move |_| {
+            let mut acc = E::Fr::one();
+            // we dont pass it since it's already computing in one line in r_sum
+            //send_r.send((0,acc.clone()));
+            for i in 1..n {
+                acc = mul!(acc, &r);
+                send_r.send((i, acc));
+            }
+            drop(send_r);
+        });
+
+        // This channel is used to send the values of MUL_i S_i^r^ĵ as soon as
+        // they're ready to the next routine that aggregates them
+        let (send_gi, rcv_gi) = bounded(n);
+        let NUM_WORKER = 4;
+        let table_si = Arc::new(precompute_fixed_window::<E>(&pvk.ic[1..], 1));
+        let l = public_inputs[0].len(); // length of one public input instance
+        for i in (0..4) {
+            let recvri = rcv_r.clone();
+            let tablei = Arc::clone(&table_si);
+            s.spawn(move |_| {
+                while let Ok((power, ri)) = recvri.recv() {
+                    let ais = public_inputs
+                        .iter()
+                        .map(|inputs| {
+                            let mut ai = inputs[power].clone();
+                            ai.mul_assign(&ri);
+                            ai
+                        })
+                        .collect::<Vec<_>>();
+                    // MUL_i S_power ^ (a_i,power * r^power)
+                    let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { ais[i].into_repr() };
+                    let mut totsi = par_multiscalar::<_, E>(
+                        &ScalarList::Getter(getter, l),
+                        &tablei,
+                        std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
+                    );
+                    send_gi.send(totsi);
+                }
+                drop(send_gi);
+            });
+        }
+
+        // this routine simply aggregates all final values together
         s.spawn(move |_| {
             let mut g_ic = pvk.ic_projective[0];
             g_ic.mul_assign(r_sum);
-
-            let r_vec = r_vec_receiver.recv().unwrap();
-            let b = pvk
-                .ic_projective
-                .par_iter()
-                .skip(1)
-                .enumerate()
-                .map(|(i, b)| {
-                    let ip = inner_product::scalar(
-                        &public_inputs
-                            .iter()
-                            .map(|inputs| inputs[i].clone())
-                            .collect::<Vec<E::Fr>>(),
-                        &r_vec,
-                    );
-                    let mut b = *b;
-                    b.mul_assign(ip);
-                    b
-                })
-                .reduce(
-                    || E::G1::zero(),
-                    |mut acc, curr| {
-                        acc.add_assign(&curr);
-                        acc
-                    },
-                );
-
-            g_ic.add_assign(&b);
+            while let Ok(gi) = rcv_gi.recv() {
+                g_ic.add_assign(&gi);
+            }
             let tuple = PairingTuple::from_miller(E::miller_loop(&[(
                 &g_ic.into_affine().prepare(),
                 &pvk.gamma_g2,
             )]));
-
             send_tuple.send(tuple).unwrap();
         });
+
+        /*s.spawn(move |_| {*/
+        //let mut g_ic = pvk.ic_projective[0];
+        //g_ic.mul_assign(r_sum);
+
+        //let l = public_inputs[0].len();
+        //// We want to compute MUL(i:0 -> l) S_i ^ (SUM(j:0 -> n) ai,j * r^j)
+        //// this table keeps tracks of incremental computation of each i-th
+        //// exponent to later multiply with S_i
+        //// The index of the table is i, which is an index of the public
+        //// input element
+        //// We incrementally build the r vector and the table
+        //// NOTE: in this version it's not r^2j but simply r^j
+        ////
+        //let mut table: Vec<_> = (0..l).map(|i| public_inputs[0][i]).collect();
+        //info!("Length of table {} - l = {}", table.len(), l);
+        //info!("Length of vk.ic {}", vk.ic.len());
+        //let mut power = E::Fr::one();
+        //for j in 1..public_inputs.len() {
+        //power = mul!(power.clone(), &r);
+        //table.par_iter_mut().enumerate().for_each(|(i, c)| {
+        //// i denotes the column of the public input, and j
+        //// denotes which public input
+        //let mut ai = public_inputs[j][i];
+        //ai.mul_assign(&power);
+        //c.add_assign(&ai);
+        //});
+        //}
+        //// now we do the multi exponentiation
+        //let table_w = precompute_fixed_window::<E>(&vk.ic[1..], 1);
+        //let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { table[i].into_repr() };
+        //let mut totsi = par_multiscalar::<_, E>(
+        //&ScalarList::Getter(getter, l),
+        //&table_w,
+        //std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
+        //);
+        //g_ic.add_assign(&totsi);
+        //[>     let r_vec = r_vec_receiver.recv().unwrap();<]
+        ////let b = pvk
+        ////.ic_projective
+        ////.par_iter()
+        ////.skip(1)
+        ////.enumerate()
+        ////.map(|(i, b)| {
+        ////let ip = inner_product::scalar(
+        ////&public_inputs
+        ////.iter()
+        ////.map(|inputs| inputs[i].clone())
+        ////.collect::<Vec<E::Fr>>(),
+        ////&r_vec,
+        ////);
+        ////let mut b = *b;
+        ////b.mul_assign(ip);
+        ////b
+        ////})
+        ////.reduce(
+        ////|| E::G1::zero(),
+        ////|mut acc, curr| {
+        ////acc.add_assign(&curr);
+        ////acc
+        ////},
+        ////);
+
+        //[>g_ic.add_assign(&b);<]
+        //let tuple = PairingTuple::from_miller(E::miller_loop(&[(
+        //&g_ic.into_affine().prepare(),
+        //&pvk.gamma_g2,
+        //)]));
+
+        //send_tuple.send(tuple).unwrap();
+        //});
     });
 
     // final value ip_ab is what we want to compare in the groth16

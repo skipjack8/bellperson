@@ -24,6 +24,7 @@ macro_rules! sub {
     }};
 }
 
+mod accumulator;
 mod inner_product;
 mod msm;
 mod poly;

@@ -1,11 +1,5 @@
-use digest::Digest;
-use ff::{Field, PrimeField};
-use groupy::CurveProjective;
-use log::*;
-use rayon::prelude::*;
-use std::sync::mpsc::channel;
-
 use super::{
+    accumulator::PairingTuple,
     inner_product,
     prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
     structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
@@ -13,6 +7,13 @@ use super::{
 };
 use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::PreparedVerifyingKey;
+use crossbeam_channel::unbounded;
+use digest::Digest;
+use ff::{Field, PrimeField};
+use groupy::CurveProjective;
+use log::*;
+use rayon::prelude::*;
+use std::sync::mpsc::channel;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -40,34 +41,44 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         counter_nonce += 1;
     };
 
-    let mut tipa_proof_ab_valid = E::Fqk::zero();
-    let mut tipa_proof_c_valid = E::Fqk::zero();
-    let mut p1 = E::Fqk::zero();
-    let mut p2 = E::Fqk::zero();
-    let mut p3 = E::Fqk::zero();
-
     assert_eq!(pvk.ic.len(), public_inputs[0].len() + 1);
 
+    // channel used to aggregate all pairing tuples
+    let (send_tuple, rcv_tuple) = unbounded();
+    // channel used to send the final aggregated result
+    let (send_result, rcv_result) = unbounded();
+
     rayon::scope(|s| {
-        // Check TIPA proofs
-        let valid = &mut tipa_proof_ab_valid;
         s.spawn(move |_| {
-            *valid = verify_with_srs_shift::<E, D>(
+            // final value ip_ab is what we want to compare in the groth16
+            // aggregated equation A * B
+            let mut acc = PairingTuple::from_pair(E::Fqk::one(), proof.ip_ab.clone());
+            while let Ok(tuple) = rcv_tuple.recv() {
+                acc.merge(&tuple);
+            }
+            send_result.send(acc.verify());
+        });
+
+        // 1.Check TIPA proof ab
+        let tipa_ab = send_tuple.clone();
+        s.spawn(move |_| {
+            tipa_ab.send(verify_with_srs_shift::<E, D>(
                 ip_verifier_srs,
                 (&proof.com_a, &proof.com_b, &proof.ip_ab),
                 &proof.tipa_proof_ab,
                 &r,
-            );
+            ));
         });
 
-        let valid = &mut tipa_proof_c_valid;
+        // 2.Check TIPA proof c
+        let tipa_c = send_tuple.clone();
         s.spawn(move |_| {
-            *valid = verify_with_structured_scalar_message::<E, D>(
+            tipa_c.send(verify_with_structured_scalar_message::<E, D>(
                 ip_verifier_srs,
                 (&proof.com_c, &proof.agg_c),
                 &r,
                 &proof.tipa_proof_c,
-            );
+            ));
         });
 
         // Check aggregate pairing product equation
@@ -79,17 +90,26 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             mul!(a, &b)
         };
 
-        let p1 = &mut p1;
-        let p2 = &mut p2;
-        let p3 = &mut p3;
-
+        // 3. Compute left part of the final pairing equation
+        let p1 = send_tuple.clone();
         s.spawn(move |_| {
-            *p1 = {
+            p1.send({
                 let mut alpha_g1_r_sum = pvk.alpha_g1;
                 alpha_g1_r_sum.mul_assign(r_sum);
-                E::miller_loop(&[(&alpha_g1_r_sum.into_affine().prepare(), &pvk.beta_g2)])
-            };
-            *p3 = E::miller_loop(&[(&proof.agg_c.into_affine().prepare(), &pvk.delta_g2)]);
+                PairingTuple::from_miller(E::miller_loop(&[(
+                    &alpha_g1_r_sum.into_affine().prepare(),
+                    &pvk.beta_g2,
+                )]))
+            });
+        });
+
+        // 4. Compute right part of the final pairing equation
+        let p3 = send_tuple.clone();
+        s.spawn(move |_| {
+            p3.send(PairingTuple::from_miller(E::miller_loop(&[(
+                &proof.agg_c.into_affine().prepare(),
+                &pvk.delta_g2,
+            )])));
         });
 
         let (r_vec_sender, r_vec_receiver) = channel();
@@ -99,6 +119,9 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 .unwrap();
         });
 
+        // 5. compute the middle part of the final pairing equation, the one
+        //    with the public inputs
+        //let p2 = send_tuple.clone();
         s.spawn(move |_| {
             let mut g_ic = pvk.ic_projective[0];
             g_ic.mul_assign(r_sum);
@@ -130,20 +153,15 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 );
 
             g_ic.add_assign(&b);
-            *p2 = E::miller_loop(&[(&g_ic.into_affine().prepare(), &pvk.gamma_g2)]);
+            send_tuple.send(PairingTuple::from_miller(E::miller_loop(&[(
+                &g_ic.into_affine().prepare(),
+                &pvk.gamma_g2,
+            )])));
         });
     });
 
-    let p1_p2_p3 = mul!(p1, &mul!(p2, &p3));
-    // if proofs are valid, proof_ab and proof_ac are equal to 1 (after final
-    // exponentiation) so multiply
-    // won't change the results, it's still p1_p2_p3
-    let proof_and_p123 = mul!(mul!(tipa_proof_ab_valid, &tipa_proof_c_valid), &p1_p2_p3);
-    let p123 = E::final_exponentiation(&proof_and_p123).unwrap();
-    let ppe_valid = proof.ip_ab == p123;
-
     info!("aggregate verify done");
-    ppe_valid
+    rcv_result.recv().expect("result should come")
 }
 
 fn verify_with_srs_shift<E: Engine, D: Digest>(
@@ -151,7 +169,7 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     com: (&E::Fqk, &E::Fqk, &E::Fqk),
     proof: &PairingInnerProductABProof<E, D>,
     r_shift: &E::Fr,
-) -> E::Fqk {
+) -> PairingTuple<E> {
     info!("verify with srs shift");
     let (base_com, transcript, transcript_inverse) =
         gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
@@ -178,7 +196,6 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
         counter_nonce += 1;
     };
 
-    // if valid aid == 1
     let aid = verify_commitment_key_g2_kzg_opening(
         v_srs,
         &ck_a_final,
@@ -187,7 +204,6 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
         &r_shift.inverse().unwrap(),
         &c,
     );
-    // if valid bid == 1
     let bid = verify_commitment_key_g1_kzg_opening(
         v_srs,
         &ck_b_final,
@@ -201,26 +217,25 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     let (com_a, com_b, com_t) = base_com;
     let a_base = [proof.gipa_proof.r_base.0.clone()];
     let b_base = [proof.gipa_proof.r_base.1.clone()];
-    let t_base = inner_product::pairing::<E>(&a_base, &b_base);
+    // LMC::verify - pairing inner product<E>
+    let mut a = PairingTuple::from_pair(
+        inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
+        com_a,
+    );
+    // RMC::verify - afgho commitment G1
+    let b = PairingTuple::from_pair(
+        inner_product::pairing_miller::<E>(&[ck_b_final.clone()], &b_base),
+        com_b,
+    );
+    // IPC::verify - identity commitment<Fqk, Fr>
+    let t_base =
+        PairingTuple::from_pair(inner_product::pairing_miller::<E>(&a_base, &b_base), com_t);
 
-    let base_valid = {
-        // LMC::verify - pairing inner product<E>
-        let a = inner_product::pairing::<E>(&a_base, &[ck_a_final.clone()]) == com_a;
-        // RMC::verify - afgho commitment G1
-        let b = inner_product::pairing::<E>(&[ck_b_final.clone()], &b_base) == com_b;
-        // IPC::verify - identity commitment<Fqk, Fr>
-        let c = t_base == com_t;
-
-        a && b && c
-    };
-
-    // we return a Fqk element that is supposed to be equal to Fqk::one when
-    // put into the final exponentiation
-    if base_valid {
-        mul!(aid, &bid)
-    } else {
-        E::Fqk::zero()
-    }
+    a.merge(&b);
+    a.merge(&t_base);
+    a.merge(&aid);
+    a.merge(&bid);
+    a
 }
 
 fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
@@ -303,7 +318,7 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
     transcript: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
-) -> E::Fqk {
+) -> PairingTuple<E> {
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
 
@@ -320,7 +335,8 @@ pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
         &ck_opening.into_affine().prepare(),
     )]);
     let ip1 = p1.inverse().unwrap();
-    mul!(ip1, &p2)
+    // this pair should be one when multiplied
+    PairingTuple::from_miller(mul!(ip1, &p2))
 }
 
 pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
@@ -330,7 +346,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
     transcript: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
-) -> E::Fqk {
+) -> PairingTuple<E> {
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
     let p1 = E::miller_loop(&[(
@@ -346,7 +362,7 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
             .prepare(),
     )]);
     let ip1 = p1.inverse().unwrap();
-    mul!(ip1, &p2)
+    PairingTuple::from_miller(mul!(ip1, &p2))
 }
 
 fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
@@ -354,7 +370,7 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     com: (&E::Fqk, &E::G1),
     scalar_b: &E::Fr,
     proof: &MultiExpInnerProductCProof<E, D>,
-) -> E::Fqk {
+) -> PairingTuple<E> {
     info!("verify with structured scalar message");
     let (base_com, transcript, transcript_inverse) =
         gipa_with_ssm_verify_recursive_challenge_transcript((com.0, com.1), &proof.gipa_proof);
@@ -381,7 +397,7 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     };
 
     // Check commitment key
-    let aid = verify_commitment_key_g2_kzg_opening(
+    let mut aid = verify_commitment_key_g2_kzg_opening(
         v_srs,
         &ck_a_final,
         &ck_a_proof,
@@ -405,12 +421,19 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     let (com_a, com_t) = base_com;
     let a_base = [proof.gipa_proof.r_base.0.clone()];
     let t_base = inner_product::multiexponentiation(&a_base, &[b_base]);
-    let a = inner_product::pairing::<E>(&a_base, &[ck_a_final.clone()]) == com_a;
+    let a = PairingTuple::from_pair(
+        inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
+        com_a.clone(),
+    );
     let b = t_base == com_t;
-    if a && b {
+
+    // only check that doesn't require pairing so we can give a tuple that will
+    // render the equation wrong in case it's false
+    if b {
+        aid.merge(&a);
         aid
     } else {
-        E::Fqk::zero()
+        PairingTuple::new_invalid()
     }
 }
 

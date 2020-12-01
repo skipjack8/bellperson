@@ -42,10 +42,11 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
     assert_eq!(pvk.ic.len(), public_inputs[0].len() + 1);
 
-    // channel used to aggregate all pairing tuples
-    let (send_tuple, rcv_tuple) = bounded(10);
-
+    let (valid_send, valid_rcv) = bounded(1);
     rayon::scope(move |s| {
+        // channel used to aggregate all pairing tuples
+        let (send_tuple, rcv_tuple) = bounded(10);
+
         // 1.Check TIPA proof ab
         let tipa_ab = send_tuple.clone();
         s.spawn(move |_| {
@@ -145,16 +146,19 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
             send_tuple.send(tuple).unwrap();
         });
+
+        s.spawn(move |_| {
+            // final value ip_ab is what we want to compare in the groth16
+            // aggregated equation A * B
+            let mut acc = PairingTuple::from_pair(E::Fqk::one(), proof.ip_ab.clone());
+            while let Ok(tuple) = rcv_tuple.recv() {
+                acc.merge(&tuple);
+            }
+            valid_send.send(acc.verify()).unwrap();
+        });
     });
 
-    // final value ip_ab is what we want to compare in the groth16
-    // aggregated equation A * B
-    let mut acc = PairingTuple::from_pair(E::Fqk::one(), proof.ip_ab.clone());
-    while let Ok(tuple) = rcv_tuple.recv() {
-        acc.merge(&tuple);
-    }
-
-    let res = acc.verify();
+    let res = valid_rcv.recv().unwrap();
     info!("aggregate verify done");
 
     res

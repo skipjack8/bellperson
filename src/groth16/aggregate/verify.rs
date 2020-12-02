@@ -2,8 +2,8 @@ use super::{
     accumulator::PairingTuple,
     inner_product,
     prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
-    AggregateProof, GIPAProof, GIPAProofWithSSM, MultiExpInnerProductCProof,
-    PairingInnerProductABProof, VerifierSRS,
+    structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
+    MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
 };
 use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::{
@@ -15,7 +15,6 @@ use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::CurveProjective;
 use log::*;
-use rayon::prelude::*;
 
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
@@ -101,13 +100,17 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             p3.send(tuple).unwrap();
         });
 
+        let (r_vec_sender, r_vec_receiver) = bounded(1);
+        s.spawn(move |_| {
+            r_vec_sender
+                .send(structured_scalar_power(public_inputs.len(), &r))
+                .unwrap();
+        });
+
         // 5. compute the middle part of the final pairing equation, the one
         //    with the public inputs
         //let p2 = send_tuple.clone();
         s.spawn(move |_| {
-            info!("ipsc:start");
-            let l = public_inputs[0].len();
-
             // We want to compute MUL(i:0 -> l) S_i ^ (SUM(j:0 -> n) ai,j * r^j)
             // this table keeps tracks of incremental computation of each i-th
             // exponent to later multiply with S_i
@@ -116,32 +119,30 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
             // We incrementally build the r vector and the table
             // NOTE: in this version it's not r^2j but simply r^j
 
-            info!("build table:start");
-            let mut table: Vec<_> = (0..l).map(|i| public_inputs[0][i]).collect();
-            let mut power = E::Fr::one();
-            for j in 1..public_inputs.len() {
-                power = mul!(power.clone(), &r);
-                table.par_iter_mut().enumerate().for_each(|(i, c)| {
-                    // i denotes the column of the public input, and j
-                    // denotes which public input
-                    let mut ai = public_inputs[j][i];
-                    ai.mul_assign(&power);
-                    c.add_assign(&ai);
-                });
-            }
-            info!("build table:end");
+            let l = public_inputs[0].len();
+            let mut g_ic = pvk.ic_projective[0];
+            g_ic.mul_assign(r_sum);
+
+            let powers = r_vec_receiver.recv().unwrap();
+
             // now we do the multi exponentiation
-            let getter = |i: usize| -> <E::Fr as PrimeField>::Repr { table[i].into_repr() };
-            info!("par multiscalar:start");
+            let getter = |i: usize| -> <E::Fr as PrimeField>::Repr {
+                // i denotes the column of the public input, and j denotes which public input
+                let mut c = public_inputs[0][i];
+                for j in 1..public_inputs.len() {
+                    let mut ai = public_inputs[j][i];
+                    ai.mul_assign(&powers[j]);
+                    c.add_assign(&ai);
+                }
+                c.into_repr()
+            };
+
             let totsi = par_multiscalar::<_, E>(
                 &ScalarList::Getter(getter, l),
                 &pvk.multiscalar_ip,
                 std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
             );
-            info!("par multiscalar:end");
 
-            let mut g_ic = pvk.ic_projective[0];
-            g_ic.mul_assign(r_sum);
             g_ic.add_assign(&totsi);
 
             let tuple = PairingTuple::from_miller(E::miller_loop(&[(
@@ -149,7 +150,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 &pvk.gamma_g2,
             )]));
 
-            info!("ipsc:end");
             send_tuple.send(tuple).unwrap();
         });
 

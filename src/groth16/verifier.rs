@@ -15,7 +15,8 @@ pub fn prepare_verifying_key<E: Engine>(vk: &VerifyingKey<E>) -> PreparedVerifyi
     neg_delta.negate();
 
     let multiscalar = multiscalar::precompute_fixed_window(&vk.ic, multiscalar::WINDOW_SIZE);
-    let multiscalar_ip = multiscalar::precompute_fixed_window(&vk.ic[1..], 1);
+    let multiscalar_ip =
+        multiscalar::precompute_fixed_window(&vk.ic[1..], multiscalar::WINDOW_SIZE);
 
     PreparedVerifyingKey {
         alpha_g1_beta_g2: E::pairing(vk.alpha_g1, vk.beta_g2),

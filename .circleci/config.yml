@@ -220,7 +220,7 @@ jobs:
     executor: default
     #environment: *setup-env
     environment:
-      PATH: "$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"
+      PATH: $HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH
 
     steps:
       - *restore-workspace

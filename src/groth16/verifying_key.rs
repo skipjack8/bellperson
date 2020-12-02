@@ -232,5 +232,4 @@ pub struct PreparedVerifyingKey<E: Engine> {
     pub(crate) alpha_g1: E::G1,
     pub(crate) beta_g2: <E::G2Affine as PairingCurveAffine>::Prepared,
     pub(crate) ic_projective: Vec<E::G1>,
-    pub(crate) multiscalar_ip: multiscalar::MultiscalarPrecompOwned<E>,
 }

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::{
-    multiscalar::{par_multiscalar, ScalarList},
+    multiscalar::{par_multiscalar, MultiscalarPrecomp, ScalarList},
     PreparedVerifyingKey,
 };
 use crossbeam_channel::bounded;
@@ -139,7 +139,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
             let totsi = par_multiscalar::<_, E>(
                 &ScalarList::Getter(getter, l),
-                &pvk.multiscalar_ip,
+                &pvk.multiscalar.at_point(1),
                 std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
             );
 

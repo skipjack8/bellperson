@@ -235,7 +235,12 @@ jobs:
     steps:
       - *restore-workspace
       - *restore-cache
-      - run: *set-env-path
+      #- run: *set-env-path
+      - run:
+          name: Set the PATH env variable
+          command: |
+            echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
+            source $BASH_ENV
       - run:
           name: Generate coverage report
           command: |

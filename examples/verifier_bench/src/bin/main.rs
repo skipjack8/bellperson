@@ -202,14 +202,16 @@ fn main() {
 
         let (inputs, proofs, agg_proof) = if opts.dummy {
             let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
-            let agg_proof = srs
-                .as_ref()
-                .map(|srs| aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs));
-            (
-                dummy_inputs::<Bls12, _>(opts.public, rng),
-                proofs,
-                agg_proof,
-            )
+
+            let agg_proof = srs.as_ref().map(|srs| {
+                let (agg, took) = timer!(aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs));
+                println!("Proof aggregation finished in {}ms", took);
+                agg
+            });
+
+            let inputs = dummy_inputs::<Bls12, _>(opts.public, rng);
+
+            (inputs, proofs, agg_proof)
         } else {
             let mut inputs = Vec::new();
             let mut num = Fr::one();

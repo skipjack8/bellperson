@@ -3,11 +3,14 @@ use groupy::{CurveAffine, CurveProjective};
 
 use super::msm;
 use crate::bls::Engine;
+use crate::groth16::multiscalar::{precompute_fixed_window, MultiscalarPrecompOwned, WINDOW_SIZE};
 
 #[derive(Clone, Debug)]
 pub struct SRS<E: Engine> {
     pub g_alpha_powers: Vec<E::G1Affine>,
+    pub g_alpha_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
     pub h_beta_powers: Vec<E::G2Affine>,
+    pub h_beta_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
     pub g_beta: E::G1,
     pub h_alpha: E::G2,
 }
@@ -56,9 +59,33 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
     let mut h_alpha = h;
     h_alpha.mul_assign(alpha);
 
+    let mut g_alpha_powers = Vec::new();
+    let mut h_beta_powers = Vec::new();
+    rayon::scope(|s| {
+        let g = &g;
+        let alpha = &alpha;
+        let h = &h;
+        let beta = &beta;
+
+        let g_alpha_powers = &mut g_alpha_powers;
+        s.spawn(move |_| {
+            *g_alpha_powers = structured_generators_scalar_power(2 * size - 1, g, alpha);
+        });
+
+        let h_beta_powers = &mut h_beta_powers;
+        s.spawn(move |_| {
+            *h_beta_powers = structured_generators_scalar_power(2 * size - 1, h, beta);
+        });
+    });
+
+    let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers, WINDOW_SIZE);
+    let h_beta_powers_table = precompute_fixed_window(&h_beta_powers, WINDOW_SIZE);
+
     SRS {
-        g_alpha_powers: structured_generators_scalar_power(2 * size - 1, &g, &alpha),
-        h_beta_powers: structured_generators_scalar_power(2 * size - 1, &h, &beta),
+        g_alpha_powers,
+        g_alpha_powers_table,
+        h_beta_powers,
+        h_beta_powers_table,
         g_beta,
         h_alpha,
     }

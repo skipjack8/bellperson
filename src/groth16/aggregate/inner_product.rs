@@ -2,8 +2,8 @@ use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use rayon::prelude::*;
 
-use super::msm;
 use crate::bls::{Engine, PairingCurveAffine};
+use crate::groth16::multiscalar::*;
 
 pub fn pairing_miller_affine<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) -> E::Fqk {
     assert_eq!(left.len(), right.len());
@@ -39,22 +39,22 @@ pub fn pairing_affine<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) ->
     E::final_exponentiation(&pairing_miller_affine::<E>(left, right)).expect("invalid pairing")
 }
 
-pub fn multiexponentiation<G: CurveProjective>(left: &[G], right: &[G::Scalar]) -> G {
+pub fn multiexponentiation<G: CurveAffine>(left: &[G], right: &[G::Scalar]) -> G::Projective {
     assert_eq!(left.len(), right.len());
-    msm::variable_base::multi_scalar_mul(
-        &left.par_iter().map(|b| b.into_affine()).collect::<Vec<_>>(),
-        &right.par_iter().map(|b| b.into_repr()).collect::<Vec<_>>(),
-    )
+
+    let table = precompute_fixed_window::<G>(&left, WINDOW_SIZE);
+    multiexponentiation_with_table::<G>(&table, right)
 }
 
-pub fn multiexponentiation_affine<G: CurveAffine>(
-    left: &[G],
+pub fn multiexponentiation_with_table<G: CurveAffine>(
+    table: &dyn MultiscalarPrecomp<G>,
     right: &[G::Scalar],
 ) -> G::Projective {
-    assert_eq!(left.len(), right.len());
-    msm::variable_base::multi_scalar_mul(
-        &left,
-        &right.par_iter().map(|b| b.into_repr()).collect::<Vec<_>>(),
+    let getter = |i: usize| -> <G::Scalar as PrimeField>::Repr { right[i].into_repr() };
+    par_multiscalar::<_, G>(
+        &ScalarList::Getter(getter, right.len()),
+        table,
+        std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
     )
 }
 

@@ -137,7 +137,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 c.into_repr()
             };
 
-            let totsi = par_multiscalar::<_, E>(
+            let totsi = par_multiscalar::<_, E::G1Affine>(
                 &ScalarList::Getter(getter, l),
                 &pvk.multiscalar.at_point(1),
                 std::mem::size_of::<<E::Fr as PrimeField>::Repr>() * 8,
@@ -425,10 +425,10 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
 
     // Verify base inner product commitment
     let (com_a, com_t) = base_com;
-    let a_base = [proof.gipa_proof.r_base.0.clone()];
+    let a_base = [proof.gipa_proof.r_base.0.clone().into_affine()];
     let t_base = inner_product::multiexponentiation(&a_base, &[b_base]);
     let a = PairingTuple::from_pair(
-        inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
+        inner_product::pairing_miller_affine::<E>(&a_base, &[ck_a_final.into_affine()]),
         com_a.clone(),
     );
     let b = t_base == com_t;

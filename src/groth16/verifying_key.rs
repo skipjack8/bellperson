@@ -226,7 +226,7 @@ pub struct PreparedVerifyingKey<E: Engine> {
     /// Copy of IC from `VerifiyingKey`.
     pub(crate) ic: Vec<E::G1Affine>,
 
-    pub(crate) multiscalar: multiscalar::MultiscalarPrecompOwned<E>,
+    pub(crate) multiscalar: multiscalar::MultiscalarPrecompOwned<E::G1Affine>,
 
     // Aggregation specific prep
     pub(crate) alpha_g1: E::G1,

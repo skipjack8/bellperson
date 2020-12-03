@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{inner_product, poly::DensePolynomial, structured_scalar_power, SRS};
 use crate::bls::Engine;
-use crate::groth16::Proof;
+use crate::groth16::{multiscalar::*, Proof};
 
 #[derive(Serialize, Deserialize)]
 pub struct AggregateProof<E: Engine, D: Digest> {
@@ -249,7 +249,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
         let agg_c = &mut agg_c;
         s.spawn(move |_| {
-            *agg_c = inner_product::multiexponentiation_affine::<E::G1Affine>(&c, r_vec);
+            *agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec);
         });
     });
     info!("scope:end");
@@ -314,7 +314,8 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
         let ck_a_kzg_opening = &mut ck_a_kzg_opening;
         s.spawn(move |_| {
             *ck_a_kzg_opening = prove_commitment_key_kzg_opening(
-                &srs.h_beta_powers,
+                &srs.h_beta_powers_table,
+                srs.h_beta_powers.len(),
                 &transcript_inverse,
                 &r_inverse,
                 &c,
@@ -324,7 +325,8 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
         let ck_b_kzg_opening = &mut ck_b_kzg_opening;
         s.spawn(move |_| {
             *ck_b_kzg_opening = prove_commitment_key_kzg_opening(
-                &srs.g_alpha_powers,
+                &srs.g_alpha_powers_table,
+                srs.g_alpha_powers.len(),
                 &transcript,
                 &<E::Fr>::one(),
                 &c,
@@ -357,13 +359,15 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
         assert!(m_a.len().is_power_of_two());
+
+        info!("loop:start");
+        let mut count = 0;
         let (m_base, ck_base) = 'recurse: loop {
+            info!("loop:round {}", count);
+            count += 1;
             if m_a.len() == 1 {
                 // base case
-                break 'recurse (
-                    (m_a[0].clone(), m_b[0].clone()),
-                    (ck_a[0].clone(), ck_b[0].clone()),
-                );
+                break 'recurse ((m_a[0], m_b[0]), (ck_a[0], ck_b[0]));
             } else {
                 // recursive step
                 // Recurse with problem of half size
@@ -379,33 +383,37 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let ck_b_1 = &ck_b[split..];
                 let ck_b_2 = &ck_b[..split];
 
-                let com_1 = (
-                    inner_product::pairing_affine::<E>(m_a_1, ck_a_1), // LMC
-                    inner_product::pairing_affine::<E>(ck_b_1, m_b_1), // RMC
-                    inner_product::pairing_affine::<E>(m_a_1, m_b_1),  // IPC
-                );
-                let com_2 = (
-                    inner_product::pairing_affine::<E>(m_a_2, ck_a_2), // LLMC
-                    inner_product::pairing_affine::<E>(ck_b_2, m_b_2), // RMC
-                    inner_product::pairing_affine::<E>(m_a_2, m_b_2),  // IPC
-                );
+                let mut com_1 = [
+                    (m_a_1, ck_a_1),
+                    (ck_b_1, m_b_1),
+                    (m_a_1, m_b_1),
+                    (m_a_2, ck_a_2),
+                    (ck_b_2, m_b_2),
+                    (m_a_2, m_b_2),
+                ]
+                .into_par_iter()
+                .map(|(left, right)| inner_product::pairing_affine::<E>(left, right))
+                .collect::<Vec<_>>();
+
+                let com_2 = com_1.split_off(3);
 
                 // Fiat-Shamir challenge
                 let mut counter_nonce: usize = 0;
                 let default_transcript = E::Fr::zero();
                 let transcript = r_transcript.last().unwrap_or(&default_transcript);
+                info!("inner loop:start");
                 let (c, c_inv) = 'challenge: loop {
                     let mut hash_input = Vec::new();
                     hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
                     bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
 
-                    bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_1[0]).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_1[1]).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_1[2]).expect("vec");
 
-                    bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_2[0]).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_2[1]).expect("vec");
+                    bincode::serialize_into(&mut hash_input, &com_2[2]).expect("vec");
 
                     let d = D::digest(&hash_input);
                     let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -417,6 +425,7 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 
                     counter_nonce += 1;
                 };
+                info!("inner loop:end {}", counter_nonce);
 
                 // Set up values for next step of recursion
                 m_a = m_a_1
@@ -447,10 +456,15 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                     .map(|(b_1, b_2)| add!(b_1, &b_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
-                r_commitment_steps.push((com_1, com_2));
+                r_commitment_steps.push((
+                    (com_1[0], com_1[1], com_1[2]),
+                    (com_2[0], com_2[1], com_2[2]),
+                ));
                 r_transcript.push(c);
             }
         };
+        info!("loop:end ({})", count);
+
         r_transcript.reverse();
         r_commitment_steps.reverse();
         info!("prove_with_aux:end");
@@ -519,14 +533,21 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                 let m_b_1 = &m_b[..split];
                 let m_b_2 = &m_b[split..];
 
-                let com_1 = (
-                    inner_product::pairing_affine::<E>(m_a_1, ck_a_1), // LMC::commit
-                    inner_product::multiexponentiation_affine::<E::G1Affine>(m_a_1, m_b_1), // IPC::commit
+                let (com_1, com_2) = rayon::join(
+                    || {
+                        rayon::join(
+                            || inner_product::pairing_affine::<E>(m_a_1, ck_a_1), // LMC::commit
+                            || inner_product::multiexponentiation::<E::G1Affine>(m_a_1, m_b_1), // IPC::commit
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || inner_product::pairing_affine::<E>(m_a_2, ck_a_2),
+                            || inner_product::multiexponentiation::<E::G1Affine>(m_a_2, m_b_2),
+                        )
+                    },
                 );
-                let com_2 = (
-                    inner_product::pairing_affine::<E>(m_a_2, ck_a_2),
-                    inner_product::multiexponentiation_affine::<E::G1Affine>(m_a_2, m_b_2),
-                );
+
                 // Fiat-Shamir challenge
                 let mut counter_nonce: usize = 0;
                 let default_transcript = E::Fr::zero();
@@ -556,23 +577,23 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
 
                 // Set up values for next step of recursion
                 m_a = m_a_1
-                    .iter()
+                    .par_iter()
                     .map(|a| mul!(a.into_projective(), c))
-                    .zip(m_a_2)
+                    .zip(m_a_2.par_iter())
                     .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
                 m_b = m_b_2
-                    .iter()
+                    .par_iter()
                     .map(|b| mul!(*b, &c_inv))
-                    .zip(m_b_1)
+                    .zip(m_b_1.par_iter())
                     .map(|(b_1, b_2)| add!(b_1, b_2))
                     .collect::<Vec<_>>();
 
                 ck_a = ck_a_2
-                    .iter()
+                    .par_iter()
                     .map(|a| mul!(a.into_projective(), c_inv))
-                    .zip(ck_a_1)
+                    .zip(ck_a_1.par_iter())
                     .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
@@ -598,8 +619,10 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
         )
     }
 }
-pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
-    srs_powers: &[G::Affine],
+
+fn prove_commitment_key_kzg_opening<G: CurveProjective>(
+    srs_powers_table: &dyn MultiscalarPrecomp<G::Affine>,
+    srs_powers_len: usize,
     transcript: &[G::Scalar],
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
@@ -607,7 +630,7 @@ pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     info!("prove_commitment_key_kzg_opening:start");
     let ck_polynomial =
         DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(transcript, r_shift));
-    assert_eq!(srs_powers.len(), ck_polynomial.coeffs().len());
+    assert_eq!(srs_powers_len, ck_polynomial.coeffs().len());
 
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(&transcript, kzg_challenge, &r_shift);
@@ -620,12 +643,26 @@ pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
         - &DensePolynomial::from_coeffs(vec![ck_polynomial_c_eval]))
         / &(DensePolynomial::from_coeffs(vec![neg_kzg_challenge, G::Scalar::one()]));
 
-    let mut quotient_polynomial_coeffs = quotient_polynomial.into_coeffs();
-    quotient_polynomial_coeffs.resize(srs_powers.len(), G::Scalar::zero());
+    let quotient_polynomial_coeffs = quotient_polynomial.into_coeffs();
 
     info!("kzg:multiexp");
-    let opening =
-        inner_product::multiexponentiation_affine(srs_powers, &quotient_polynomial_coeffs);
+
+    // multiexponentiation inner_product, inlined to optimize
+    let zero = G::Scalar::zero().into_repr();
+    let quotient_polynomial_coeffs_len = quotient_polynomial_coeffs.len();
+    let getter = |i: usize| -> <G::Scalar as PrimeField>::Repr {
+        if i >= quotient_polynomial_coeffs_len {
+            return zero;
+        }
+        quotient_polynomial_coeffs[i].into_repr()
+    };
+
+    let opening = par_multiscalar::<_, G::Affine>(
+        &ScalarList::Getter(getter, srs_powers_len),
+        srs_powers_table,
+        std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
+    );
+
     info!("prove_commitment_key_kzg_opening:end");
     opening
 }
@@ -710,7 +747,8 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
 
     // Complete KZG proof
     let ck_a_kzg_opening = prove_commitment_key_kzg_opening(
-        &srs.h_beta_powers,
+        &srs.h_beta_powers_table,
+        srs.h_beta_powers.len(),
         &transcript_inverse,
         &E::Fr::one(),
         &c,

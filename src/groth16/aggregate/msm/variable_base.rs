@@ -70,15 +70,17 @@ pub fn multi_scalar_mul<G: CurveAffine>(
     let mut res = *window_sums.first().unwrap();
 
     // We're traversing windows from high to low.
-    res.add_assign(&window_sums[1..].into_par_iter().rev().copied().reduce(
-        || zero,
-        |mut total, sum_i| {
-            total.add_assign(&sum_i);
-            for _ in 0..c {
-                total.double();
-            }
-            total
-        },
-    ));
+    res.add_assign(
+        &window_sums[1..]
+            .iter()
+            .rev()
+            .fold(zero, |mut total, sum_i| {
+                total.add_assign(&sum_i);
+                for _ in 0..c {
+                    total.double();
+                }
+                total
+            }),
+    );
     res
 }

@@ -4,6 +4,8 @@ use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use itertools::Itertools;
+use log::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::{inner_product, poly::DensePolynomial, structured_scalar_power, SRS};
@@ -117,29 +119,46 @@ pub struct GIPAAuxWithSSM<E: Engine, D: Digest> {
     pub _marker: PhantomData<D>,
 }
 
-pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
+pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
 ) -> AggregateProof<E, D> {
-    let a = proofs
-        .iter()
-        .map(|proof| proof.a.into_projective())
-        .collect::<Vec<E::G1>>();
-    let b = proofs
-        .iter()
-        .map(|proof| proof.b.into_projective())
-        .collect::<Vec<E::G2>>();
-    let c = proofs
-        .iter()
-        .map(|proof| proof.c.into_projective())
-        .collect::<Vec<E::G1>>();
-
+    info!("aggregate_proofs");
     let (ck_1, ck_2) = ip_srs.get_commitment_keys();
 
-    let com_a = inner_product::pairing::<E>(&a, &ck_1);
-    let com_b = inner_product::pairing::<E>(&ck_2, &b);
-    let com_c = inner_product::pairing::<E>(&c, &ck_1);
+    let mut a = Vec::new();
+    let mut com_a = E::Fqk::zero();
+    let mut b = Vec::new();
+    let mut com_b = E::Fqk::zero();
+    let mut c = Vec::new();
+    let mut com_c = E::Fqk::zero();
+    rayon::scope(|s| {
+        let ck_1 = &ck_1;
+        let ck_2 = &ck_2;
 
+        let a = &mut a;
+        let com_a = &mut com_a;
+        s.spawn(move |_| {
+            *a = proofs.par_iter().map(|proof| proof.a).collect::<Vec<_>>();
+            *com_a = inner_product::pairing_affine::<E>(&a, ck_1);
+        });
+
+        let b = &mut b;
+        let com_b = &mut com_b;
+        s.spawn(move |_| {
+            *b = proofs.par_iter().map(|proof| proof.b).collect::<Vec<_>>();
+            *com_b = inner_product::pairing_affine::<E>(ck_2, &b);
+        });
+
+        let c = &mut c;
+        let com_c = &mut com_c;
+        s.spawn(move |_| {
+            *c = proofs.par_iter().map(|proof| proof.c).collect::<Vec<_>>();
+            *com_c = inner_product::pairing_affine::<E>(&c, ck_1);
+        });
+    });
+
+    info!("compute r");
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
     let r = loop {
@@ -155,25 +174,87 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
 
         counter_nonce += 1;
     };
+    info!("compute r_vec");
     let r_vec = structured_scalar_power(proofs.len(), &r);
-    let a_r = a
-        .iter()
-        .zip(&r_vec)
-        .map(|(a, r)| mul!(*a, *r))
-        .collect::<Vec<E::G1>>();
-    let ip_ab = inner_product::pairing::<E>(&a_r, &b);
-    let agg_c = inner_product::multiexponentiation::<E::G1>(&c, &r_vec);
 
-    let ck_1_r = ck_1
-        .iter()
-        .zip(&r_vec)
-        .map(|(ck, r)| mul!(*ck, r.inverse().unwrap()))
-        .collect::<Vec<E::G2>>();
+    let mut a_r = Vec::new();
+    let mut ck_1_r = Vec::new();
 
-    assert_eq!(com_a, inner_product::pairing::<E>(&a_r, &ck_1_r));
-    let tipa_proof_ab = prove_with_srs_shift::<E, D>(&ip_srs, (&a_r, &b), (&ck_1_r, &ck_2), &r);
+    rayon::scope(|s| {
+        let r_vec = &r_vec;
+        let ck_1 = &ck_1;
+        let a = &a;
 
-    let tipa_proof_c = prove_with_structured_scalar_message::<E, D>(&ip_srs, (&c, &r_vec), &ck_1);
+        let a_r = &mut a_r;
+        s.spawn(move |_| {
+            *a_r = a
+                .par_iter()
+                .zip(r_vec.par_iter())
+                .map(|(a, r)| mul!(a.into_projective(), *r).into_affine())
+                .collect::<Vec<E::G1Affine>>();
+        });
+
+        let ck_1_r = &mut ck_1_r;
+        s.spawn(move |_| {
+            *ck_1_r = ck_1
+                .par_iter()
+                .zip(r_vec.par_iter())
+                .map(|(ck, r)| mul!(ck.into_projective(), r.inverse().unwrap()).into_affine())
+                .collect::<Vec<E::G2Affine>>();
+        });
+    });
+
+    let mut computed_com_a = E::Fqk::zero();
+    let mut ip_ab = E::Fqk::zero();
+    let mut agg_c = E::G1::zero();
+    let mut tipa_proof_ab = None;
+    let mut tipa_proof_c = None;
+
+    info!("scope:start");
+    rayon::scope(|s| {
+        let a_r = &a_r;
+        let ck_1_r = &ck_1_r;
+        let b = &b;
+        let c = &c;
+        let r_vec = &r_vec;
+
+        let computed_com_a = &mut computed_com_a;
+        s.spawn(move |_| {
+            *computed_com_a = inner_product::pairing_affine::<E>(a_r, ck_1_r);
+        });
+
+        let tipa_proof_ab = &mut tipa_proof_ab;
+        s.spawn(move |_| {
+            *tipa_proof_ab = Some(prove_with_srs_shift::<E, D>(
+                &ip_srs,
+                (a_r, b),
+                (ck_1_r, &ck_2),
+                &r,
+            ));
+        });
+
+        let tipa_proof_c = &mut tipa_proof_c;
+        s.spawn(move |_| {
+            *tipa_proof_c = Some(prove_with_structured_scalar_message::<E, D>(
+                &ip_srs,
+                (c, r_vec),
+                &ck_1,
+            ));
+        });
+
+        let ip_ab = &mut ip_ab;
+        s.spawn(move |_| {
+            *ip_ab = inner_product::pairing_affine::<E>(&a_r, b);
+        });
+
+        let agg_c = &mut agg_c;
+        s.spawn(move |_| {
+            *agg_c = inner_product::multiexponentiation_affine::<E::G1Affine>(&c, r_vec);
+        });
+    });
+    info!("scope:end");
+
+    assert_eq!(com_a, computed_com_a);
 
     AggregateProof {
         com_a,
@@ -181,8 +262,8 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
         com_c,
         ip_ab,
         agg_c,
-        tipa_proof_ab,
-        tipa_proof_c,
+        tipa_proof_ab: tipa_proof_ab.unwrap(),
+        tipa_proof_c: tipa_proof_c.unwrap(),
     }
 }
 
@@ -190,10 +271,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest>(
 // LMC commitment key should already be shifted before being passed as input
 fn prove_with_srs_shift<E: Engine, D: Digest>(
     srs: &SRS<E>,
-    values: (&[E::G1], &[E::G2]),
-    ck: (&[E::G2], &[E::G1]),
+    values: (&[E::G1Affine], &[E::G2Affine]),
+    ck: (&[E::G2Affine], &[E::G1Affine]),
     r_shift: &E::Fr,
 ) -> PairingInnerProductABProof<E, D> {
+    info!("prove_with_srs_shift:start");
     // Run GIPA
     let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1));
 
@@ -201,7 +283,7 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     let (ck_a_final, ck_b_final) = aux.ck_base;
     let transcript = aux.r_transcript;
     let transcript_inverse = transcript
-        .iter()
+        .par_iter()
         .map(|x| x.inverse().unwrap())
         .collect::<Vec<_>>();
     let r_inverse = r_shift.inverse().unwrap();
@@ -225,10 +307,31 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     };
 
     // Complete KZG proofs
-    let ck_a_kzg_opening =
-        prove_commitment_key_kzg_opening(&srs.h_beta_powers, &transcript_inverse, &r_inverse, &c);
-    let ck_b_kzg_opening =
-        prove_commitment_key_kzg_opening(&srs.g_alpha_powers, &transcript, &<E::Fr>::one(), &c);
+    let mut ck_a_kzg_opening = E::G2::zero();
+    let mut ck_b_kzg_opening = E::G1::zero();
+
+    rayon::scope(|s| {
+        let ck_a_kzg_opening = &mut ck_a_kzg_opening;
+        s.spawn(move |_| {
+            *ck_a_kzg_opening = prove_commitment_key_kzg_opening(
+                &srs.h_beta_powers,
+                &transcript_inverse,
+                &r_inverse,
+                &c,
+            );
+        });
+
+        let ck_b_kzg_opening = &mut ck_b_kzg_opening;
+        s.spawn(move |_| {
+            *ck_b_kzg_opening = prove_commitment_key_kzg_opening(
+                &srs.g_alpha_powers,
+                &transcript,
+                &<E::Fr>::one(),
+                &c,
+            );
+        });
+    });
+    info!("prove_with_srs_shift:end");
 
     PairingInnerProductABProof {
         gipa_proof: proof,
@@ -245,9 +348,10 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
 impl<E: Engine, D: Digest> GIPAProof<E, D> {
     /// Returns vector of recursive commitments and transcripts in reverse order.
     pub fn prove_with_aux(
-        values: (&[E::G1], &[E::G2]),
-        ck: (&[E::G2], &[E::G1]),
+        values: (&[E::G1Affine], &[E::G2Affine]),
+        ck: (&[E::G2Affine], &[E::G1Affine]),
     ) -> (Self, GIPAAux<E, D>) {
+        info!("prove_with_aux:start");
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let (mut ck_a, mut ck_b) = (ck.0.to_vec(), ck.1.to_vec());
         let mut r_commitment_steps = Vec::new();
@@ -276,14 +380,14 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 let ck_b_2 = &ck_b[..split];
 
                 let com_1 = (
-                    inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC
-                    inner_product::pairing::<E>(ck_b_1, m_b_1), // RMC
-                    inner_product::pairing::<E>(m_a_1, m_b_1),  // IPC
+                    inner_product::pairing_affine::<E>(m_a_1, ck_a_1), // LMC
+                    inner_product::pairing_affine::<E>(ck_b_1, m_b_1), // RMC
+                    inner_product::pairing_affine::<E>(m_a_1, m_b_1),  // IPC
                 );
                 let com_2 = (
-                    inner_product::pairing::<E>(m_a_2, ck_a_2), // LLMC
-                    inner_product::pairing::<E>(ck_b_2, m_b_2), // RMC
-                    inner_product::pairing::<E>(m_a_2, m_b_2),  // IPC
+                    inner_product::pairing_affine::<E>(m_a_2, ck_a_2), // LLMC
+                    inner_product::pairing_affine::<E>(ck_b_2, m_b_2), // RMC
+                    inner_product::pairing_affine::<E>(m_a_2, m_b_2),  // IPC
                 );
 
                 // Fiat-Shamir challenge
@@ -316,31 +420,31 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 
                 // Set up values for next step of recursion
                 m_a = m_a_1
-                    .iter()
-                    .map(|a| mul!(*a, c))
-                    .zip(m_a_2)
-                    .map(|(a_1, a_2)| add!(a_1, a_2))
+                    .par_iter()
+                    .map(|a| mul!(a.into_projective(), c))
+                    .zip(m_a_2.par_iter())
+                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
                 m_b = m_b_2
-                    .iter()
-                    .map(|b| mul!(*b, c_inv))
-                    .zip(m_b_1)
-                    .map(|(b_1, b_2)| add!(b_1, b_2))
+                    .par_iter()
+                    .map(|b| mul!(b.into_projective(), c_inv))
+                    .zip(m_b_1.par_iter())
+                    .map(|(b_1, b_2)| add!(b_1, &b_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
                 ck_a = ck_a_2
-                    .iter()
-                    .map(|a| mul!(*a, c_inv))
-                    .zip(ck_a_1)
-                    .map(|(a_1, a_2)| add!(a_1, a_2))
+                    .par_iter()
+                    .map(|a| mul!(a.into_projective(), c_inv))
+                    .zip(ck_a_1.par_iter())
+                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
                 ck_b = ck_b_1
-                    .iter()
-                    .map(|b| mul!(*b, c))
-                    .zip(ck_b_2)
-                    .map(|(b_1, b_2)| add!(b_1, b_2))
+                    .par_iter()
+                    .map(|b| mul!(b.into_projective(), c))
+                    .zip(ck_b_2.par_iter())
+                    .map(|(b_1, b_2)| add!(b_1, &b_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
                 r_commitment_steps.push((com_1, com_2));
@@ -349,15 +453,17 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
         };
         r_transcript.reverse();
         r_commitment_steps.reverse();
+        info!("prove_with_aux:end");
+
         (
             GIPAProof {
                 r_commitment_steps,
-                r_base: m_base,
+                r_base: (m_base.0.into_projective(), m_base.1.into_projective()),
                 _marker: PhantomData,
             },
             GIPAAux {
                 r_transcript,
-                ck_base,
+                ck_base: (ck_base.0.into_projective(), ck_base.1.into_projective()),
                 _marker: PhantomData,
             },
         )
@@ -386,9 +492,10 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
     /// Returns vector of recursive commitments and transcripts in reverse order.
     pub fn prove_with_aux(
-        values: (&[E::G1], &[E::Fr]),
-        ck: &[E::G2],
+        values: (&[E::G1Affine], &[E::Fr]),
+        ck: &[E::G2Affine],
     ) -> (Self, GIPAAuxWithSSM<E, D>) {
+        info!("prove_with_aux (ssm):start");
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let mut ck_a = ck.to_vec();
 
@@ -413,12 +520,12 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                 let m_b_2 = &m_b[split..];
 
                 let com_1 = (
-                    inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC::commit
-                    inner_product::multiexponentiation::<E::G1>(m_a_1, m_b_1), // IPC::commit
+                    inner_product::pairing_affine::<E>(m_a_1, ck_a_1), // LMC::commit
+                    inner_product::multiexponentiation_affine::<E::G1Affine>(m_a_1, m_b_1), // IPC::commit
                 );
                 let com_2 = (
-                    inner_product::pairing::<E>(m_a_2, ck_a_2),
-                    inner_product::multiexponentiation::<E::G1>(m_a_2, m_b_2),
+                    inner_product::pairing_affine::<E>(m_a_2, ck_a_2),
+                    inner_product::multiexponentiation_affine::<E::G1Affine>(m_a_2, m_b_2),
                 );
                 // Fiat-Shamir challenge
                 let mut counter_nonce: usize = 0;
@@ -450,9 +557,9 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                 // Set up values for next step of recursion
                 m_a = m_a_1
                     .iter()
-                    .map(|a| mul!(*a, c))
+                    .map(|a| mul!(a.into_projective(), c))
                     .zip(m_a_2)
-                    .map(|(a_1, a_2)| add!(a_1, a_2))
+                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
                 m_b = m_b_2
@@ -464,9 +571,9 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
 
                 ck_a = ck_a_2
                     .iter()
-                    .map(|a| mul!(*a, c_inv))
+                    .map(|a| mul!(a.into_projective(), c_inv))
                     .zip(ck_a_1)
-                    .map(|(a_1, a_2)| add!(a_1, a_2))
+                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
                     .collect::<Vec<_>>();
 
                 r_commitment_steps.push((com_1, com_2));
@@ -476,26 +583,28 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
         r_transcript.reverse();
         r_commitment_steps.reverse();
 
+        info!("prove_with_aux (ssm):end");
         (
             GIPAProofWithSSM {
                 r_commitment_steps,
-                r_base: m_base,
+                r_base: (m_base.0.into_projective(), m_base.1),
                 _marker: PhantomData,
             },
             GIPAAuxWithSSM {
                 r_transcript,
-                ck_base,
+                ck_base: ck_base.into_projective(),
                 _marker: PhantomData,
             },
         )
     }
 }
 pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
-    srs_powers: &[G],
+    srs_powers: &[G::Affine],
     transcript: &[G::Scalar],
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
 ) -> G {
+    info!("prove_commitment_key_kzg_opening:start");
     let ck_polynomial =
         DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(transcript, r_shift));
     assert_eq!(srs_powers.len(), ck_polynomial.coeffs().len());
@@ -506,6 +615,7 @@ pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     let mut neg_kzg_challenge = *kzg_challenge;
     neg_kzg_challenge.negate();
 
+    info!("kzg:poly");
     let quotient_polynomial = &(&ck_polynomial
         - &DensePolynomial::from_coeffs(vec![ck_polynomial_c_eval]))
         / &(DensePolynomial::from_coeffs(vec![neg_kzg_challenge, G::Scalar::one()]));
@@ -513,7 +623,10 @@ pub fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     let mut quotient_polynomial_coeffs = quotient_polynomial.into_coeffs();
     quotient_polynomial_coeffs.resize(srs_powers.len(), G::Scalar::zero());
 
-    let opening = inner_product::multiexponentiation(srs_powers, &quotient_polynomial_coeffs);
+    info!("kzg:multiexp");
+    let opening =
+        inner_product::multiexponentiation_affine(srs_powers, &quotient_polynomial_coeffs);
+    info!("prove_commitment_key_kzg_opening:end");
     opening
 }
 
@@ -522,23 +635,27 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
     z: &F,
     r_shift: &F,
 ) -> F {
+    info!("poly_eval_from_transcript:start");
     let mut power_2_zr = *z;
     power_2_zr.mul_assign(z);
     power_2_zr.mul_assign(r_shift);
-    let mut product_form = Vec::new();
+    let mut product_form: Vec<F> = Vec::with_capacity(transcript.len());
     for x in transcript.iter() {
         product_form.push(add!(F::one(), &mul!(*x, &power_2_zr)));
         power_2_zr.mul_assign(&power_2_zr.clone());
     }
-    product_form[1..]
+    let res = product_form[1..]
         .iter()
         .fold(product_form[0], |mut acc, curr| {
             acc.mul_assign(curr);
             acc
-        })
+        });
+    info!("poly_eval_from_transcript:end");
+    res
 }
 
 fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: &F) -> Vec<F> {
+    info!("poly_coeffs:start");
     let mut coefficients = vec![F::one()];
     let mut power_2_r = r_shift.clone();
     for (i, x) in transcript.iter().enumerate() {
@@ -548,18 +665,21 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
         power_2_r.mul_assign(&power_2_r.clone());
     }
     // Interleave with 0 coefficients
-    coefficients
+    let res = coefficients
         .iter()
         .interleave(vec![F::zero()].iter().cycle().take(coefficients.len() - 1))
         .cloned()
-        .collect()
+        .collect();
+    info!("poly_coeffs:end");
+    res
 }
 
 fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
     srs: &SRS<E>,
-    values: (&[E::G1], &[E::Fr]),
-    ck: &[E::G2],
+    values: (&[E::G1Affine], &[E::Fr]),
+    ck: &[E::G2Affine],
 ) -> MultiExpInnerProductCProof<E, D> {
+    info!("prove_ssm:start");
     // Run GIPA
     let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(values, ck); // TODO: add plaeholder value
 
@@ -596,6 +716,7 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         &c,
     );
 
+    info!("prove_ssm:end");
     MultiExpInnerProductCProof {
         gipa_proof: proof,
         final_ck: ck_a_final,

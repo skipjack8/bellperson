@@ -1,13 +1,13 @@
 use ff::{Field, PrimeField};
-use groupy::CurveProjective;
+use groupy::{CurveAffine, CurveProjective};
 
 use super::msm;
 use crate::bls::Engine;
 
 #[derive(Clone, Debug)]
 pub struct SRS<E: Engine> {
-    pub g_alpha_powers: Vec<E::G1>,
-    pub h_beta_powers: Vec<E::G2>,
+    pub g_alpha_powers: Vec<E::G1Affine>,
+    pub h_beta_powers: Vec<E::G2Affine>,
     pub g_beta: E::G1,
     pub h_alpha: E::G2,
 }
@@ -21,16 +21,24 @@ pub struct VerifierSRS<E: Engine> {
 }
 
 impl<E: Engine> SRS<E> {
-    pub fn get_commitment_keys(&self) -> (Vec<E::G2>, Vec<E::G1>) {
-        let ck_1 = self.h_beta_powers.iter().step_by(2).cloned().collect();
-        let ck_2 = self.g_alpha_powers.iter().step_by(2).cloned().collect();
+    pub fn get_commitment_keys(&self) -> (Vec<E::G2Affine>, Vec<E::G1Affine>) {
+        let ck_1 = self.get_ck_1().cloned().collect();
+        let ck_2 = self.get_ck_2().cloned().collect();
         (ck_1, ck_2)
+    }
+
+    pub fn get_ck_1(&self) -> impl Iterator<Item = &E::G2Affine> {
+        self.h_beta_powers.iter().step_by(2)
+    }
+
+    pub fn get_ck_2(&self) -> impl Iterator<Item = &E::G1Affine> {
+        self.g_alpha_powers.iter().step_by(2)
     }
 
     pub fn get_verifier_key(&self) -> VerifierSRS<E> {
         VerifierSRS {
-            g: self.g_alpha_powers[0].clone(),
-            h: self.h_beta_powers[0].clone(),
+            g: self.g_alpha_powers[0].into_projective(),
+            h: self.h_beta_powers[0].into_projective(),
             g_beta: self.g_beta.clone(),
             h_alpha: self.h_alpha.clone(),
         }
@@ -60,7 +68,7 @@ fn structured_generators_scalar_power<G: CurveProjective>(
     num: usize,
     g: &G,
     s: &G::Scalar,
-) -> Vec<G> {
+) -> Vec<G::Affine> {
     assert!(num > 0);
     let mut powers_of_scalar = Vec::with_capacity(num);
     let mut pow_s = G::Scalar::one();
@@ -78,5 +86,5 @@ fn structured_generators_scalar_power<G: CurveProjective>(
         &g_table,
         &powers_of_scalar[..],
     );
-    powers_of_g
+    powers_of_g.into_iter().map(|v| v.into_affine()).collect()
 }

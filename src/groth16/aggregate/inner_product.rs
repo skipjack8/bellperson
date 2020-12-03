@@ -1,4 +1,4 @@
-use ff::{Field, PrimeField};
+use ff::PrimeField;
 use groupy::{CurveAffine, CurveProjective};
 use rayon::prelude::*;
 
@@ -30,12 +30,7 @@ pub fn pairing_miller<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
 }
 
 /// Returns the miller loop result of the inner pairing product
-pub fn pairing<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
-    E::final_exponentiation(&pairing_miller::<E>(left, right)).expect("invalid pairing")
-}
-
-/// Returns the miller loop result of the inner pairing product
-pub fn pairing_affine<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) -> E::Fqk {
+pub fn pairing<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) -> E::Fqk {
     E::final_exponentiation(&pairing_miller_affine::<E>(left, right)).expect("invalid pairing")
 }
 
@@ -56,19 +51,4 @@ pub fn multiexponentiation_with_table<G: CurveAffine>(
         table,
         std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
     )
-}
-
-pub fn scalar<F: Field>(left: &[F], right: &[F]) -> F {
-    assert_eq!(left.len(), right.len());
-    left.iter()
-        .zip(right)
-        .map(|(x, y)| {
-            let mut x = *x;
-            x.mul_assign(y);
-            x
-        })
-        .fold(F::zero(), |mut acc, curr| {
-            acc.add_assign(&curr);
-            acc
-        })
 }

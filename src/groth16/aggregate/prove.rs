@@ -139,22 +139,22 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
         let a = &mut a;
         let com_a = &mut com_a;
         s.spawn(move |_| {
-            *a = proofs.par_iter().map(|proof| proof.a).collect::<Vec<_>>();
-            *com_a = inner_product::pairing_affine::<E>(&a, ck_1);
+            *a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
+            *com_a = inner_product::pairing::<E>(&a, ck_1);
         });
 
         let b = &mut b;
         let com_b = &mut com_b;
         s.spawn(move |_| {
-            *b = proofs.par_iter().map(|proof| proof.b).collect::<Vec<_>>();
-            *com_b = inner_product::pairing_affine::<E>(ck_2, &b);
+            *b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
+            *com_b = inner_product::pairing::<E>(ck_2, &b);
         });
 
         let c = &mut c;
         let com_c = &mut com_c;
         s.spawn(move |_| {
-            *c = proofs.par_iter().map(|proof| proof.c).collect::<Vec<_>>();
-            *com_c = inner_product::pairing_affine::<E>(&c, ck_1);
+            *c = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>();
+            *com_c = inner_product::pairing::<E>(&c, ck_1);
         });
     });
 
@@ -220,7 +220,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
         let computed_com_a = &mut computed_com_a;
         s.spawn(move |_| {
-            *computed_com_a = inner_product::pairing_affine::<E>(a_r, ck_1_r);
+            *computed_com_a = inner_product::pairing::<E>(a_r, ck_1_r);
         });
 
         let tipa_proof_ab = &mut tipa_proof_ab;
@@ -244,7 +244,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
         let ip_ab = &mut ip_ab;
         s.spawn(move |_| {
-            *ip_ab = inner_product::pairing_affine::<E>(&a_r, b);
+            *ip_ab = inner_product::pairing::<E>(&a_r, b);
         });
 
         let agg_c = &mut agg_c;
@@ -362,107 +362,136 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 
         info!("loop:start");
         let mut count = 0;
-        let (m_base, ck_base) = 'recurse: loop {
-            info!("loop:round {}", count);
+        while m_a.len() > 1 {
             count += 1;
-            if m_a.len() == 1 {
-                // base case
-                break 'recurse ((m_a[0], m_b[0]), (ck_a[0], ck_b[0]));
-            } else {
-                // recursive step
-                // Recurse with problem of half size
-                let split = m_a.len() / 2;
+            // recursive step
+            // Recurse with problem of half size
+            let split = m_a.len() / 2;
 
-                let m_a_1 = &m_a[split..];
-                let m_a_2 = &m_a[..split];
-                let ck_a_1 = &ck_a[..split];
-                let ck_a_2 = &ck_a[split..];
+            let (m_a_2, m_a_1) = m_a.split_at_mut(split);
+            let (ck_a_1, ck_a_2) = ck_a.split_at_mut(split);
 
-                let m_b_1 = &m_b[..split];
-                let m_b_2 = &m_b[split..];
-                let ck_b_1 = &ck_b[split..];
-                let ck_b_2 = &ck_b[..split];
+            let (m_b_1, m_b_2) = m_b.split_at_mut(split);
+            let (ck_b_2, ck_b_1) = ck_b.split_at_mut(split);
 
-                let mut com_1 = [
-                    (m_a_1, ck_a_1),
-                    (ck_b_1, m_b_1),
-                    (m_a_1, m_b_1),
-                    (m_a_2, ck_a_2),
-                    (ck_b_2, m_b_2),
-                    (m_a_2, m_b_2),
-                ]
-                .into_par_iter()
-                .map(|(left, right)| inner_product::pairing_affine::<E>(left, right))
-                .collect::<Vec<_>>();
+            let (((com_1_0, com_1_1), com_1_2), ((com_2_0, com_2_1), com_2_2)) = rayon::join(
+                || {
+                    rayon::join(
+                        || {
+                            rayon::join(
+                                || inner_product::pairing::<E>(m_a_1, ck_a_1),
+                                || inner_product::pairing::<E>(ck_b_1, m_b_1),
+                            )
+                        },
+                        || inner_product::pairing::<E>(m_a_1, m_b_1),
+                    )
+                },
+                || {
+                    rayon::join(
+                        || {
+                            rayon::join(
+                                || inner_product::pairing::<E>(m_a_2, ck_a_2),
+                                || inner_product::pairing::<E>(ck_b_2, m_b_2),
+                            )
+                        },
+                        || inner_product::pairing::<E>(m_a_2, m_b_2),
+                    )
+                },
+            );
 
-                let com_2 = com_1.split_off(3);
+            let com_1 = (com_1_0, com_1_1, com_1_2);
+            let com_2 = (com_2_0, com_2_1, com_2_2);
 
-                // Fiat-Shamir challenge
-                let mut counter_nonce: usize = 0;
-                let default_transcript = E::Fr::zero();
-                let transcript = r_transcript.last().unwrap_or(&default_transcript);
-                info!("inner loop:start");
-                let (c, c_inv) = 'challenge: loop {
-                    let mut hash_input = Vec::new();
-                    hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-                    bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+            // Fiat-Shamir challenge
+            let mut counter_nonce: usize = 0;
+            let default_transcript = E::Fr::zero();
+            let transcript = r_transcript.last().unwrap_or(&default_transcript);
+            info!("inner loop:start");
+            let (c, c_inv) = 'challenge: loop {
+                let mut hash_input = Vec::new();
+                hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
+                bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
 
-                    bincode::serialize_into(&mut hash_input, &com_1[0]).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_1[1]).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_1[2]).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
 
-                    bincode::serialize_into(&mut hash_input, &com_2[0]).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_2[1]).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_2[2]).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
 
-                    let d = D::digest(&hash_input);
-                    let c = fr_from_u128::<E::Fr>(d.as_slice());
-                    if let Some(c_inv) = c.inverse() {
-                        // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                        // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                        break 'challenge (c_inv, c);
-                    }
+                let d = D::digest(&hash_input);
+                let c = fr_from_u128::<E::Fr>(d.as_slice());
+                if let Some(c_inv) = c.inverse() {
+                    // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                    // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                    break 'challenge (c_inv, c);
+                }
 
-                    counter_nonce += 1;
-                };
-                info!("inner loop:end {}", counter_nonce);
+                counter_nonce += 1;
+            };
+            info!("inner loop:end {}", counter_nonce);
 
-                // Set up values for next step of recursion
-                m_a = m_a_1
-                    .par_iter()
-                    .map(|a| mul!(a.into_projective(), c))
-                    .zip(m_a_2.par_iter())
-                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
-                    .collect::<Vec<_>>();
+            // Set up values for next step of recursion
+            m_a_1
+                .par_iter()
+                .zip(m_a_2.par_iter_mut())
+                .for_each(|(a_1, a_2)| {
+                    let mut x: E::G1 = mul!(a_1.into_projective(), c);
+                    x.add_assign_mixed(&a_2);
+                    *a_2 = x.into_affine();
+                });
 
-                m_b = m_b_2
-                    .par_iter()
-                    .map(|b| mul!(b.into_projective(), c_inv))
-                    .zip(m_b_1.par_iter())
-                    .map(|(b_1, b_2)| add!(b_1, &b_2.into_projective()).into_affine())
-                    .collect::<Vec<_>>();
+            let len = m_a_2.len();
+            m_a.resize(len, E::G1Affine::zero()); // shrink to new size
 
-                ck_a = ck_a_2
-                    .par_iter()
-                    .map(|a| mul!(a.into_projective(), c_inv))
-                    .zip(ck_a_1.par_iter())
-                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
-                    .collect::<Vec<_>>();
+            m_b_1
+                .par_iter_mut()
+                .zip(m_b_2.par_iter())
+                .for_each(|(b_1, b_2)| {
+                    let mut x = b_2.into_projective();
+                    x.mul_assign(c_inv);
+                    x.add_assign_mixed(&b_1);
+                    *b_1 = x.into_affine();
+                });
 
-                ck_b = ck_b_1
-                    .par_iter()
-                    .map(|b| mul!(b.into_projective(), c))
-                    .zip(ck_b_2.par_iter())
-                    .map(|(b_1, b_2)| add!(b_1, &b_2.into_projective()).into_affine())
-                    .collect::<Vec<_>>();
+            let len = m_b_2.len();
+            m_b.resize(len, E::G2Affine::zero()); // shrink to new size
 
-                r_commitment_steps.push((
-                    (com_1[0], com_1[1], com_1[2]),
-                    (com_2[0], com_2[1], com_2[2]),
-                ));
-                r_transcript.push(c);
-            }
-        };
+            ck_a_1
+                .par_iter_mut()
+                .zip(ck_a_2.par_iter())
+                .for_each(|(ck_1, ck_2)| {
+                    let mut x = ck_2.into_projective();
+                    x.mul_assign(c_inv);
+                    x.add_assign_mixed(ck_1);
+                    *ck_1 = x.into_affine();
+                });
+
+            let len = ck_a_1.len();
+            ck_a.resize(len, E::G2Affine::zero()); // shrink to new size
+
+            ck_b_1
+                .par_iter()
+                .zip(ck_b_2.par_iter_mut())
+                .for_each(|(ck_1, ck_2)| {
+                    let mut x = ck_1.into_projective();
+                    x.mul_assign(c);
+                    x.add_assign_mixed(ck_2);
+                    *ck_2 = x.into_affine();
+                });
+
+            let len = ck_b_1.len();
+            ck_b.resize(len, E::G1Affine::zero()); // shrink to new size
+
+            r_commitment_steps.push((com_1, com_2));
+            r_transcript.push(c);
+        }
+
+        // base case
+        let m_base = (m_a[0], m_b[0]);
+        let ck_base = (ck_a[0], ck_b[0]);
+
         info!("loop:end ({})", count);
 
         r_transcript.reverse();
@@ -516,91 +545,102 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
         assert!(m_a.len().is_power_of_two());
-        let (m_base, ck_base) = 'recurse: loop {
-            if m_a.len() == 1 {
-                // base case
-                break 'recurse ((m_a[0], m_b[0]), ck_a[0]);
-            } else {
-                // recursive step
-                // Recurse with problem of half size
-                let split = m_a.len() / 2;
 
-                let m_a_1 = &m_a[split..];
-                let m_a_2 = &m_a[..split];
-                let ck_a_1 = &ck_a[..split];
-                let ck_a_2 = &ck_a[split..];
+        while m_a.len() > 1 {
+            // recursive step
+            // Recurse with problem of half size
+            let split = m_a.len() / 2;
 
-                let m_b_1 = &m_b[..split];
-                let m_b_2 = &m_b[split..];
+            let (m_a_2, m_a_1) = m_a.split_at_mut(split);
+            let (ck_a_1, ck_a_2) = ck_a.split_at_mut(split);
+            let (m_b_1, m_b_2) = m_b.split_at_mut(split);
 
-                let (com_1, com_2) = rayon::join(
-                    || {
-                        rayon::join(
-                            || inner_product::pairing_affine::<E>(m_a_1, ck_a_1), // LMC::commit
-                            || inner_product::multiexponentiation::<E::G1Affine>(m_a_1, m_b_1), // IPC::commit
-                        )
-                    },
-                    || {
-                        rayon::join(
-                            || inner_product::pairing_affine::<E>(m_a_2, ck_a_2),
-                            || inner_product::multiexponentiation::<E::G1Affine>(m_a_2, m_b_2),
-                        )
-                    },
-                );
+            let (com_1, com_2) = rayon::join(
+                || {
+                    rayon::join(
+                        || inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC::commit
+                        || inner_product::multiexponentiation::<E::G1Affine>(m_a_1, m_b_1), // IPC::commit
+                    )
+                },
+                || {
+                    rayon::join(
+                        || inner_product::pairing::<E>(m_a_2, ck_a_2),
+                        || inner_product::multiexponentiation::<E::G1Affine>(m_a_2, m_b_2),
+                    )
+                },
+            );
 
-                // Fiat-Shamir challenge
-                let mut counter_nonce: usize = 0;
-                let default_transcript = E::Fr::zero();
-                let transcript = r_transcript.last().unwrap_or(&default_transcript);
+            // Fiat-Shamir challenge
+            let mut counter_nonce: usize = 0;
+            let default_transcript = E::Fr::zero();
+            let transcript = r_transcript.last().unwrap_or(&default_transcript);
 
-                let (c, c_inv) = 'challenge: loop {
-                    let mut hash_input = Vec::new();
-                    hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-                    bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+            let (c, c_inv) = 'challenge: loop {
+                let mut hash_input = Vec::new();
+                hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
+                bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
 
-                    bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
 
-                    bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
-                    bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
+                bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
 
-                    let d = D::digest(&hash_input);
-                    let c = fr_from_u128::<E::Fr>(d.as_slice());
-                    if let Some(c_inv) = c.inverse() {
-                        // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                        // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                        break 'challenge (c_inv, c);
-                    }
+                let d = D::digest(&hash_input);
+                let c = fr_from_u128::<E::Fr>(d.as_slice());
+                if let Some(c_inv) = c.inverse() {
+                    // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                    // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                    break 'challenge (c_inv, c);
+                }
 
-                    counter_nonce += 1;
-                };
+                counter_nonce += 1;
+            };
 
-                // Set up values for next step of recursion
-                m_a = m_a_1
-                    .par_iter()
-                    .map(|a| mul!(a.into_projective(), c))
-                    .zip(m_a_2.par_iter())
-                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
-                    .collect::<Vec<_>>();
+            // Set up values for next step of recursion
+            m_a_1
+                .par_iter()
+                .zip(m_a_2.par_iter_mut())
+                .for_each(|(a_1, a_2)| {
+                    let mut x: E::G1 = mul!(a_1.into_projective(), c);
+                    x.add_assign_mixed(&a_2);
+                    *a_2 = x.into_affine();
+                });
 
-                m_b = m_b_2
-                    .par_iter()
-                    .map(|b| mul!(*b, &c_inv))
-                    .zip(m_b_1.par_iter())
-                    .map(|(b_1, b_2)| add!(b_1, b_2))
-                    .collect::<Vec<_>>();
+            let len = m_a_2.len();
+            m_a.resize(len, E::G1Affine::zero()); // shrink to new size
 
-                ck_a = ck_a_2
-                    .par_iter()
-                    .map(|a| mul!(a.into_projective(), c_inv))
-                    .zip(ck_a_1.par_iter())
-                    .map(|(a_1, a_2)| add!(a_1, &a_2.into_projective()).into_affine())
-                    .collect::<Vec<_>>();
+            m_b_1
+                .par_iter_mut()
+                .zip(m_b_2.par_iter_mut())
+                .for_each(|(b_1, b_2)| {
+                    b_2.mul_assign(&c_inv);
+                    b_1.add_assign(b_2);
+                });
 
-                r_commitment_steps.push((com_1, com_2));
-                r_transcript.push(c);
-            }
-        };
+            let len = m_b_1.len();
+            m_b.resize(len, E::Fr::zero()); // shrink to new size
+
+            ck_a_1
+                .par_iter_mut()
+                .zip(ck_a_2.par_iter())
+                .for_each(|(ck_1, ck_2)| {
+                    let mut x = ck_2.into_projective();
+                    x.mul_assign(c_inv);
+                    x.add_assign_mixed(ck_1);
+                    *ck_1 = x.into_affine();
+                });
+
+            let len = ck_a_1.len();
+            ck_a.resize(len, E::G2Affine::zero()); // shrink to new size
+
+            r_commitment_steps.push((com_1, com_2));
+            r_transcript.push(c);
+        }
+        // base case
+        let m_base = (m_a[0], m_b[0]);
+        let ck_base = ck_a[0];
+
         r_transcript.reverse();
         r_commitment_steps.reverse();
 

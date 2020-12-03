@@ -4,7 +4,6 @@ use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use itertools::Itertools;
-use log::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -123,7 +122,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
 ) -> AggregateProof<E, D> {
-    info!("aggregate_proofs");
     let (ck_1, ck_2) = ip_srs.get_commitment_keys();
 
     let mut a = Vec::new();
@@ -158,7 +156,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
         });
     });
 
-    info!("compute r");
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
     let r = loop {
@@ -174,7 +171,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
         counter_nonce += 1;
     };
-    info!("compute r_vec");
+
     let r_vec = structured_scalar_power(proofs.len(), &r);
 
     let mut a_r = Vec::new();
@@ -210,7 +207,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
     let mut tipa_proof_ab = None;
     let mut tipa_proof_c = None;
 
-    info!("scope:start");
     rayon::scope(|s| {
         let a_r = &a_r;
         let ck_1_r = &ck_1_r;
@@ -252,7 +248,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
             *agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec);
         });
     });
-    info!("scope:end");
 
     assert_eq!(com_a, computed_com_a);
 
@@ -275,7 +270,6 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     ck: (&[E::G2Affine], &[E::G1Affine]),
     r_shift: &E::Fr,
 ) -> PairingInnerProductABProof<E, D> {
-    info!("prove_with_srs_shift:start");
     // Run GIPA
     let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1));
 
@@ -333,7 +327,6 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
             );
         });
     });
-    info!("prove_with_srs_shift:end");
 
     PairingInnerProductABProof {
         gipa_proof: proof,
@@ -353,17 +346,13 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
         values: (&[E::G1Affine], &[E::G2Affine]),
         ck: (&[E::G2Affine], &[E::G1Affine]),
     ) -> (Self, GIPAAux<E, D>) {
-        info!("prove_with_aux:start");
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let (mut ck_a, mut ck_b) = (ck.0.to_vec(), ck.1.to_vec());
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
         assert!(m_a.len().is_power_of_two());
 
-        info!("loop:start");
-        let mut count = 0;
         while m_a.len() > 1 {
-            count += 1;
             // recursive step
             // Recurse with problem of half size
             let split = m_a.len() / 2;
@@ -406,7 +395,7 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
             let mut counter_nonce: usize = 0;
             let default_transcript = E::Fr::zero();
             let transcript = r_transcript.last().unwrap_or(&default_transcript);
-            info!("inner loop:start");
+
             let (c, c_inv) = 'challenge: loop {
                 let mut hash_input = Vec::new();
                 hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
@@ -430,7 +419,6 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 
                 counter_nonce += 1;
             };
-            info!("inner loop:end {}", counter_nonce);
 
             // Set up values for next step of recursion
             m_a_1
@@ -492,11 +480,8 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
         let m_base = (m_a[0], m_b[0]);
         let ck_base = (ck_a[0], ck_b[0]);
 
-        info!("loop:end ({})", count);
-
         r_transcript.reverse();
         r_commitment_steps.reverse();
-        info!("prove_with_aux:end");
 
         (
             GIPAProof {
@@ -538,7 +523,6 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
         values: (&[E::G1Affine], &[E::Fr]),
         ck: &[E::G2Affine],
     ) -> (Self, GIPAAuxWithSSM<E, D>) {
-        info!("prove_with_aux (ssm):start");
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let mut ck_a = ck.to_vec();
 
@@ -644,7 +628,6 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
         r_transcript.reverse();
         r_commitment_steps.reverse();
 
-        info!("prove_with_aux (ssm):end");
         (
             GIPAProofWithSSM {
                 r_commitment_steps,
@@ -667,10 +650,13 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
 ) -> G {
-    info!("prove_commitment_key_kzg_opening:start");
     let ck_polynomial =
         DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(transcript, r_shift));
-    assert_eq!(srs_powers_len, ck_polynomial.coeffs().len());
+    assert_eq!(
+        srs_powers_len,
+        ck_polynomial.coeffs().len(),
+        "inconsistent srs_powers with ck_polynomial"
+    );
 
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(&transcript, kzg_challenge, &r_shift);
@@ -678,14 +664,11 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     let mut neg_kzg_challenge = *kzg_challenge;
     neg_kzg_challenge.negate();
 
-    info!("kzg:poly");
     let quotient_polynomial = &(&ck_polynomial
         - &DensePolynomial::from_coeffs(vec![ck_polynomial_c_eval]))
         / &(DensePolynomial::from_coeffs(vec![neg_kzg_challenge, G::Scalar::one()]));
 
     let quotient_polynomial_coeffs = quotient_polynomial.into_coeffs();
-
-    info!("kzg:multiexp");
 
     // multiexponentiation inner_product, inlined to optimize
     let zero = G::Scalar::zero().into_repr();
@@ -697,14 +680,11 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
         quotient_polynomial_coeffs[i].into_repr()
     };
 
-    let opening = par_multiscalar::<_, G::Affine>(
+    par_multiscalar::<_, G::Affine>(
         &ScalarList::Getter(getter, srs_powers_len),
         srs_powers_table,
         std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
-    );
-
-    info!("prove_commitment_key_kzg_opening:end");
-    opening
+    )
 }
 
 pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
@@ -712,43 +692,41 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
     z: &F,
     r_shift: &F,
 ) -> F {
-    info!("poly_eval_from_transcript:start");
     let mut power_2_zr = *z;
     power_2_zr.mul_assign(z);
     power_2_zr.mul_assign(r_shift);
-    let mut product_form: Vec<F> = Vec::with_capacity(transcript.len());
-    for x in transcript.iter() {
-        product_form.push(add!(F::one(), &mul!(*x, &power_2_zr)));
+
+    // 0 iteration
+    let mut res = add!(F::one(), &mul!(transcript[0], &power_2_zr));
+    power_2_zr.mul_assign(&power_2_zr.clone());
+
+    // the rest
+    for x in transcript[1..].iter() {
+        res.mul_assign(&add!(F::one(), &mul!(*x, &power_2_zr)));
         power_2_zr.mul_assign(&power_2_zr.clone());
     }
-    let res = product_form[1..]
-        .iter()
-        .fold(product_form[0], |mut acc, curr| {
-            acc.mul_assign(curr);
-            acc
-        });
-    info!("poly_eval_from_transcript:end");
+
     res
 }
 
 fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: &F) -> Vec<F> {
-    info!("poly_coeffs:start");
     let mut coefficients = vec![F::one()];
-    let mut power_2_r = r_shift.clone();
+    let mut power_2_r = *r_shift;
+
     for (i, x) in transcript.iter().enumerate() {
         for j in 0..(2_usize).pow(i as u32) {
-            coefficients.push(mul!(coefficients[j], &mul!(*x, &power_2_r)));
+            let coeff = mul!(coefficients[j], &mul!(*x, &power_2_r));
+            coefficients.push(coeff);
         }
         power_2_r.mul_assign(&power_2_r.clone());
     }
+
     // Interleave with 0 coefficients
-    let res = coefficients
+    coefficients
         .iter()
         .interleave(vec![F::zero()].iter().cycle().take(coefficients.len() - 1))
         .cloned()
-        .collect();
-    info!("poly_coeffs:end");
-    res
+        .collect()
 }
 
 fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
@@ -756,7 +734,6 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
     values: (&[E::G1Affine], &[E::Fr]),
     ck: &[E::G2Affine],
 ) -> MultiExpInnerProductCProof<E, D> {
-    info!("prove_ssm:start");
     // Run GIPA
     let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(values, ck); // TODO: add plaeholder value
 
@@ -794,7 +771,6 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         &c,
     );
 
-    info!("prove_ssm:end");
     MultiExpInnerProductCProof {
         gipa_proof: proof,
         final_ck: ck_a_final,

@@ -222,7 +222,7 @@ jobs:
   coverage:
     executor: default
     environment:
-      # CARGO_INCREMENTAL=0: incremental build is not supported when profiling
+      # Incremental build is not supported when profiling
       CARGO_INCREMENTAL: 0
       # -Zinstrument-coverage: enable llvm coverage instrumentation
       # -Ccodegen-units=1: building in parallel is not supported when profiling
@@ -231,31 +231,13 @@ jobs:
       # -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
       # -Cinline-threshold=0: do not inline
       RUSTFLAGS: -Zinstrument-coverage -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cinline-threshold=0
-
     steps:
       - *restore-workspace
       - *restore-cache
       - run: *set-env-path
-      #- run: echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
-      #- run: source $BASH_ENV
-      #- run:
-      #    name: Set the PATH env variable
-      #    command: |
-      #      echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
-      #      source $BASH_ENV
       - run:
           name: Generate coverage report
           command: |
-            ## CARGO_INCREMENTAL=0: incremental build is not supported when profiling
-            #export CARGO_INCREMENTAL=0
-            ## -Zinstrument-coverage: enable llvm coverage instrumentation
-            ## -Ccodegen-units=1: building in parallel is not supported when profiling
-            ## -Copt-level=0: disable optimizations for more accurate coverage
-            ## -Clink-dead-code: dead code should be considered as not covered code
-            ## -Coverflow-checks=off: checking for overflow is not needed for coverage reporting
-            ## -Cinline-threshold=0: do not inline
-            #export RUSTFLAGS="-Zinstrument-coverage -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cinline-threshold=0"
-
             # Doc tests currently break the coverage report. With those run it seems that the code
             # isn't covered at all.
             cargo +<< pipeline.parameters.nightly-version >> test --test '*'

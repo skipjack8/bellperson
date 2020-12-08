@@ -16,6 +16,7 @@ use ff::{Field, PrimeField};
 use groupy::CurveProjective;
 use log::*;
 
+use std::time::Instant;
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     ip_verifier_srs: &VerifierSRS<E>,
     pvk: &PreparedVerifyingKey<E>,
@@ -52,18 +53,21 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         // 1.Check TIPA proof ab
         let tipa_ab = send_tuple.clone();
         s.spawn(move |_| {
+            let now = Instant::now();
             let tuple = verify_with_srs_shift::<E, D>(
                 ip_verifier_srs,
                 (&proof.com_a, &proof.com_b, &proof.ip_ab),
                 &proof.tipa_proof_ab,
                 &r,
             );
+            println!("TIPA AB took {} ms", now.elapsed().as_millis());
             tipa_ab.send(tuple).unwrap();
         });
 
         // 2.Check TIPA proof c
         let tipa_c = send_tuple.clone();
         s.spawn(move |_| {
+            let now = Instant::now();
             let tuple = verify_with_structured_scalar_message::<E, D>(
                 ip_verifier_srs,
                 (&proof.com_c, &proof.agg_c),
@@ -71,6 +75,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 &proof.tipa_proof_c,
             );
             tipa_c.send(tuple).unwrap();
+            println!("TIPA proof c took {} ms", now.elapsed().as_millis());
         });
 
         // Check aggregate pairing product equation
@@ -102,9 +107,12 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
         let (r_vec_sender, r_vec_receiver) = bounded(1);
         s.spawn(move |_| {
+            let now = Instant::now();
             r_vec_sender
                 .send(structured_scalar_power(public_inputs.len(), &r))
                 .unwrap();
+            let elapsed = now.elapsed().as_millis();
+            println!("generation of r vector: {}ms", elapsed);
         });
 
         // 5. compute the middle part of the final pairing equation, the one
@@ -125,6 +133,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
 
             let powers = r_vec_receiver.recv().unwrap();
 
+            let now = Instant::now();
             // now we do the multi exponentiation
             let getter = |i: usize| -> <E::Fr as PrimeField>::Repr {
                 // i denotes the column of the public input, and j denotes which public input
@@ -149,6 +158,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
                 &g_ic.into_affine().prepare(),
                 &pvk.gamma_g2,
             )]));
+            let elapsed = now.elapsed().as_millis();
+            println!("table generation: {}ms", elapsed);
 
             send_tuple.send(tuple).unwrap();
         });
@@ -177,8 +188,10 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     r_shift: &E::Fr,
 ) -> PairingTuple<E> {
     info!("verify with srs shift");
+    let now = Instant::now();
     let (base_com, transcript, transcript_inverse) =
         gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
+    println!("TIPA AB: verify recursive {}ms", now.elapsed().as_millis());
 
     // Verify commitment keys wellformed
     let (ck_a_final, ck_b_final) = &proof.final_ck;
@@ -202,6 +215,7 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
         counter_nonce += 1;
     };
 
+    let now = Instant::now();
     let aid = verify_commitment_key_g2_kzg_opening(
         v_srs,
         &ck_a_final,
@@ -218,11 +232,16 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
         &E::Fr::one(),
         &c,
     );
+    println!(
+        "TIPA AB: commitment verification {}ms",
+        now.elapsed().as_millis()
+    );
 
     // Verify base inner product commitment
     let (com_a, com_b, com_t) = base_com;
     let a_base = [proof.gipa_proof.r_base.0.clone()];
     let b_base = [proof.gipa_proof.r_base.1.clone()];
+    let now = Instant::now();
     // LMC::verify - pairing inner product<E>
     let mut a = PairingTuple::from_pair(
         inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
@@ -236,11 +255,14 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     // IPC::verify - identity commitment<Fqk, Fr>
     let t_base =
         PairingTuple::from_pair(inner_product::pairing_miller::<E>(&a_base, &b_base), com_t);
+    println!("TIPA AB inner product: {}ms", now.elapsed().as_millis());
 
+    let now = Instant::now();
     a.merge(&b);
     a.merge(&t_base);
     a.merge(&aid);
     a.merge(&bid);
+    println!("TIPA AB merge : {}ms", now.elapsed().as_millis());
     a
 }
 
@@ -312,8 +334,13 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         r_transcript.push(c);
         r_transcript_inverse.push(c_inv);
     }
+    let now = Instant::now();
     r_transcript.reverse();
     r_transcript_inverse.reverse();
+    println!(
+        "TIPA AB: reversed transcript took {}ms",
+        now.elapsed().as_millis()
+    );
     ((com_a, com_b, com_t), r_transcript, r_transcript_inverse)
 }
 

@@ -490,10 +490,9 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
     proof: &GIPAProofWithSSM<E, D>,
 ) -> ((E::Fqk, E::G1), Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa ssm verify recursive challenge transcript");
-    let (com_0, com_1) = com.clone();
-    let (mut com_a, mut com_t) = (*com_0, *com_1);
     let mut r_transcript = Vec::new();
     let mut r_transcript_inverse = Vec::new();
+
     for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
         // Fiat-Shamir challenge
         let mut counter_nonce: usize = 0;
@@ -521,20 +520,38 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             }
             counter_nonce += 1;
         };
-
-        com_a = mul!(
-            mul!(com_1.0.pow(c.into_repr()), &com_a),
-            &com_2.0.pow(c_inv.into_repr())
-        );
-
-        com_t = {
-            let a = mul!(com_1.1, c.into_repr());
-            let b = mul!(com_2.1, c_inv.into_repr());
-            add!(add!(a, &com_t), &b)
-        };
-
         r_transcript.push(c);
         r_transcript_inverse.push(c_inv);
+    }
+
+    let mut com_a = com.0.clone();
+    let mut com_t = com.1.clone();
+
+    let prep: Vec<(_, _, _, _)> = proof
+        .r_commitment_steps
+        .par_iter()
+        .rev()
+        .zip(r_transcript.par_iter())
+        .zip(r_transcript_inverse.par_iter())
+        .map(|(((com_1, com_2), c), c_inv)| {
+            let c_repr = c.into_repr();
+            let c_inv_repr = c_inv.into_repr();
+
+            (
+                com_1.0.pow(c_repr),
+                com_2.0.pow(c_inv_repr),
+                mul!(com_1.1, c_repr),
+                mul!(com_2.1, c_inv_repr),
+            )
+        })
+        .collect();
+
+    for (a_x_c, a_z_c_inv, t_x_c, t_z_c_inv) in prep.iter() {
+        com_a.mul_assign(a_x_c);
+        com_a.mul_assign(a_z_c_inv);
+
+        com_t.add_assign(t_x_c);
+        com_t.add_assign(t_z_c_inv);
     }
 
     r_transcript.reverse();

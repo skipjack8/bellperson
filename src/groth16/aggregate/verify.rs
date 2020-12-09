@@ -182,7 +182,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     res
 }
 
-fn verify_with_srs_shift<E: Engine, D: Digest>(
+fn verify_with_srs_shift<E: Engine, D: Digest + Sync>(
     v_srs: &VerifierSRS<E>,
     com: (&E::Fqk, &E::Fqk, &E::Fqk),
     proof: &PairingInnerProductABProof<E, D>,
@@ -217,45 +217,71 @@ fn verify_with_srs_shift<E: Engine, D: Digest>(
     };
 
     let now = Instant::now();
-    let aid = verify_commitment_key_g2_kzg_opening(
-        v_srs,
-        &ck_a_final,
-        &ck_a_proof,
-        &transcript_inverse,
-        &r_shift.inverse().unwrap(),
-        &c,
-    );
-    let bid = verify_commitment_key_g1_kzg_opening(
-        v_srs,
-        &ck_b_final,
-        &ck_b_proof,
-        &transcript,
-        &E::Fr::one(),
-        &c,
-    );
-    println!(
-        "TIPA AB: commitment verification {}ms",
-        now.elapsed().as_millis()
-    );
 
-    // Verify base inner product commitment
-    let (com_a, com_b, com_t) = base_com;
-    let a_base = [proof.gipa_proof.r_base.0.clone()];
-    let b_base = [proof.gipa_proof.r_base.1.clone()];
-    let now = Instant::now();
-    // LMC::verify - pairing inner product<E>
-    let mut a = PairingTuple::from_pair(
-        inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
-        com_a,
-    );
-    // RMC::verify - afgho commitment G1
-    let b = PairingTuple::from_pair(
-        inner_product::pairing_miller::<E>(&[ck_b_final.clone()], &b_base),
-        com_b,
-    );
-    // IPC::verify - identity commitment<Fqk, Fr>
-    let t_base =
-        PairingTuple::from_pair(inner_product::pairing_miller::<E>(&a_base, &b_base), com_t);
+    let mut aid = PairingTuple::new();
+    let mut bid = PairingTuple::new();
+    let mut a = PairingTuple::new();
+    let mut b = PairingTuple::new();
+    let mut t_base = PairingTuple::new();
+
+    rayon::scope(|s| {
+        let aid = &mut aid;
+        s.spawn(move |_| {
+            *aid = verify_commitment_key_g2_kzg_opening(
+                v_srs,
+                &ck_a_final,
+                &ck_a_proof,
+                &transcript_inverse,
+                &r_shift.inverse().unwrap(),
+                &c,
+            );
+        });
+
+        let bid = &mut bid;
+        s.spawn(move |_| {
+            *bid = verify_commitment_key_g1_kzg_opening(
+                v_srs,
+                &ck_b_final,
+                &ck_b_proof,
+                &transcript,
+                &E::Fr::one(),
+                &c,
+            );
+        });
+
+        // Verify base inner product commitment
+        let (com_a, com_b, com_t) = base_com;
+        let a_base = [proof.gipa_proof.r_base.0.clone()];
+        let b_base = [proof.gipa_proof.r_base.1.clone()];
+
+        let a = &mut a;
+        s.spawn(move |_| {
+            // LMC::verify - pairing inner product<E>
+            *a = PairingTuple::from_pair(
+                inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
+                com_a,
+            );
+        });
+
+        let b = &mut b;
+        s.spawn(move |_| {
+            // RMC::verify - afgho commitment G1
+            *b = PairingTuple::from_pair(
+                inner_product::pairing_miller::<E>(&[ck_b_final.clone()], &b_base),
+                com_b,
+            );
+        });
+
+        let t_base = &mut t_base;
+        s.spawn(move |_| {
+            // IPC::verify - identity commitment<Fqk, Fr>
+            *t_base = PairingTuple::from_pair(
+                inner_product::pairing_miller::<E>(&a_base, &b_base),
+                com_t,
+            );
+        });
+    });
+
     println!("TIPA AB inner product: {}ms", now.elapsed().as_millis());
 
     let now = Instant::now();
@@ -272,6 +298,9 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
     proof: &GIPAProof<E, D>,
 ) -> ((E::Fqk, E::Fqk, E::Fqk), Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa verify recursive challenge transcript");
+
+    let now = Instant::now();
+
     let mut r_transcript = Vec::new();
     let mut r_transcript_inverse = Vec::new();
 
@@ -312,6 +341,12 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         r_transcript_inverse.push(c_inv);
     }
 
+    println!(
+        "TIPA AB: challenge gen took {}ms",
+        now.elapsed().as_millis()
+    );
+
+    let now = Instant::now();
     let mut com_a = com.0.clone();
     let mut com_b = com.1.clone();
     let mut com_t = com.2.clone();
@@ -336,6 +371,9 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             )
         })
         .collect();
+    println!("TIPA AB: prep took {}ms", now.elapsed().as_millis());
+
+    let now = Instant::now();
 
     for (a_x_c, a_z_c_inv, b_x_c, b_z_c_inv, t_x_c, t_z_c_inv) in prep.iter() {
         com_a.mul_assign(a_x_c);
@@ -347,7 +385,7 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
         com_t.mul_assign(t_x_c);
         com_t.mul_assign(t_z_c_inv);
     }
-
+    println!("TIPA AB: recursive took {}ms", now.elapsed().as_millis());
     let now = Instant::now();
     r_transcript.reverse();
     r_transcript_inverse.reverse();

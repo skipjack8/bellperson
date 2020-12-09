@@ -1,3 +1,10 @@
+use crossbeam_channel::bounded;
+use digest::Digest;
+use ff::{Field, PrimeField};
+use groupy::CurveProjective;
+use log::*;
+use rayon::prelude::*;
+
 use super::{
     accumulator::PairingTuple,
     inner_product,
@@ -10,12 +17,7 @@ use crate::groth16::{
     multiscalar::{par_multiscalar, MultiscalarPrecomp, ScalarList},
     PreparedVerifyingKey,
 };
-use crossbeam_channel::bounded;
-use digest::Digest;
-use ff::{Field, PrimeField};
-use groupy::CurveProjective;
-use log::*;
-use rayon::prelude::*;
+use crate::SynthesisError;
 
 use std::time::Instant;
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
@@ -23,8 +25,9 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     pvk: &PreparedVerifyingKey<E>,
     public_inputs: &[Vec<E::Fr>],
     proof: &AggregateProof<E, D>,
-) -> bool {
+) -> Result<bool, SynthesisError> {
     info!("verify_aggregate_proof");
+
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
     let r = loop {
@@ -44,7 +47,11 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         counter_nonce += 1;
     };
 
-    assert_eq!(pvk.ic.len(), public_inputs[0].len() + 1);
+    for pub_input in public_inputs {
+        if (pub_input.len() + 1) != pvk.ic.len() {
+            return Err(SynthesisError::MalformedVerifyingKey);
+        }
+    }
 
     let (valid_send, valid_rcv) = bounded(1);
     rayon::scope(move |s| {
@@ -179,7 +186,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     let res = valid_rcv.recv().unwrap();
     info!("aggregate verify done");
 
-    res
+    Ok(res)
 }
 
 fn verify_with_srs_shift<E: Engine, D: Digest + Sync>(

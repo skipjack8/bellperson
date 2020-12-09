@@ -6,7 +6,7 @@ use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::multiscalar::*;
 
 pub fn pairing_miller_affine<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) -> E::Fqk {
-    assert_eq!(left.len(), right.len());
+    debug_assert_eq!(left.len(), right.len());
     let pairs = left
         .par_iter()
         .map(|e| e.prepare())
@@ -18,7 +18,7 @@ pub fn pairing_miller_affine<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affi
 }
 
 pub fn pairing_miller<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
-    assert_eq!(left.len(), right.len());
+    debug_assert_eq!(left.len(), right.len());
     let pairs = left
         .par_iter()
         .map(|e| e.into_affine().prepare())
@@ -35,7 +35,7 @@ pub fn pairing<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) -> E::Fqk
 }
 
 pub fn multiexponentiation<G: CurveAffine>(left: &[G], right: &[G::Scalar]) -> G::Projective {
-    assert_eq!(left.len(), right.len());
+    debug_assert_eq!(left.len(), right.len());
 
     let table = precompute_fixed_window::<G>(&left, WINDOW_SIZE);
     multiexponentiation_with_table::<G>(&table, right)

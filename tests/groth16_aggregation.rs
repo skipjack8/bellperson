@@ -251,7 +251,8 @@ fn test_groth16_aggregation_min() {
     // Aggregate proofs using inner product proofs
     let start = Instant::now();
     println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
-    let aggregate_proof = aggregate_proofs::<Bls12, Blake2b>(&srs, &proofs);
+    let aggregate_proof =
+        aggregate_proofs::<Bls12, Blake2b>(&srs, &proofs).expect("failed to aggregate proofs");
     let prover_time = start.elapsed().as_millis();
 
     println!("Verifying aggregated proof...");
@@ -259,7 +260,7 @@ fn test_groth16_aggregation_min() {
     let result =
         verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &statements, &aggregate_proof);
     let verifier_time = start.elapsed().as_millis();
-    assert!(result);
+    assert!(result.unwrap());
 
     let start = Instant::now();
     let proofs: Vec<_> = proofs.iter().collect();
@@ -344,12 +345,14 @@ fn test_groth16_aggregation_mimc() {
     // Aggregate proofs using inner product proofs
     let start = Instant::now();
     println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
-    let aggregate_proof = aggregate_proofs::<Bls12, Blake2b>(&srs, &proofs);
+    let aggregate_proof =
+        aggregate_proofs::<Bls12, Blake2b>(&srs, &proofs).expect("failed to aggregate proofs");
     let prover_time = start.elapsed().as_millis();
 
     println!("Verifying aggregated proof...");
     let start = Instant::now();
-    let result = verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &images, &aggregate_proof);
+    let result =
+        verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &images, &aggregate_proof).unwrap();
     let verifier_time = start.elapsed().as_millis();
     assert!(result);
 

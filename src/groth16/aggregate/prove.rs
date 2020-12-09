@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::{inner_product, poly::DensePolynomial, structured_scalar_power, SRS};
 use crate::bls::Engine;
 use crate::groth16::{multiscalar::*, Proof};
+use crate::SynthesisError;
 
 #[derive(Serialize, Deserialize)]
 pub struct AggregateProof<E: Engine, D: Digest> {
@@ -121,8 +122,12 @@ pub struct GIPAAuxWithSSM<E: Engine, D: Digest> {
 pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
-) -> AggregateProof<E, D> {
+) -> Result<AggregateProof<E, D>, SynthesisError> {
     let (ck_1, ck_2) = ip_srs.get_commitment_keys();
+
+    if ck_1.len() != proofs.len() || ck_2.len() != proofs.len() {
+        return Err(SynthesisError::MalformedSrs);
+    }
 
     let mut a = Vec::new();
     let mut com_a = E::Fqk::zero();
@@ -251,15 +256,15 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
     assert_eq!(com_a, computed_com_a);
 
-    AggregateProof {
+    Ok(AggregateProof {
         com_a,
         com_b,
         com_c,
         ip_ab,
         agg_c,
-        tipa_proof_ab: tipa_proof_ab.unwrap(),
-        tipa_proof_c: tipa_proof_c.unwrap(),
-    }
+        tipa_proof_ab: tipa_proof_ab.unwrap()?,
+        tipa_proof_c: tipa_proof_c.unwrap()?,
+    })
 }
 
 // Shifts KZG proof for left message by scalar r (used for efficient composition with aggregation protocols)
@@ -269,9 +274,9 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     values: (&[E::G1Affine], &[E::G2Affine]),
     ck: (&[E::G2Affine], &[E::G1Affine]),
     r_shift: &E::Fr,
-) -> PairingInnerProductABProof<E, D> {
+) -> Result<PairingInnerProductABProof<E, D>, SynthesisError> {
     // Run GIPA
-    let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1));
+    let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1))?;
 
     // Prove final commitment keys are wellformed
     let (ck_a_final, ck_b_final) = aux.ck_base;
@@ -301,8 +306,8 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
     };
 
     // Complete KZG proofs
-    let mut ck_a_kzg_opening = E::G2::zero();
-    let mut ck_b_kzg_opening = E::G1::zero();
+    let mut ck_a_kzg_opening = Ok(E::G2::zero());
+    let mut ck_b_kzg_opening = Ok(E::G1::zero());
 
     rayon::scope(|s| {
         let ck_a_kzg_opening = &mut ck_a_kzg_opening;
@@ -328,12 +333,12 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
         });
     });
 
-    PairingInnerProductABProof {
+    Ok(PairingInnerProductABProof {
         gipa_proof: proof,
         final_ck: (ck_a_final, ck_b_final),
-        final_ck_proof: (ck_a_kzg_opening, ck_b_kzg_opening),
+        final_ck_proof: (ck_a_kzg_opening?, ck_b_kzg_opening?),
         _marker: PhantomData,
-    }
+    })
 }
 
 // IP: PairingInnerProduct<E>
@@ -345,12 +350,15 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
     pub fn prove_with_aux(
         values: (&[E::G1Affine], &[E::G2Affine]),
         ck: (&[E::G2Affine], &[E::G1Affine]),
-    ) -> (Self, GIPAAux<E, D>) {
+    ) -> Result<(Self, GIPAAux<E, D>), SynthesisError> {
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let (mut ck_a, mut ck_b) = (ck.0.to_vec(), ck.1.to_vec());
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
-        assert!(m_a.len().is_power_of_two());
+
+        if !m_a.len().is_power_of_two() {
+            return Err(SynthesisError::MalformedProofs);
+        }
 
         while m_a.len() > 1 {
             // recursive step
@@ -483,7 +491,7 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
         r_transcript.reverse();
         r_commitment_steps.reverse();
 
-        (
+        Ok((
             GIPAProof {
                 r_commitment_steps,
                 r_base: (m_base.0.into_projective(), m_base.1.into_projective()),
@@ -494,7 +502,7 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 ck_base: (ck_base.0.into_projective(), ck_base.1.into_projective()),
                 _marker: PhantomData,
             },
-        )
+        ))
     }
 }
 
@@ -522,13 +530,15 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
     pub fn prove_with_aux(
         values: (&[E::G1Affine], &[E::Fr]),
         ck: &[E::G2Affine],
-    ) -> (Self, GIPAAuxWithSSM<E, D>) {
+    ) -> Result<(Self, GIPAAuxWithSSM<E, D>), SynthesisError> {
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let mut ck_a = ck.to_vec();
 
         let mut r_commitment_steps = Vec::new();
         let mut r_transcript = Vec::new();
-        assert!(m_a.len().is_power_of_two());
+        if !m_a.len().is_power_of_two() {
+            return Err(SynthesisError::MalformedProofs);
+        }
 
         while m_a.len() > 1 {
             // recursive step
@@ -628,7 +638,7 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
         r_transcript.reverse();
         r_commitment_steps.reverse();
 
-        (
+        Ok((
             GIPAProofWithSSM {
                 r_commitment_steps,
                 r_base: (m_base.0.into_projective(), m_base.1),
@@ -639,7 +649,7 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                 ck_base: ck_base.into_projective(),
                 _marker: PhantomData,
             },
-        )
+        ))
     }
 }
 
@@ -649,14 +659,13 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     transcript: &[G::Scalar],
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
-) -> G {
+) -> Result<G, SynthesisError> {
     let ck_polynomial =
         DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(transcript, r_shift));
-    assert_eq!(
-        srs_powers_len,
-        ck_polynomial.coeffs().len(),
-        "inconsistent srs_powers with ck_polynomial"
-    );
+
+    if srs_powers_len != ck_polynomial.coeffs().len() {
+        return Err(SynthesisError::MalformedSrs);
+    }
 
     let ck_polynomial_c_eval =
         polynomial_evaluation_product_form_from_transcript(&transcript, kzg_challenge, &r_shift);
@@ -680,11 +689,11 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
         quotient_polynomial_coeffs[i].into_repr()
     };
 
-    par_multiscalar::<_, G::Affine>(
+    Ok(par_multiscalar::<_, G::Affine>(
         &ScalarList::Getter(getter, srs_powers_len),
         srs_powers_table,
         std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
-    )
+    ))
 }
 
 pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
@@ -733,9 +742,9 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
     srs: &SRS<E>,
     values: (&[E::G1Affine], &[E::Fr]),
     ck: &[E::G2Affine],
-) -> MultiExpInnerProductCProof<E, D> {
+) -> Result<MultiExpInnerProductCProof<E, D>, SynthesisError> {
     // Run GIPA
-    let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(values, ck); // TODO: add plaeholder value
+    let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(values, ck)?;
 
     // Prove final commitment key is wellformed
     let ck_a_final = aux.ck_base;
@@ -769,14 +778,14 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         &transcript_inverse,
         &E::Fr::one(),
         &c,
-    );
+    )?;
 
-    MultiExpInnerProductCProof {
+    Ok(MultiExpInnerProductCProof {
         gipa_proof: proof,
         final_ck: ck_a_final,
         final_ck_proof: ck_a_kzg_opening,
         _marker: PhantomData,
-    }
+    })
 }
 
 pub(super) fn fr_from_u128<F: PrimeField>(bytes: &[u8]) -> F {

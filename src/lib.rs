@@ -345,6 +345,10 @@ pub enum SynthesisError {
     /// During GPU multiexp/fft, some GPU related error happened
     #[error("encountered a GPU error: {0}")]
     GPUError(#[from] gpu::GPUError),
+    #[error("attempted to aggregate malformed proofs")]
+    MalformedProofs,
+    #[error("malformed SRS")]
+    MalformedSrs,
 }
 
 /// Represents a constraint system which can have new variables

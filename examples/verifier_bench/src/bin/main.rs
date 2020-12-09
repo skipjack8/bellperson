@@ -204,7 +204,8 @@ fn main() {
             let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
 
             let agg_proof = srs.as_ref().map(|srs| {
-                let (agg, took) = timer!(aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs));
+                let (agg, took) =
+                    timer!(aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs).unwrap());
                 println!("Proof aggregation finished in {}ms", took);
                 agg
             });
@@ -226,7 +227,8 @@ fn main() {
             println!("Proof generation finished in {}ms", took);
 
             let agg_proof = srs.as_ref().map(|srs| {
-                let (agg, took) = timer!(aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs));
+                let (agg, took) =
+                    timer!(aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs).unwrap());
                 println!("Proof aggregation finished in {}ms", took);
                 agg
             });
@@ -252,12 +254,11 @@ fn main() {
 
             if let Some(ref agg_proof) = agg_proof {
                 let srs = srs.as_ref().unwrap();
-                let (valid, took) = timer!(verify_aggregate_proof(
-                    &srs.get_verifier_key(),
-                    &pvk,
-                    &pis,
-                    agg_proof,
-                ));
+                let (valid, took) =
+                    timer!(
+                        verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &pis, agg_proof,)
+                            .unwrap()
+                    );
                 println!(
                     "Verification aggregated finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
                     took,

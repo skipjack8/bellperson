@@ -15,6 +15,7 @@ use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::CurveProjective;
 use log::*;
+use rayon::prelude::*;
 
 use std::time::Instant;
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
@@ -271,15 +272,17 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
     proof: &GIPAProof<E, D>,
 ) -> ((E::Fqk, E::Fqk, E::Fqk), Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa verify recursive challenge transcript");
-    let (com_0, com_1, com_2) = com.clone();
-    let (mut com_a, mut com_b, mut com_t) = (*com_0, *com_1, *com_2);
     let mut r_transcript = Vec::new();
     let mut r_transcript_inverse = Vec::new();
+
+    let default_transcript = E::Fr::zero();
+
     for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
         // Fiat-Shamir challenge
         let mut counter_nonce: usize = 0;
-        let default_transcript = E::Fr::zero();
+
         let transcript = r_transcript.last().unwrap_or(&default_transcript);
+
         let (c, c_inv) = 'challenge: loop {
             let mut hash_input = Vec::new();
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
@@ -305,38 +308,50 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             counter_nonce += 1;
         };
 
-        #[inline]
-        /// (x * c) * y * (z * c_inv)
-        fn lambda<E: Engine>(
-            x: E::Fqk,
-            y: &E::Fqk,
-            z: &E::Fqk,
-            c: &E::Fr,
-            c_inv: &E::Fr,
-        ) -> E::Fqk {
-            // x * c
-            let x_c = x.pow(c.into_repr());
-            // z * c_inv
-            let z_c_inv = z.pow(c_inv.into_repr());
-
-            mul!(mul!(x_c, y), &z_c_inv)
-        }
-
-        com_a = lambda::<E>(com_1.0, &com_a, &com_2.0, &c, &c_inv);
-        com_b = lambda::<E>(com_1.1, &com_b, &com_2.1, &c, &c_inv);
-
-        com_t = {
-            let x_c = com_1.2.pow(c.into_repr());
-            let z_c_inv = com_2.2.pow(c_inv.into_repr());
-            mul!(mul!(x_c, &com_t), &z_c_inv)
-        };
-
         r_transcript.push(c);
         r_transcript_inverse.push(c_inv);
     }
+
+    let mut com_a = com.0.clone();
+    let mut com_b = com.1.clone();
+    let mut com_t = com.2.clone();
+
+    let prep: Vec<(_, _, _, _, _, _)> = proof
+        .r_commitment_steps
+        .par_iter()
+        .rev()
+        .zip(r_transcript.par_iter())
+        .zip(r_transcript_inverse.par_iter())
+        .map(|(((com_1, com_2), c), c_inv)| {
+            let c_repr = c.into_repr();
+            let c_inv_repr = c_inv.into_repr();
+
+            (
+                com_1.0.pow(c_repr),
+                com_2.0.pow(c_inv_repr),
+                com_1.1.pow(c_repr),
+                com_2.1.pow(c_inv_repr),
+                com_1.2.pow(c_repr),
+                com_2.2.pow(c_inv_repr),
+            )
+        })
+        .collect();
+
+    for (a_x_c, a_z_c_inv, b_x_c, b_z_c_inv, t_x_c, t_z_c_inv) in prep.iter() {
+        com_a.mul_assign(a_x_c);
+        com_a.mul_assign(a_z_c_inv);
+
+        com_b.mul_assign(b_x_c);
+        com_b.mul_assign(b_z_c_inv);
+
+        com_t.mul_assign(t_x_c);
+        com_t.mul_assign(t_z_c_inv);
+    }
+
     let now = Instant::now();
     r_transcript.reverse();
     r_transcript_inverse.reverse();
+
     println!(
         "TIPA AB: reversed transcript took {}ms",
         now.elapsed().as_millis()

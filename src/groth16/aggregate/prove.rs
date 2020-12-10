@@ -13,6 +13,7 @@ use crate::bls::Engine;
 use crate::groth16::{multiscalar::*, Proof};
 use crate::SynthesisError;
 
+/// Aggregate `n` zkSnark proofs, where `n` must be a power of two.
 pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
@@ -23,37 +24,26 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         return Err(SynthesisError::MalformedSrs);
     }
 
-    let mut a = Vec::new();
-    let mut com_a = E::Fqk::zero();
-    let mut b = Vec::new();
-    let mut com_b = E::Fqk::zero();
-    let mut c = Vec::new();
-    let mut com_c = E::Fqk::zero();
-    rayon::scope(|s| {
-        let ck_1 = &ck_1;
-        let ck_2 = &ck_2;
+    let ck_1 = &ck_1;
+    let ck_2 = &ck_2;
 
-        let a = &mut a;
-        let com_a = &mut com_a;
-        s.spawn(move |_| {
-            *a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
-            *com_a = inner_product::pairing::<E>(&a, ck_1);
-        });
-
-        let b = &mut b;
-        let com_b = &mut com_b;
-        s.spawn(move |_| {
-            *b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
-            *com_b = inner_product::pairing::<E>(ck_2, &b);
-        });
-
-        let c = &mut c;
-        let com_c = &mut com_c;
-        s.spawn(move |_| {
-            *c = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>();
-            *com_c = inner_product::pairing::<E>(&c, ck_1);
-        });
-    });
+    par! {
+        let (a, com_a) = {
+            let a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
+            let com_a = inner_product::pairing::<E>(&a, ck_1);
+            (a, com_a)
+        },
+        let (b, com_b) = {
+            let b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
+            let com_b = inner_product::pairing::<E>(ck_2, &b);
+            (b, com_b)
+        },
+        let (c, com_c) = {
+            let c = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>();
+            let com_c = inner_product::pairing::<E>(&c, ck_1);
+            (c, com_c)
+        }
+    }
 
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
@@ -73,80 +63,42 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 
     let r_vec = structured_scalar_power(proofs.len(), &r);
 
-    let mut a_r = Vec::new();
-    let mut ck_1_r = Vec::new();
+    let r_vec = &r_vec;
+    let ck_1 = &ck_1;
+    let a = &a;
 
-    rayon::scope(|s| {
-        let r_vec = &r_vec;
-        let ck_1 = &ck_1;
-        let a = &a;
+    par! {
+        let a_r = a.par_iter()
+                   .zip(r_vec.par_iter())
+                   .map(|(a, r)| mul!(a.into_projective(), *r).into_affine())
+                   .collect::<Vec<E::G1Affine>>(),
+        let ck_1_r = ck_1.par_iter()
+                         .zip(r_vec.par_iter())
+                         .map(|(ck, r)| mul!(ck.into_projective(), r.inverse().unwrap()).into_affine())
+                         .collect::<Vec<E::G2Affine>>()
+    };
 
-        let a_r = &mut a_r;
-        s.spawn(move |_| {
-            *a_r = a
-                .par_iter()
-                .zip(r_vec.par_iter())
-                .map(|(a, r)| mul!(a.into_projective(), *r).into_affine())
-                .collect::<Vec<E::G1Affine>>();
-        });
+    let a_r = &a_r;
+    let ck_1_r = &ck_1_r;
+    let b = &b;
+    let c = &c;
 
-        let ck_1_r = &mut ck_1_r;
-        s.spawn(move |_| {
-            *ck_1_r = ck_1
-                .par_iter()
-                .zip(r_vec.par_iter())
-                .map(|(ck, r)| mul!(ck.into_projective(), r.inverse().unwrap()).into_affine())
-                .collect::<Vec<E::G2Affine>>();
-        });
-    });
-
-    let mut computed_com_a = E::Fqk::zero();
-    let mut ip_ab = E::Fqk::zero();
-    let mut agg_c = E::G1::zero();
-    let mut tipa_proof_ab = None;
-    let mut tipa_proof_c = None;
-
-    rayon::scope(|s| {
-        let a_r = &a_r;
-        let ck_1_r = &ck_1_r;
-        let b = &b;
-        let c = &c;
-        let r_vec = &r_vec;
-
-        let computed_com_a = &mut computed_com_a;
-        s.spawn(move |_| {
-            *computed_com_a = inner_product::pairing::<E>(a_r, ck_1_r);
-        });
-
-        let tipa_proof_ab = &mut tipa_proof_ab;
-        s.spawn(move |_| {
-            *tipa_proof_ab = Some(prove_with_srs_shift::<E>(
+    par! {
+        let computed_com_a = inner_product::pairing::<E>(a_r, ck_1_r),
+        let tipa_proof_ab = prove_with_srs_shift::<E>(
                 &ip_srs,
                 (a_r, b),
                 (ck_1_r, &ck_2),
                 &r,
-            ));
-        });
-
-        let tipa_proof_c = &mut tipa_proof_c;
-        s.spawn(move |_| {
-            *tipa_proof_c = Some(prove_with_structured_scalar_message::<E>(
-                &ip_srs,
-                (c, r_vec),
-                &ck_1,
-            ));
-        });
-
-        let ip_ab = &mut ip_ab;
-        s.spawn(move |_| {
-            *ip_ab = inner_product::pairing::<E>(&a_r, b);
-        });
-
-        let agg_c = &mut agg_c;
-        s.spawn(move |_| {
-            *agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec);
-        });
-    });
+        ),
+        let tipa_proof_c = prove_with_structured_scalar_message::<E>(
+            &ip_srs,
+            (c, r_vec),
+            &ck_1,
+        ),
+        let ip_ab = inner_product::pairing::<E>(&a_r, b),
+        let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec)
+    };
 
     assert_eq!(com_a, computed_com_a);
 
@@ -156,8 +108,8 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         com_c,
         ip_ab,
         agg_c,
-        tipa_proof_ab: tipa_proof_ab.unwrap()?,
-        tipa_proof_c: tipa_proof_c.unwrap()?,
+        tipa_proof_ab: tipa_proof_ab?,
+        tipa_proof_c: tipa_proof_c?,
     })
 }
 
@@ -200,32 +152,23 @@ fn prove_with_srs_shift<E: Engine>(
     };
 
     // Complete KZG proofs
-    let mut ck_a_kzg_opening = Ok(E::G2::zero());
-    let mut ck_b_kzg_opening = Ok(E::G1::zero());
 
-    rayon::scope(|s| {
-        let ck_a_kzg_opening = &mut ck_a_kzg_opening;
-        s.spawn(move |_| {
-            *ck_a_kzg_opening = prove_commitment_key_kzg_opening(
-                &srs.h_beta_powers_table,
-                srs.h_beta_powers.len(),
-                &transcript_inverse,
-                &r_inverse,
-                &c,
-            );
-        });
-
-        let ck_b_kzg_opening = &mut ck_b_kzg_opening;
-        s.spawn(move |_| {
-            *ck_b_kzg_opening = prove_commitment_key_kzg_opening(
-                &srs.g_alpha_powers_table,
-                srs.g_alpha_powers.len(),
-                &transcript,
-                &<E::Fr>::one(),
-                &c,
-            );
-        });
-    });
+    par! {
+        let ck_a_kzg_opening = prove_commitment_key_kzg_opening(
+            &srs.h_beta_powers_table,
+            srs.h_beta_powers.len(),
+            &transcript_inverse,
+            &r_inverse,
+            &c,
+        ),
+        let ck_b_kzg_opening = prove_commitment_key_kzg_opening(
+            &srs.g_alpha_powers_table,
+            srs.g_alpha_powers.len(),
+            &transcript,
+            &<E::Fr>::one(),
+            &c,
+        )
+    };
 
     Ok(PairingInnerProductABProof {
         gipa_proof: proof,

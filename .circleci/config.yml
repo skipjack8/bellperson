@@ -238,7 +238,10 @@ jobs:
       - run:
           name: Generate coverage report
           command: |
+            # Run with default features
             LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
+            # And with the gpu feature enabled
+            LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
 
             # Do *not* use sparse output. It leads to more lines that are not
             # taken into account at all

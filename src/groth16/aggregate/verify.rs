@@ -4,6 +4,7 @@ use ff::{Field, PrimeField};
 use groupy::CurveProjective;
 use log::*;
 use rayon::prelude::*;
+use sha2::Sha256;
 
 use super::{
     accumulator::PairingTuple,
@@ -20,11 +21,11 @@ use crate::groth16::{
 use crate::SynthesisError;
 
 use std::time::Instant;
-pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
+pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
     ip_verifier_srs: &VerifierSRS<E>,
     pvk: &PreparedVerifyingKey<E>,
     public_inputs: &[Vec<E::Fr>],
-    proof: &AggregateProof<E, D>,
+    proof: &AggregateProof<E>,
 ) -> Result<bool, SynthesisError> {
     info!("verify_aggregate_proof");
 
@@ -39,7 +40,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         bincode::serialize_into(&mut hash_input, &proof.com_c).expect("vec");
 
         if let Some(r) = E::Fr::from_random_bytes(
-            &D::digest(&hash_input).as_slice()
+            &Sha256::digest(&hash_input).as_slice()
                 [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
         ) {
             break r;
@@ -62,7 +63,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         let tipa_ab = send_tuple.clone();
         s.spawn(move |_| {
             let now = Instant::now();
-            let tuple = verify_with_srs_shift::<E, D>(
+            let tuple = verify_with_srs_shift::<E>(
                 ip_verifier_srs,
                 (&proof.com_a, &proof.com_b, &proof.ip_ab),
                 &proof.tipa_proof_ab,
@@ -76,7 +77,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
         let tipa_c = send_tuple.clone();
         s.spawn(move |_| {
             let now = Instant::now();
-            let tuple = verify_with_structured_scalar_message::<E, D>(
+            let tuple = verify_with_structured_scalar_message::<E>(
                 ip_verifier_srs,
                 (&proof.com_c, &proof.agg_c),
                 &r,
@@ -189,10 +190,10 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, D: Digest + Sync>(
     Ok(res)
 }
 
-fn verify_with_srs_shift<E: Engine, D: Digest + Sync>(
+fn verify_with_srs_shift<E: Engine>(
     v_srs: &VerifierSRS<E>,
     com: (&E::Fqk, &E::Fqk, &E::Fqk),
-    proof: &PairingInnerProductABProof<E, D>,
+    proof: &PairingInnerProductABProof<E>,
     r_shift: &E::Fr,
 ) -> PairingTuple<E> {
     info!("verify with srs shift");
@@ -215,7 +216,7 @@ fn verify_with_srs_shift<E: Engine, D: Digest + Sync>(
         bincode::serialize_into(&mut hash_input, &ck_b_final).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
-            &D::digest(&hash_input).as_slice()
+            &Sha256::digest(&hash_input).as_slice()
                 [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
         ) {
             break c;
@@ -300,9 +301,9 @@ fn verify_with_srs_shift<E: Engine, D: Digest + Sync>(
     a
 }
 
-fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
+fn gipa_verify_recursive_challenge_transcript<E: Engine>(
     com: (&E::Fqk, &E::Fqk, &E::Fqk),
-    proof: &GIPAProof<E, D>,
+    proof: &GIPAProof<E>,
 ) -> ((E::Fqk, E::Fqk, E::Fqk), Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa verify recursive challenge transcript");
 
@@ -333,7 +334,7 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
             bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
 
-            let d = D::digest(&hash_input);
+            let d = Sha256::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
 
             if let Some(c_inv) = c.inverse() {
@@ -458,15 +459,19 @@ pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
     PairingTuple::from_miller(mul!(ip1, &p2))
 }
 
-fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
+fn verify_with_structured_scalar_message<E: Engine>(
     v_srs: &VerifierSRS<E>,
     com: (&E::Fqk, &E::G1),
     scalar_b: &E::Fr,
-    proof: &MultiExpInnerProductCProof<E, D>,
+    proof: &MultiExpInnerProductCProof<E>,
 ) -> PairingTuple<E> {
     info!("verify with structured scalar message");
+    let now = Instant::now();
     let (base_com, transcript, transcript_inverse) =
         gipa_with_ssm_verify_recursive_challenge_transcript((com.0, com.1), &proof.gipa_proof);
+
+    println!("TIPA AB: vssm gipa took {}ms", now.elapsed().as_millis());
+    let now = Instant::now();
 
     let ck_a_final = &proof.final_ck;
     let ck_a_proof = &proof.final_ck_proof;
@@ -481,13 +486,19 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
         bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
-            &D::digest(&hash_input).as_slice()
+            &Sha256::digest(&hash_input).as_slice()
                 [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
         ) {
             break c;
         };
         counter_nonce += 1;
     };
+
+    println!(
+        "TIPA AB: vssm challenge took {}ms",
+        now.elapsed().as_millis()
+    );
+    let now = Instant::now();
 
     // Check commitment key
     let mut aid = verify_commitment_key_g2_kzg_opening(
@@ -498,6 +509,17 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
         &E::Fr::one(),
         &c,
     );
+
+    let (com_a, com_t) = base_com;
+    let a_base = [proof.gipa_proof.r_base.0.clone().into_affine()];
+
+    let a = PairingTuple::from_pair(
+        inner_product::pairing_miller_affine::<E>(&a_base, &[ck_a_final.into_affine()]),
+        com_a.clone(),
+    );
+
+    println!("TIPA AB: vssm aid took {}ms", now.elapsed().as_millis());
+    let now = Instant::now();
 
     // Compute final scalar
     let mut power_2_b = scalar_b.clone();
@@ -511,28 +533,26 @@ fn verify_with_structured_scalar_message<E: Engine, D: Digest>(
     }
 
     // Verify base inner product commitment
-    let (com_a, com_t) = base_com;
-    let a_base = [proof.gipa_proof.r_base.0.clone().into_affine()];
     let t_base = inner_product::multiexponentiation(&a_base, &[b_base]);
-    let a = PairingTuple::from_pair(
-        inner_product::pairing_miller_affine::<E>(&a_base, &[ck_a_final.into_affine()]),
-        com_a.clone(),
-    );
     let b = t_base == com_t;
+
+    println!("TIPA AB: vssm b took {}ms", now.elapsed().as_millis());
+    let now = Instant::now();
 
     // only check that doesn't require pairing so we can give a tuple that will
     // render the equation wrong in case it's false
-    if b {
-        aid.merge(&a);
-        aid
-    } else {
-        PairingTuple::new_invalid()
+    if !b {
+        return PairingTuple::new_invalid();
     }
+
+    aid.merge(&a);
+    println!("TIPA AB: vssm merge took {}ms", now.elapsed().as_millis());
+    aid
 }
 
-fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
+fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine>(
     com: (&E::Fqk, &E::G1),
-    proof: &GIPAProofWithSSM<E, D>,
+    proof: &GIPAProofWithSSM<E>,
 ) -> ((E::Fqk, E::G1), Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa ssm verify recursive challenge transcript");
     let mut r_transcript = Vec::new();
@@ -555,7 +575,7 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
             bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
 
-            let d = D::digest(&hash_input);
+            let d = Sha256::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
 
             if let Some(c_inv) = c.inverse() {
@@ -572,6 +592,8 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
     let mut com_a = com.0.clone();
     let mut com_t = com.1.clone();
 
+    let now = Instant::now();
+
     let prep: Vec<(_, _, _, _)> = proof
         .r_commitment_steps
         .par_iter()
@@ -582,14 +604,20 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine, D: Digest>(
             let c_repr = c.into_repr();
             let c_inv_repr = c_inv.into_repr();
 
-            (
-                com_1.0.pow(c_repr),
-                com_2.0.pow(c_inv_repr),
-                mul!(com_1.1, c_repr),
-                mul!(com_2.1, c_inv_repr),
-            )
+            let mut x = com_1.1;
+            x.mul_assign(c_repr);
+            let mut y = com_2.1;
+            y.mul_assign(c_inv_repr);
+
+            (com_1.0.pow(c_repr), com_2.0.pow(c_inv_repr), x, y)
         })
         .collect();
+
+    println!(
+        "TIPA AB: vssm prep took {}ms ({})",
+        now.elapsed().as_millis(),
+        prep.len()
+    );
 
     for (a_x_c, a_z_c_inv, t_x_c, t_z_c_inv) in prep.iter() {
         com_a.mul_assign(a_x_c);

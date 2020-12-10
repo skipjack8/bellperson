@@ -1,11 +1,10 @@
-use std::marker::PhantomData;
-
 use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use itertools::Itertools;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 use super::{inner_product, poly::DensePolynomial, structured_scalar_power, SRS};
 use crate::bls::Engine;
@@ -13,31 +12,31 @@ use crate::groth16::{multiscalar::*, Proof};
 use crate::SynthesisError;
 
 #[derive(Serialize, Deserialize)]
-pub struct AggregateProof<E: Engine, D: Digest> {
+pub struct AggregateProof<E: Engine> {
     pub com_a: E::Fqk,
     pub com_b: E::Fqk,
     pub com_c: E::Fqk,
     pub ip_ab: E::Fqk,
     pub agg_c: E::G1,
     #[serde(bound(
-        serialize = "PairingInnerProductABProof<E, D>: Serialize",
-        deserialize = "PairingInnerProductABProof<E, D>: Deserialize<'de>",
+        serialize = "PairingInnerProductABProof<E>: Serialize",
+        deserialize = "PairingInnerProductABProof<E>: Deserialize<'de>",
     ))]
-    pub tipa_proof_ab: PairingInnerProductABProof<E, D>,
+    pub tipa_proof_ab: PairingInnerProductABProof<E>,
     #[serde(bound(
-        serialize = "MultiExpInnerProductCProof<E, D>: Serialize",
-        deserialize = "MultiExpInnerProductCProof<E, D>: Deserialize<'de>",
+        serialize = "MultiExpInnerProductCProof<E>: Serialize",
+        deserialize = "MultiExpInnerProductCProof<E>: Deserialize<'de>",
     ))]
-    pub tipa_proof_c: MultiExpInnerProductCProof<E, D>,
+    pub tipa_proof_c: MultiExpInnerProductCProof<E>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct PairingInnerProductABProof<E: Engine, D: Digest> {
+pub struct PairingInnerProductABProof<E: Engine> {
     #[serde(bound(
-        serialize = "GIPAProof<E, D>: Serialize",
-        deserialize = "GIPAProof<E, D>: Deserialize<'de>",
+        serialize = "GIPAProof<E>: Serialize",
+        deserialize = "GIPAProof<E>: Deserialize<'de>",
     ))]
-    pub gipa_proof: GIPAProof<E, D>,
+    pub gipa_proof: GIPAProof<E>,
     #[serde(bound(
         serialize = "E::G1: Serialize, E::G2: Serialize",
         deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
@@ -48,11 +47,10 @@ pub struct PairingInnerProductABProof<E: Engine, D: Digest> {
         deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
     ))]
     pub final_ck_proof: (E::G2, E::G1),
-    pub _marker: PhantomData<D>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct GIPAProof<E: Engine, D: Digest> {
+pub struct GIPAProof<E: Engine> {
     #[serde(bound(
         serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
         deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
@@ -63,11 +61,10 @@ pub struct GIPAProof<E: Engine, D: Digest> {
         deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
     ))]
     pub r_base: (E::G1, E::G2), // Message
-    pub _marker: PhantomData<D>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct GIPAAux<E: Engine, D: Digest> {
+pub struct GIPAAux<E: Engine> {
     #[serde(bound(
         serialize = "E::Fr: Serialize",
         deserialize = "E::Fr: Deserialize<'de>",
@@ -78,34 +75,31 @@ pub struct GIPAAux<E: Engine, D: Digest> {
         deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
     ))]
     pub ck_base: (E::G2, E::G1),
-    pub _marker: PhantomData<D>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct MultiExpInnerProductCProof<E: Engine, D: Digest> {
+pub struct MultiExpInnerProductCProof<E: Engine> {
     #[serde(bound(
-        serialize = "GIPAProofWithSSM<E, D>: Serialize",
-        deserialize = "GIPAProofWithSSM<E, D>: Deserialize<'de>",
+        serialize = "GIPAProofWithSSM<E>: Serialize",
+        deserialize = "GIPAProofWithSSM<E>: Deserialize<'de>",
     ))]
-    pub gipa_proof: GIPAProofWithSSM<E, D>,
+    pub gipa_proof: GIPAProofWithSSM<E>,
     pub final_ck: E::G2,
     pub final_ck_proof: E::G2,
-    pub _marker: PhantomData<D>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct GIPAProofWithSSM<E: Engine, D: Digest> {
+pub struct GIPAProofWithSSM<E: Engine> {
     #[serde(bound(
         serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
         deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
     ))]
     pub r_commitment_steps: Vec<((E::Fqk, E::G1), (E::Fqk, E::G1))>, // Output
     pub r_base: (E::G1, E::Fr), // Message
-    pub _marker: PhantomData<D>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct GIPAAuxWithSSM<E: Engine, D: Digest> {
+pub struct GIPAAuxWithSSM<E: Engine> {
     #[serde(bound(
         serialize = "E::Fr: Serialize",
         deserialize = "E::Fr: Deserialize<'de>",
@@ -116,13 +110,12 @@ pub struct GIPAAuxWithSSM<E: Engine, D: Digest> {
         deserialize = "E::G2: Deserialize<'de>",
     ))]
     pub ck_base: E::G2,
-    pub _marker: PhantomData<D>,
 }
 
-pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
+pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
-) -> Result<AggregateProof<E, D>, SynthesisError> {
+) -> Result<AggregateProof<E>, SynthesisError> {
     let (ck_1, ck_2) = ip_srs.get_commitment_keys();
 
     if ck_1.len() != proofs.len() || ck_2.len() != proofs.len() {
@@ -170,7 +163,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
         bincode::serialize_into(&mut hash_input, &com_b).expect("vec");
         bincode::serialize_into(&mut hash_input, &com_c).expect("vec");
 
-        if let Some(r) = E::Fr::from_random_bytes(&D::digest(&hash_input).as_slice()[..]) {
+        if let Some(r) = E::Fr::from_random_bytes(&Sha256::digest(&hash_input).as_slice()[..]) {
             break r;
         };
 
@@ -226,7 +219,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
         let tipa_proof_ab = &mut tipa_proof_ab;
         s.spawn(move |_| {
-            *tipa_proof_ab = Some(prove_with_srs_shift::<E, D>(
+            *tipa_proof_ab = Some(prove_with_srs_shift::<E>(
                 &ip_srs,
                 (a_r, b),
                 (ck_1_r, &ck_2),
@@ -236,7 +229,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
         let tipa_proof_c = &mut tipa_proof_c;
         s.spawn(move |_| {
-            *tipa_proof_c = Some(prove_with_structured_scalar_message::<E, D>(
+            *tipa_proof_c = Some(prove_with_structured_scalar_message::<E>(
                 &ip_srs,
                 (c, r_vec),
                 &ck_1,
@@ -269,14 +262,14 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug, D: Digest + Sync + Send>(
 
 // Shifts KZG proof for left message by scalar r (used for efficient composition with aggregation protocols)
 // LMC commitment key should already be shifted before being passed as input
-fn prove_with_srs_shift<E: Engine, D: Digest>(
+fn prove_with_srs_shift<E: Engine>(
     srs: &SRS<E>,
     values: (&[E::G1Affine], &[E::G2Affine]),
     ck: (&[E::G2Affine], &[E::G1Affine]),
     r_shift: &E::Fr,
-) -> Result<PairingInnerProductABProof<E, D>, SynthesisError> {
+) -> Result<PairingInnerProductABProof<E>, SynthesisError> {
     // Run GIPA
-    let (proof, aux) = GIPAProof::<E, D>::prove_with_aux(values, (ck.0, ck.1))?;
+    let (proof, aux) = GIPAProof::<E>::prove_with_aux(values, (ck.0, ck.1))?;
 
     // Prove final commitment keys are wellformed
     let (ck_a_final, ck_b_final) = aux.ck_base;
@@ -297,7 +290,7 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
         bincode::serialize_into(&mut hash_input, &ck_b_final).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
-            &D::digest(&hash_input).as_slice()
+            &Sha256::digest(&hash_input).as_slice()
                 [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
         ) {
             break c;
@@ -337,7 +330,6 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
         gipa_proof: proof,
         final_ck: (ck_a_final, ck_b_final),
         final_ck_proof: (ck_a_kzg_opening?, ck_b_kzg_opening?),
-        _marker: PhantomData,
     })
 }
 
@@ -345,12 +337,12 @@ fn prove_with_srs_shift<E: Engine, D: Digest>(
 // LMC: AFGHOCommitmentG1<E>
 // RMC: AFGHOCommitmentG2<E>
 // IPC: IdentityCommitment<E::Fqk, E::Fr>
-impl<E: Engine, D: Digest> GIPAProof<E, D> {
+impl<E: Engine> GIPAProof<E> {
     /// Returns vector of recursive commitments and transcripts in reverse order.
     pub fn prove_with_aux(
         values: (&[E::G1Affine], &[E::G2Affine]),
         ck: (&[E::G2Affine], &[E::G1Affine]),
-    ) -> Result<(Self, GIPAAux<E, D>), SynthesisError> {
+    ) -> Result<(Self, GIPAAux<E>), SynthesisError> {
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let (mut ck_a, mut ck_b) = (ck.0.to_vec(), ck.1.to_vec());
         let mut r_commitment_steps = Vec::new();
@@ -417,7 +409,7 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
                 bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
                 bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
 
-                let d = D::digest(&hash_input);
+                let d = Sha256::digest(&hash_input);
                 let c = fr_from_u128::<E::Fr>(d.as_slice());
                 if let Some(c_inv) = c.inverse() {
                     // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
@@ -495,12 +487,10 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
             GIPAProof {
                 r_commitment_steps,
                 r_base: (m_base.0.into_projective(), m_base.1.into_projective()),
-                _marker: PhantomData,
             },
             GIPAAux {
                 r_transcript,
                 ck_base: (ck_base.0.into_projective(), ck_base.1.into_projective()),
-                _marker: PhantomData,
             },
         ))
     }
@@ -525,12 +515,12 @@ impl<E: Engine, D: Digest> GIPAProof<E, D> {
 // LMC: AFGHOCommitmentG1<P>,
 // RMC: SSMPlaceholderCommitment<LMC::Scalar>,
 // IPC: IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,
-impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
+impl<E: Engine> GIPAProofWithSSM<E> {
     /// Returns vector of recursive commitments and transcripts in reverse order.
     pub fn prove_with_aux(
         values: (&[E::G1Affine], &[E::Fr]),
         ck: &[E::G2Affine],
-    ) -> Result<(Self, GIPAAuxWithSSM<E, D>), SynthesisError> {
+    ) -> Result<(Self, GIPAAuxWithSSM<E>), SynthesisError> {
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let mut ck_a = ck.to_vec();
 
@@ -580,7 +570,7 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
                 bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
                 bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
 
-                let d = D::digest(&hash_input);
+                let d = Sha256::digest(&hash_input);
                 let c = fr_from_u128::<E::Fr>(d.as_slice());
                 if let Some(c_inv) = c.inverse() {
                     // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
@@ -642,12 +632,10 @@ impl<E: Engine, D: Digest> GIPAProofWithSSM<E, D> {
             GIPAProofWithSSM {
                 r_commitment_steps,
                 r_base: (m_base.0.into_projective(), m_base.1),
-                _marker: PhantomData,
             },
             GIPAAuxWithSSM {
                 r_transcript,
                 ck_base: ck_base.into_projective(),
-                _marker: PhantomData,
             },
         ))
     }
@@ -738,13 +726,13 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
         .collect()
 }
 
-fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
+fn prove_with_structured_scalar_message<E: Engine>(
     srs: &SRS<E>,
     values: (&[E::G1Affine], &[E::Fr]),
     ck: &[E::G2Affine],
-) -> Result<MultiExpInnerProductCProof<E, D>, SynthesisError> {
+) -> Result<MultiExpInnerProductCProof<E>, SynthesisError> {
     // Run GIPA
-    let (proof, aux) = GIPAProofWithSSM::<E, D>::prove_with_aux(values, ck)?;
+    let (proof, aux) = GIPAProofWithSSM::<E>::prove_with_aux(values, ck)?;
 
     // Prove final commitment key is wellformed
     let ck_a_final = aux.ck_base;
@@ -763,7 +751,7 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
-            &D::digest(&hash_input).as_slice()
+            &Sha256::digest(&hash_input).as_slice()
                 [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
         ) {
             break c;
@@ -784,7 +772,6 @@ fn prove_with_structured_scalar_message<E: Engine, D: Digest>(
         gipa_proof: proof,
         final_ck: ck_a_final,
         final_ck_proof: ck_a_kzg_opening,
-        _marker: PhantomData,
     })
 }
 

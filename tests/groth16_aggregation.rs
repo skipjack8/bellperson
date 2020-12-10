@@ -7,7 +7,6 @@ use bellperson::groth16::{
     setup_inner_product, verify_aggregate_proof, verify_proof, verify_proofs_batch,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
-use blake2::Blake2b;
 use ff::{Field, PrimeField, ScalarEngine};
 use rand::{thread_rng, SeedableRng};
 
@@ -178,8 +177,8 @@ impl<E: Engine> Circuit<E> for TestCircuit<E> {
 
 #[test]
 fn test_groth16_aggregation_min() {
-    const NUM_PUBLIC_INPUTS: usize = 5000; //1000;
-    const NUM_PROOFS_TO_AGGREGATE: usize = 1024; //1024;
+    const NUM_PUBLIC_INPUTS: usize = 50; //1000;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 8; //1024;
     let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
 
     println!("Creating parameters...");
@@ -252,7 +251,7 @@ fn test_groth16_aggregation_min() {
     let start = Instant::now();
     println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
     let aggregate_proof =
-        aggregate_proofs::<Bls12, Blake2b>(&srs, &proofs).expect("failed to aggregate proofs");
+        aggregate_proofs::<Bls12>(&srs, &proofs).expect("failed to aggregate proofs");
     let prover_time = start.elapsed().as_millis();
 
     println!("Verifying aggregated proof...");
@@ -346,7 +345,7 @@ fn test_groth16_aggregation_mimc() {
     let start = Instant::now();
     println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
     let aggregate_proof =
-        aggregate_proofs::<Bls12, Blake2b>(&srs, &proofs).expect("failed to aggregate proofs");
+        aggregate_proofs::<Bls12>(&srs, &proofs).expect("failed to aggregate proofs");
     let prover_time = start.elapsed().as_millis();
 
     println!("Verifying aggregated proof...");

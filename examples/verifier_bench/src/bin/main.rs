@@ -204,8 +204,7 @@ fn main() {
             let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
 
             let agg_proof = srs.as_ref().map(|srs| {
-                let (agg, took) =
-                    timer!(aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs).unwrap());
+                let (agg, took) = timer!(aggregate_proofs::<Bls12>(srs, &proofs).unwrap());
                 println!("Proof aggregation finished in {}ms", took);
                 agg
             });
@@ -227,8 +226,7 @@ fn main() {
             println!("Proof generation finished in {}ms", took);
 
             let agg_proof = srs.as_ref().map(|srs| {
-                let (agg, took) =
-                    timer!(aggregate_proofs::<Bls12, sha2::Sha256>(srs, &proofs).unwrap());
+                let (agg, took) = timer!(aggregate_proofs::<Bls12>(srs, &proofs).unwrap());
                 println!("Proof aggregation finished in {}ms", took);
                 agg
             });

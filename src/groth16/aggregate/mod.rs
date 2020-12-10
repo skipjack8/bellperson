@@ -28,10 +28,12 @@ mod accumulator;
 mod inner_product;
 mod msm;
 mod poly;
+mod proof;
 mod prove;
 mod srs;
 mod verify;
 
+pub use self::proof::*;
 pub use self::prove::*;
 pub use self::srs::*;
 pub use self::verify::*;

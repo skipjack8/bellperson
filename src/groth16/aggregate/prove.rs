@@ -3,114 +3,15 @@ use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use itertools::Itertools;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use super::{inner_product, poly::DensePolynomial, structured_scalar_power, SRS};
+use super::{
+    inner_product, poly::DensePolynomial, structured_scalar_power, AggregateProof, GIPAProof,
+    GIPAProofWithSSM, MultiExpInnerProductCProof, PairingInnerProductABProof, SRS,
+};
 use crate::bls::Engine;
 use crate::groth16::{multiscalar::*, Proof};
 use crate::SynthesisError;
-
-#[derive(Serialize, Deserialize)]
-pub struct AggregateProof<E: Engine> {
-    pub com_a: E::Fqk,
-    pub com_b: E::Fqk,
-    pub com_c: E::Fqk,
-    pub ip_ab: E::Fqk,
-    pub agg_c: E::G1,
-    #[serde(bound(
-        serialize = "PairingInnerProductABProof<E>: Serialize",
-        deserialize = "PairingInnerProductABProof<E>: Deserialize<'de>",
-    ))]
-    pub tipa_proof_ab: PairingInnerProductABProof<E>,
-    #[serde(bound(
-        serialize = "MultiExpInnerProductCProof<E>: Serialize",
-        deserialize = "MultiExpInnerProductCProof<E>: Deserialize<'de>",
-    ))]
-    pub tipa_proof_c: MultiExpInnerProductCProof<E>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct PairingInnerProductABProof<E: Engine> {
-    #[serde(bound(
-        serialize = "GIPAProof<E>: Serialize",
-        deserialize = "GIPAProof<E>: Deserialize<'de>",
-    ))]
-    pub gipa_proof: GIPAProof<E>,
-    #[serde(bound(
-        serialize = "E::G1: Serialize, E::G2: Serialize",
-        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
-    ))]
-    pub final_ck: (E::G2, E::G1), // Key
-    #[serde(bound(
-        serialize = "E::G1: Serialize, E::G2: Serialize",
-        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
-    ))]
-    pub final_ck_proof: (E::G2, E::G1),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GIPAProof<E: Engine> {
-    #[serde(bound(
-        serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
-        deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
-    ))]
-    pub r_commitment_steps: Vec<((E::Fqk, E::Fqk, E::Fqk), (E::Fqk, E::Fqk, E::Fqk))>, // Output
-    #[serde(bound(
-        serialize = "E::G1: Serialize, E::G2: Serialize",
-        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
-    ))]
-    pub r_base: (E::G1, E::G2), // Message
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GIPAAux<E: Engine> {
-    #[serde(bound(
-        serialize = "E::Fr: Serialize",
-        deserialize = "E::Fr: Deserialize<'de>",
-    ))]
-    pub r_transcript: Vec<E::Fr>,
-    #[serde(bound(
-        serialize = "E::G1: Serialize, E::G2: Serialize",
-        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
-    ))]
-    pub ck_base: (E::G2, E::G1),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct MultiExpInnerProductCProof<E: Engine> {
-    #[serde(bound(
-        serialize = "GIPAProofWithSSM<E>: Serialize",
-        deserialize = "GIPAProofWithSSM<E>: Deserialize<'de>",
-    ))]
-    pub gipa_proof: GIPAProofWithSSM<E>,
-    pub final_ck: E::G2,
-    pub final_ck_proof: E::G2,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GIPAProofWithSSM<E: Engine> {
-    #[serde(bound(
-        serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
-        deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
-    ))]
-    pub r_commitment_steps: Vec<((E::Fqk, E::G1), (E::Fqk, E::G1))>, // Output
-    pub r_base: (E::G1, E::Fr), // Message
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GIPAAuxWithSSM<E: Engine> {
-    #[serde(bound(
-        serialize = "E::Fr: Serialize",
-        deserialize = "E::Fr: Deserialize<'de>",
-    ))]
-    pub r_transcript: Vec<E::Fr>,
-    #[serde(bound(
-        serialize = "E::G2: Serialize",
-        deserialize = "E::G2: Deserialize<'de>",
-    ))]
-    pub ck_base: E::G2,
-}
 
 pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     ip_srs: &SRS<E>,
@@ -339,7 +240,7 @@ fn prove_with_srs_shift<E: Engine>(
 // IPC: IdentityCommitment<E::Fqk, E::Fr>
 impl<E: Engine> GIPAProof<E> {
     /// Returns vector of recursive commitments and transcripts in reverse order.
-    pub fn prove_with_aux(
+    fn prove_with_aux(
         values: (&[E::G1Affine], &[E::G2Affine]),
         ck: (&[E::G2Affine], &[E::G1Affine]),
     ) -> Result<(Self, GIPAAux<E>), SynthesisError> {
@@ -517,7 +418,7 @@ impl<E: Engine> GIPAProof<E> {
 // IPC: IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,
 impl<E: Engine> GIPAProofWithSSM<E> {
     /// Returns vector of recursive commitments and transcripts in reverse order.
-    pub fn prove_with_aux(
+    fn prove_with_aux(
         values: (&[E::G1Affine], &[E::Fr]),
         ck: &[E::G2Affine],
     ) -> Result<(Self, GIPAAuxWithSSM<E>), SynthesisError> {
@@ -787,4 +688,14 @@ pub(super) fn fr_from_u128<F: PrimeField>(bytes: &[u8]) -> F {
     repr.as_mut()[1] = upper;
 
     F::from_repr(repr).unwrap()
+}
+
+struct GIPAAux<E: Engine> {
+    r_transcript: Vec<E::Fr>,
+    ck_base: (E::G2, E::G1),
+}
+
+struct GIPAAuxWithSSM<E: Engine> {
+    r_transcript: Vec<E::Fr>,
+    ck_base: E::G2,
 }

@@ -226,73 +226,46 @@ fn verify_with_srs_shift<E: Engine>(
 
     let now = Instant::now();
 
-    let mut aid = PairingTuple::new();
-    let mut bid = PairingTuple::new();
-    let mut a = PairingTuple::new();
-    let mut b = PairingTuple::new();
-    let mut t_base = PairingTuple::new();
+    // Verify base inner product commitment
+    let (com_a, com_b, com_t) = base_com;
+    let a_base = [proof.gipa_proof.r_base.0.clone()];
+    let b_base = [proof.gipa_proof.r_base.1.clone()];
 
-    rayon::scope(|s| {
-        let aid = &mut aid;
-        s.spawn(move |_| {
-            *aid = verify_commitment_key_g2_kzg_opening(
-                v_srs,
-                &ck_a_final,
-                &ck_a_proof,
-                &transcript_inverse,
-                &r_shift.inverse().unwrap(),
-                &c,
-            );
-        });
-
-        let bid = &mut bid;
-        s.spawn(move |_| {
-            *bid = verify_commitment_key_g1_kzg_opening(
-                v_srs,
-                &ck_b_final,
-                &ck_b_proof,
-                &transcript,
-                &E::Fr::one(),
-                &c,
-            );
-        });
-
-        // Verify base inner product commitment
-        let (com_a, com_b, com_t) = base_com;
-        let a_base = [proof.gipa_proof.r_base.0.clone()];
-        let b_base = [proof.gipa_proof.r_base.1.clone()];
-
-        let a = &mut a;
-        s.spawn(move |_| {
-            // LMC::verify - pairing inner product<E>
-            *a = PairingTuple::from_pair(
-                inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
-                com_a,
-            );
-        });
-
-        let b = &mut b;
-        s.spawn(move |_| {
-            // RMC::verify - afgho commitment G1
-            *b = PairingTuple::from_pair(
-                inner_product::pairing_miller::<E>(&[ck_b_final.clone()], &b_base),
-                com_b,
-            );
-        });
-
-        let t_base = &mut t_base;
-        s.spawn(move |_| {
-            // IPC::verify - identity commitment<Fqk, Fr>
-            *t_base = PairingTuple::from_pair(
-                inner_product::pairing_miller::<E>(&a_base, &b_base),
-                com_t,
-            );
-        });
-    });
+    par! {
+        let aid = verify_commitment_key_g2_kzg_opening(
+            v_srs,
+            &ck_a_final,
+            &ck_a_proof,
+            &transcript_inverse,
+            &r_shift.inverse().unwrap(),
+            &c,
+        ),
+        let bid = verify_commitment_key_g1_kzg_opening(
+            v_srs,
+            &ck_b_final,
+            &ck_b_proof,
+            &transcript,
+            &E::Fr::one(),
+            &c,
+        ),
+        let a = PairingTuple::from_pair(
+            inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
+            com_a,
+        ),
+        let b = PairingTuple::from_pair(
+            inner_product::pairing_miller::<E>(&[ck_b_final.clone()], &b_base),
+            com_b,
+        ),
+        let t_base = PairingTuple::from_pair(
+            inner_product::pairing_miller::<E>(&a_base, &b_base),
+            com_t,
+        )
+    };
 
     println!("TIPA AB inner product: {}ms", now.elapsed().as_millis());
 
     let now = Instant::now();
+    let mut a = a;
     a.merge(&b);
     a.merge(&t_base);
     a.merge(&aid);

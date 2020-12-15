@@ -248,6 +248,7 @@ jobs:
       - install-gpu-deps
       - run:
           name: Generate coverage report
+          no_output_timeout: 30m
           command: |
             # Run with default features
             LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test

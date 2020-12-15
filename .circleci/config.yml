@@ -14,12 +14,6 @@ executors:
       image: ubuntu-1604-cuda-10.1:201909-23
     working_directory: ~/gpuci
     resource_class: gpu.nvidia.medium
-    steps:
-      - run:
-          name: Install libraries for GPU tests
-          command: |
-            sudo apt-get update -y
-            sudo apt install -y ocl-icd-opencl-dev
 
 restore-workspace: &restore-workspace
   attach_workspace:
@@ -37,7 +31,14 @@ set-env-path: &set-env-path
     echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
     source $BASH_ENV
 
-#commands:
+commands:
+  install-gpu-deps:
+    steps:
+      - run:
+          name: Install libraries for GPU tests
+          command: |
+            sudo apt-get update -y
+            sudo apt install -y ocl-icd-opencl-dev
 #  test_target_pairing:
 #    parameters:
 #      target:
@@ -120,12 +121,6 @@ jobs:
       - run: rustc --version
       - run: cargo install rustfilt
       - run: rm -rf .git
-      # Install libraries for GPU tests
-      - run:
-          name: Install libraries for GPU tests
-          command: |
-            sudo apt-get update -y
-            sudo apt install -y ocl-icd-opencl-dev
       - persist_to_workspace:
           root: ~/
           paths:
@@ -247,6 +242,7 @@ jobs:
       - *restore-workspace
       - *restore-cache
       - run: *set-env-path
+      - install-gpu-deps
       - run:
           name: Generate coverage report
           command: |

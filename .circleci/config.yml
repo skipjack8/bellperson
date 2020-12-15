@@ -21,7 +21,7 @@ references:
     ~/
   restore-workspace: &restore-workspace
     attach_workspace:
-      at: *workspace_root
+      at: *workspace-root
   restore-cache: &restore-cache
     restore_cache:
       keys:

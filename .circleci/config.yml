@@ -46,20 +46,6 @@ commands:
             echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
             source $BASH_ENV
 
-  #generate-coverage-report:
-  #  steps:
-  #    - run:
-  #        name: Generate the coverage report from all produced data
-  #        command: |
-  #          # Do *not* use sparse output. It leads to more lines that are not
-  #          # taken into account at all
-  #          llvm-profdata merge --output=default.profdata ./*.profraw
-  #          # Only export the coverage of this project, we don't care about coverage of
-  #          # dependencies
-  #          llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
-  #    - codecov/upload:
-  #        file: lcov.info
-
 #  test_target_pairing:
 #    parameters:
 #      target:
@@ -268,31 +254,15 @@ jobs:
           name: Generate coverage output
           no_output_timeout: 30m
           command: |
-            pwd
-            echo ${PWD}
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
             LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --lib
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
-            ls -al
       - persist_to_workspace:
           root: *workspace-root
           paths:
             - gpuci/*.profraw
-      #- persist_to_workspace:
-      #    root: .
-      #    paths:
-      #      - "*.profraw"
-      #- generate-coverage-report
-      #      # Do *not* use sparse output. It leads to more lines that are not
-      #      # taken into account at all
-      #      llvm-profdata merge --output=default.profdata ./*.profraw
-      #      # Only export the coverage of this project, we don't care about coverage of
-      #      # dependencies
-      #      llvm-cov export --ignore-filename-regex="\.cargo" --ignore-filename-regex="\.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
-      #- codecov/upload:
-      #    file: lcov.info
   # Generates a single report out of all coverage runs.
   coverage-generate:
     executor: default
@@ -303,9 +273,6 @@ jobs:
       - run:
           name: Generate the coverage report from all produced data
           command: |
-            pwd
-            echo ${PWD}
-            ls -al
             # Do *not* use sparse output. It leads to more lines that are not
             # taken into account at all
             llvm-profdata merge --output=default.profdata ./*.profraw
@@ -314,7 +281,6 @@ jobs:
             llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
       - codecov/upload:
           file: lcov.info
-      #- generate-coverage-report
 
 workflows:
   version: 2.1

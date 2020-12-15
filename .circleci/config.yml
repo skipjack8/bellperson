@@ -244,7 +244,7 @@ jobs:
   #        name: Run cargo release build
   #        command: cargo build --release --no-default-features --features pairing
 
-  coverage:
+  coverage-run:
     executor: default
     environment:
       # Incremental build is not supported when profiling
@@ -266,10 +266,15 @@ jobs:
           no_output_timeout: 30m
           command: |
             # Run with default features
-            LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
-            # And with the gpu feature enabled
-            LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
-      - generate-coverage-report
+            #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
+            LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --lib
+            ## And with the gpu feature enabled
+            #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
+      - persist_to_workspace:
+          root: ~/
+          paths:
+            - *.profraw
+      #- generate-coverage-report
       #      # Do *not* use sparse output. It leads to more lines that are not
       #      # taken into account at all
       #      llvm-profdata merge --output=default.profdata ./*.profraw
@@ -278,6 +283,14 @@ jobs:
       #      llvm-cov export --ignore-filename-regex="\.cargo" --ignore-filename-regex="\.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
       #- codecov/upload:
       #    file: lcov.info
+  # Generates a single report out of all coverage runs.
+  coverage-generate:
+    executor: default
+    steps:
+      - *restore-workspace
+      - *restore-cache
+      - set-env-path
+      - generate-coverage-report
 
 workflows:
   version: 2.1
@@ -313,6 +326,9 @@ workflows:
       #    requires:
       #      - cargo_fetch
 
-      - coverage:
+      - coverage-run:
           requires:
             - cargo_fetch
+      - coverage-generate:
+          requires:
+            - coverage-run

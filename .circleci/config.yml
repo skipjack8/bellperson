@@ -235,6 +235,9 @@ jobs:
 
   coverage-run:
     executor: default
+    parameters:
+      extra-args:
+        type: string
     environment:
       # Incremental build is not supported when profiling
       CARGO_INCREMENTAL: 0
@@ -256,7 +259,7 @@ jobs:
           command: |
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
-            LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --lib
+            LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test << parameters.extra-args >>
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
       - persist_to_workspace:
@@ -317,6 +320,8 @@ workflows:
       #      - cargo_fetch
 
       - coverage-run:
+          name: coverage_default_features
+          extra-args: "--lib"
           requires:
             - cargo_fetch
       - coverage-generate:

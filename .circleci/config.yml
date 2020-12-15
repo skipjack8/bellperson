@@ -233,7 +233,7 @@ jobs:
   #        name: Run cargo release build
   #        command: cargo build --release --no-default-features --features pairing
 
-  coverage-run:
+  coverage_run:
     executor: default
     parameters:
       extra-args:
@@ -267,7 +267,7 @@ jobs:
           paths:
             - gpuci/*.profraw
   # Generates a single report out of all coverage runs.
-  coverage-generate:
+  coverage_generate:
     executor: default
     steps:
       - *restore-workspace
@@ -319,11 +319,11 @@ workflows:
       #    requires:
       #      - cargo_fetch
 
-      - coverage-run:
+      - coverage_run:
           name: coverage_default_features
           extra-args: "--lib"
           requires:
             - cargo_fetch
-      - coverage-generate:
+      - coverage_generate:
           requires:
             - coverage_default_features

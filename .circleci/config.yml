@@ -31,8 +31,8 @@ commands:
       - run:
           name: Install libraries for GPU tests
           command: |
-            sudo apt-get update --assume-yes
-            sudo apt install --allow-yes ocl-icd-opencl-dev
+            sudo apt-get update -y
+            sudo apt install -y ocl-icd-opencl-dev
 
   set-env-path:
     steps:

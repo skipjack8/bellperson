@@ -274,9 +274,13 @@ jobs:
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
             ls -al
       - persist_to_workspace:
-          root: .
+          root: ~/
           paths:
-            - "*.profraw"
+            - gpuci
+      #- persist_to_workspace:
+      #    root: .
+      #    paths:
+      #      - "*.profraw"
       #- generate-coverage-report
       #      # Do *not* use sparse output. It leads to more lines that are not
       #      # taken into account at all

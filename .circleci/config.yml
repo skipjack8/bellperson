@@ -53,7 +53,7 @@ commands:
             llvm-profdata merge --output=default.profdata ./*.profraw
             # Only export the coverage of this project, we don't care about coverage of
             # dependencies
-            llvm-cov export --ignore-filename-regex="\.cargo" --ignore-filename-regex="\.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
+            llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
       - codecov/upload:
           file: lcov.info
 

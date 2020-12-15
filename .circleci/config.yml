@@ -326,4 +326,4 @@ workflows:
             - cargo_fetch
       - coverage-generate:
           requires:
-            - coverage-run
+            - coverage_default_features

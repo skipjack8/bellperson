@@ -15,15 +15,18 @@ executors:
     working_directory: ~/gpuci
     resource_class: gpu.nvidia.medium
 
-restore-workspace: &restore-workspace
-  attach_workspace:
-    at: ~/
 
-restore-cache: &restore-cache
-  restore_cache:
-    keys:
-      - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx6
-      - repo-source-{{ .Branch }}-{{ .Revision }}
+references:
+  workspace-root: &workspace-root
+    ~/
+  restore-workspace: &restore-workspace
+    attach_workspace:
+      at: *workspace_root
+  restore-cache: &restore-cache
+    restore_cache:
+      keys:
+        - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx6
+        - repo-source-{{ .Branch }}-{{ .Revision }}
 
 commands:
   install-gpu-deps:
@@ -140,7 +143,7 @@ jobs:
       - run: cargo install rustfilt
       - run: rm -rf .git
       - persist_to_workspace:
-          root: ~/
+          root: *workspace-root
           paths:
             - gpuci
       - save_cache:
@@ -274,9 +277,9 @@ jobs:
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
             ls -al
       - persist_to_workspace:
-          root: ~/
+          root: *workspace-root
           paths:
-            - gpuci
+            - gpuci/*.profraw
       #- persist_to_workspace:
       #    root: .
       #    paths:

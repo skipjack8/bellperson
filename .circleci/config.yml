@@ -273,7 +273,7 @@ jobs:
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
       - persist_to_workspace:
-          root: ~/
+          root: gpuci
           paths:
             - "*.profraw"
       #- generate-coverage-report

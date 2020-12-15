@@ -14,6 +14,12 @@ executors:
       image: ubuntu-1604-cuda-10.1:201909-23
     working_directory: ~/gpuci
     resource_class: gpu.nvidia.medium
+    steps:
+      - run:
+          name: Install libraries for GPU tests
+          command: |
+            sudo apt-get update -y
+            sudo apt install -y ocl-icd-opencl-dev
 
 restore-workspace: &restore-workspace
   attach_workspace:

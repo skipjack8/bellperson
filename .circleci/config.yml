@@ -319,11 +319,17 @@ workflows:
       #    requires:
       #      - cargo_fetch
 
+      #- coverage_run:
+      #    name: coverage_default_features
+      #    extra-args: "--lib"
+      #    requires:
+      #      - cargo_fetch
       - coverage_run:
-          name: coverage_default_features
-          extra-args: "--lib"
+          name: coverage_gpu_feature
+          extra-args: "--features gpu"
           requires:
             - cargo_fetch
       - coverage_generate:
           requires:
-            - coverage_default_features
+            #- coverage_default_features
+            - coverage_gpu_feature

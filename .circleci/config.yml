@@ -265,6 +265,8 @@ jobs:
           name: Generate coverage output
           no_output_timeout: 30m
           command: |
+            pwd
+            echo ${PWD}
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
             LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --lib

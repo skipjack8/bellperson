@@ -273,7 +273,7 @@ jobs:
       - persist_to_workspace:
           root: ~/
           paths:
-            - *.profraw
+            - "*.profraw"
       #- generate-coverage-report
       #      # Do *not* use sparse output. It leads to more lines that are not
       #      # taken into account at all

@@ -25,12 +25,6 @@ restore-cache: &restore-cache
       - cargo-v0-{{ checksum "rust-toolchain" }}-{{ checksum "Cargo.toml" }}-{{ checksum "Cargo.lock" }}-{{ arch }}-vmx6
       - repo-source-{{ .Branch }}-{{ .Revision }}
 
-set-env-path: &set-env-path
-  name: Set the PATH env variable
-  command: |
-    echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
-    source $BASH_ENV
-
 commands:
   install-gpu-deps:
     steps:
@@ -39,6 +33,15 @@ commands:
           command: |
             sudo apt update
             sudo apt install --allow-yes ocl-icd-opencl-dev
+
+  set-env-path:
+    steps:
+      - run:
+          name: Set the PATH env variable
+          command: |
+            # Also put the Rust LLVM tools into the PATH.
+            echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
+            source $BASH_ENV
 #  test_target_pairing:
 #    parameters:
 #      target:
@@ -241,7 +244,7 @@ jobs:
     steps:
       - *restore-workspace
       - *restore-cache
-      - run: *set-env-path
+      - set-env-path
       - install-gpu-deps
       - run:
           name: Generate coverage report

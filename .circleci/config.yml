@@ -259,7 +259,7 @@ jobs:
           command: |
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
-            LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test << parameters.extra-args >>
+            LLVM_PROFILE_FILE="default_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test << parameters.extra-args >> -- --show-output
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
       - persist_to_workspace:

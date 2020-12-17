@@ -236,10 +236,16 @@ jobs:
   coverage_run:
     executor: default
     parameters:
+      prof-name:
+        description: Prefix for the LLVM instrumentation profile file
+        type: string
+        default: ""
       cargo-args:
+        description: Addtional arguments for the cargo command
         type: string
         default: ""
       test-args:
+        description: Additional arguments for the test executable (after the `--`)
         type: string
         default: ""
     environment:
@@ -261,10 +267,9 @@ jobs:
           name: Generate coverage output
           no_output_timeout: 30m
           command: |
-            echo "<< parameters.name >>"
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
-            LLVM_PROFILE_FILE="<< parameters.name >>_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test --features _coverage << parameters.cargo-args >> -- --nocapture << parameters.test-args >>
+            LLVM_PROFILE_FILE="<< parameters.prof-name >>_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test --features _coverage << parameters.cargo-args >> -- --nocapture << parameters.test-args >>
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
       - persist_to_workspace:
@@ -330,8 +335,17 @@ workflows:
       #    requires:
       #      - cargo_fetch
       - coverage_run:
-          name: coverage_gpu_feature
-          cargo-args: "--features gpu"
+          name: coverage_gpu_feature_lib
+          prof-name: "gpu_lib"
+          cargo-args: "--features gpu --lib"
+          # If run in parallel the GPU tests will block and hence fail
+          test-args: "--test-threads=1"
+          requires:
+            - cargo_fetch
+      - coverage_run:
+          name: coverage_gpu_feature_integration
+          prof-name: "gpu_integration"
+          cargo-args: "--features gpu --test '*'"
           # If run in parallel the GPU tests will block and hence fail
           test-args: "--test-threads=1"
           requires:
@@ -339,4 +353,5 @@ workflows:
       - coverage_generate:
           requires:
             #- coverage_default_features
-            - coverage_gpu_feature
+            - coverage_gpu_feature_lib
+            - coverage_gpu_feature_integration

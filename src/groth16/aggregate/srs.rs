@@ -1,5 +1,8 @@
+use std::io::{self, Read, Write};
+
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use ff::{Field, PrimeField};
-use groupy::{CurveAffine, CurveProjective};
+use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 
 use super::msm;
 use crate::bls::Engine;
@@ -23,7 +26,101 @@ pub struct VerifierSRS<E: Engine> {
     pub h_alpha: E::G2,
 }
 
+impl<E: Engine> PartialEq for SRS<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.g_alpha_powers.len() == other.g_alpha_powers.len()
+            && self.h_beta_powers.len() == other.h_beta_powers.len()
+            && self.g_alpha_powers_table == other.g_alpha_powers_table
+            && self.h_beta_powers_table == other.h_beta_powers_table
+            && self.g_beta == other.g_beta
+            && self.h_alpha == other.h_alpha
+    }
+}
+
+impl<E: Engine> PartialEq for VerifierSRS<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.g == other.g
+            && self.h == other.h
+            && self.g_beta == other.g_beta
+            && self.h_alpha == other.h_alpha
+    }
+}
+
 impl<E: Engine> SRS<E> {
+    pub fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        writer.write_u32::<BigEndian>(self.g_alpha_powers.len() as u32)?;
+
+        for g_alpha_power in &self.g_alpha_powers {
+            writer.write_all(g_alpha_power.into_uncompressed().as_ref())?;
+        }
+
+        self.g_alpha_powers_table.write::<W>(writer)?;
+
+        writer.write_u32::<BigEndian>(self.h_beta_powers.len() as u32)?;
+
+        for h_beta_power in &self.h_beta_powers {
+            writer.write_all(h_beta_power.into_uncompressed().as_ref())?;
+        }
+
+        self.h_beta_powers_table.write::<W>(writer)?;
+
+        writer.write_all(self.g_beta.into_affine().into_uncompressed().as_ref())?;
+        writer.write_all(self.h_alpha.into_affine().into_uncompressed().as_ref())?;
+
+        Ok(())
+    }
+
+    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let g_alpha_power_len = reader.read_u32::<BigEndian>()? as usize;
+
+        let mut g_alpha_powers = Vec::with_capacity(g_alpha_power_len);
+        for _ in 0..g_alpha_power_len {
+            let mut g1_repr = <E::G1Affine as CurveAffine>::Uncompressed::empty();
+            reader.read_exact(g1_repr.as_mut())?;
+            let alpha_g1 = g1_repr
+                .into_affine()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            g_alpha_powers.push(alpha_g1);
+        }
+
+        let g_alpha_powers_table = MultiscalarPrecompOwned::<E::G1Affine>::read::<R>(reader)?;
+
+        let h_beta_power_len = reader.read_u32::<BigEndian>()? as usize;
+
+        let mut h_beta_powers = Vec::with_capacity(h_beta_power_len);
+        for _ in 0..h_beta_power_len {
+            let mut g1_repr = <E::G2Affine as CurveAffine>::Uncompressed::empty();
+            reader.read_exact(g1_repr.as_mut())?;
+            let alpha_g1 = g1_repr
+                .into_affine()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            h_beta_powers.push(alpha_g1);
+        }
+
+        let h_beta_powers_table = MultiscalarPrecompOwned::<E::G2Affine>::read::<R>(reader)?;
+
+        let mut g1_repr = <E::G1Affine as CurveAffine>::Uncompressed::empty();
+        reader.read_exact(g1_repr.as_mut())?;
+        let g_beta = g1_repr
+            .into_affine()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let mut g2_repr = <E::G2Affine as CurveAffine>::Uncompressed::empty();
+        reader.read_exact(g2_repr.as_mut())?;
+        let h_alpha = g2_repr
+            .into_affine()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        Ok(SRS {
+            g_alpha_powers,
+            g_alpha_powers_table,
+            h_beta_powers,
+            h_beta_powers_table,
+            g_beta: g_beta.into_projective(),
+            h_alpha: h_alpha.into_projective(),
+        })
+    }
+
     pub fn get_commitment_keys(&self) -> (Vec<E::G2Affine>, Vec<E::G1Affine>) {
         let ck_1 = self.get_ck_1().cloned().collect();
         let ck_2 = self.get_ck_2().cloned().collect();

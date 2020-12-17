@@ -176,6 +176,41 @@ impl<E: Engine> Circuit<E> for TestCircuit<E> {
 }
 
 #[test]
+fn test_groth16_srs_io() {
+    use std::io::{Seek, SeekFrom, Write};
+    use tempfile::NamedTempFile;
+
+    const NUM_PROOFS_TO_AGGREGATE: usize = 8; //1024;
+    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+
+    println!("Creating parameters...");
+
+    // Generate parameters for inner product aggregation
+    let srs: bellperson::groth16::SRS<Bls12> =
+        setup_inner_product(&mut rng, NUM_PROOFS_TO_AGGREGATE);
+
+    // Write out parameters to a temp file
+    let mut cache_file = NamedTempFile::new().expect("failed to create temp cache file");
+    srs.write(&mut cache_file).expect("failed to write out srs");
+    cache_file.flush().expect("failed to flush srs write");
+
+    // Read back parameters from the temp file
+    cache_file
+        .seek(SeekFrom::Start(0))
+        .expect("failed to rewind tmp file");
+
+    let srs2 = bellperson::groth16::SRS::<Bls12>::read(&mut cache_file)
+        .expect("failed to read srs from cache file");
+
+    // Ensure that the parameters match
+    assert_eq!(srs, srs2);
+
+    // Remove temp file
+    let cache_path = cache_file.into_temp_path();
+    cache_path.close().expect("failed to close temp path");
+}
+
+#[test]
 fn test_groth16_aggregation_min() {
     const NUM_PUBLIC_INPUTS: usize = 50; //1000;
     const NUM_PROOFS_TO_AGGREGATE: usize = 8; //1024;

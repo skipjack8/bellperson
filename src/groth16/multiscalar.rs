@@ -1,5 +1,8 @@
+use std::io::{self, Read, Write};
+
+use byteorder::{LittleEndian, ReadBytesExt};
 use ff::PrimeField;
-use groupy::{CurveAffine, CurveProjective};
+use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use rayon::prelude::*;
 
 pub const WINDOW_SIZE: usize = 8;
@@ -44,6 +47,72 @@ pub struct MultiscalarPrecompOwned<G: CurveAffine> {
     window_mask: u64,
     table_entries: usize,
     tables: Vec<Vec<G>>,
+}
+
+impl<G: CurveAffine> PartialEq for MultiscalarPrecompOwned<G> {
+    fn eq(&self, other: &Self) -> bool {
+        self.num_points == other.num_points
+            && self.window_size == other.window_size
+            && self.window_mask == other.window_mask
+            && self.table_entries == other.table_entries
+            && self
+                .tables
+                .par_iter()
+                .zip(other.tables.par_iter())
+                .all(|(a, b)| a == b)
+    }
+}
+
+impl<G: CurveAffine> MultiscalarPrecompOwned<G> {
+    pub fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        // Convert usizes to u32 for serialization
+        let num_points = self.num_points as u32;
+        let window_size = self.window_size as u32;
+        let table_entries = self.table_entries as u32;
+
+        writer.write_all(&num_points.to_le_bytes())?;
+        writer.write_all(&window_size.to_le_bytes())?;
+        writer.write_all(&self.window_mask.to_le_bytes())?;
+        writer.write_all(&table_entries.to_le_bytes())?;
+
+        for table in &self.tables {
+            for point in table {
+                writer.write_all(point.into_uncompressed().as_ref())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let num_points = reader.read_u32::<LittleEndian>()? as usize;
+        let window_size = reader.read_u32::<LittleEndian>()? as usize;
+        let window_mask = reader.read_u64::<LittleEndian>()?;
+        let table_entries = reader.read_u32::<LittleEndian>()? as usize;
+
+        let mut tables: Vec<Vec<G>> = Vec::with_capacity(num_points);
+        for _ in 0..num_points {
+            let mut table: Vec<G> = Vec::with_capacity(table_entries);
+            for _ in 0..table_entries {
+                let mut g_repr = G::Uncompressed::empty();
+                reader.read_exact(g_repr.as_mut())?;
+                let g = g_repr
+                    .into_affine()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+                table.push(g);
+            }
+            tables.push(table);
+        }
+
+        Ok(MultiscalarPrecompOwned {
+            num_points,
+            window_size,
+            window_mask,
+            table_entries,
+            tables,
+        })
+    }
 }
 
 impl<G: CurveAffine> MultiscalarPrecomp<G> for MultiscalarPrecompOwned<G> {

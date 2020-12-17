@@ -236,8 +236,12 @@ jobs:
   coverage_run:
     executor: default
     parameters:
-      extra-args:
+      cargo-args:
         type: string
+        default: ""
+      test-args:
+        type: string
+        default: ""
     environment:
       # Incremental build is not supported when profiling
       CARGO_INCREMENTAL: 0
@@ -259,7 +263,7 @@ jobs:
           command: |
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
-            LLVM_PROFILE_FILE="default_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test --features _coverage << parameters.extra-args >> -- --show-output
+            LLVM_PROFILE_FILE="default_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test --features _coverage << parameters.cargo-args >> -- --nocpature << parameters.test-args >>
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
       - persist_to_workspace:
@@ -321,14 +325,14 @@ workflows:
 
       #- coverage_run:
       #    name: coverage_default_features
-      #    extra-args: "--lib"
+      #    cargo-args: "--lib"
       #    requires:
       #      - cargo_fetch
       - coverage_run:
           name: coverage_gpu_feature
-          environmment:
-            RUST_TEST_THREADS: 1
-          extra-args: "--features gpu"
+          cargo-args: "--features gpu"
+          # The GPU tests will block and hence fail if run in parallel
+          test-args: "--test-threads=1"
           requires:
             - cargo_fetch
       - coverage_generate:

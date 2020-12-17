@@ -46,6 +46,21 @@ commands:
             echo 'export PATH="$HOME:~/.cargo/bin:~/.rustup/toolchains/<< pipeline.parameters.nightly-version >>-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:$PATH"' >> $BASH_ENV
             source $BASH_ENV
 
+  generate-and-upload-coverage-report:
+    steps:
+      - run:
+          name: Generate the coverage report from all produced data
+          command: |
+            # Do *not* use sparse output. It leads to more lines that are not
+            # taken into account at all
+            llvm-profdata merge --output=default.profdata ./*.profraw
+            # Only export the coverage of this project, we don't care about coverage of
+            # dependencies
+            llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
+      - codecov/upload:
+          file: lcov.info
+
+
 #  test_target_pairing:
 #    parameters:
 #      target:
@@ -272,28 +287,30 @@ jobs:
             LLVM_PROFILE_FILE="<< parameters.prof-name >>_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test << parameters.cargo-args >> -- --nocapture << parameters.test-args >>
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
-      - persist_to_workspace:
-          root: *workspace-root
-          paths:
-            - gpuci/<< parameters.prof-name >>*.profraw
-  # Generates a single report out of all coverage runs.
-  coverage_generate:
-    executor: default
-    steps:
-      - *restore-workspace
-      - *restore-cache
-      - set-env-path
-      - run:
-          name: Generate the coverage report from all produced data
-          command: |
-            # Do *not* use sparse output. It leads to more lines that are not
-            # taken into account at all
-            llvm-profdata merge --output=default.profdata ./*.profraw
-            # Only export the coverage of this project, we don't care about coverage of
-            # dependencies
-            llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
-      - codecov/upload:
-          file: lcov.info
+      #- persist_to_workspace:
+      #    root: *workspace-root
+      #    paths:
+      #      - gpuci/<< parameters.prof-name >>*.profraw
+      # Codecov automatically merges the reports
+      - generate-and-upload-coverage-report
+  ## Generates a single report out of all coverage runs.
+  #coverage_generate:
+  #  executor: default
+  #  steps:
+  #    - *restore-workspace
+  #    - *restore-cache
+  #    - set-env-path
+  #    - run:
+  #        name: Generate the coverage report from all produced data
+  #        command: |
+  #          # Do *not* use sparse output. It leads to more lines that are not
+  #          # taken into account at all
+  #          llvm-profdata merge --output=default.profdata ./*.profraw
+  #          # Only export the coverage of this project, we don't care about coverage of
+  #          # dependencies
+  #          llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata "$(find ./target/debug/deps/ -name 'bellperson-*' -not -name '*.d')" > lcov.info
+  #    - codecov/upload:
+  #        file: lcov.info
 
 workflows:
   version: 2.1
@@ -350,8 +367,8 @@ workflows:
           test-args: "--test-threads=1"
           requires:
             - cargo_fetch
-      - coverage_generate:
-          requires:
-            #- coverage_default_features
-            - coverage_gpu_feature_lib
-            - coverage_gpu_feature_integration
+      #- coverage_generate:
+      #    requires:
+      #      #- coverage_default_features
+      #      - coverage_gpu_feature_lib
+      #      - coverage_gpu_feature_integration

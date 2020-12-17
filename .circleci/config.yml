@@ -275,7 +275,7 @@ jobs:
       - persist_to_workspace:
           root: *workspace-root
           paths:
-            - gpuci
+            - gpuci/<< parameters.prof-name >>*.profraw
   # Generates a single report out of all coverage runs.
   coverage_generate:
     executor: default

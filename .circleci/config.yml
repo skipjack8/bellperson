@@ -51,6 +51,9 @@ commands:
       - run:
           name: Generate the coverage report from all produced data
           command: |
+            pwd
+            ls -al
+            ls -al ./target/debug/deps/
             # Do *not* use sparse output. It leads to more lines that are not
             # taken into account at all
             llvm-profdata merge --output=default.profdata ./*.profraw
@@ -285,6 +288,7 @@ jobs:
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
             LLVM_PROFILE_FILE="<< parameters.prof-name >>_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test --features _coverage << parameters.cargo-args >> -- --nocapture << parameters.test-args >>
+            ls -al
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
       #- persist_to_workspace:

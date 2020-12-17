@@ -326,6 +326,8 @@ workflows:
       #      - cargo_fetch
       - coverage_run:
           name: coverage_gpu_feature
+          environmment:
+            RUST_TEST_THREADS: 1
           extra-args: "--features gpu"
           requires:
             - cargo_fetch

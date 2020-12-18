@@ -354,19 +354,19 @@ workflows:
       #    requires:
       #      - cargo_fetch
 
-      #- coverage_run:
-      #    name: coverage_default_features
-      #    cargo-args: "--lib"
-      #    requires:
-      #      - cargo_fetch
       - coverage_run:
-          name: coverage_gpu_feature_lib
-          prof-name: "gpu_lib"
-          cargo-args: "--features gpu --lib"
-          # If run in parallel the GPU tests will block and hence fail
-          test-args: "--test-threads=1"
+          name: coverage_default_features
+          cargo-args: "--lib"
           requires:
             - cargo_fetch
+      #- coverage_run:
+      #    name: coverage_gpu_feature_lib
+      #    prof-name: "gpu_lib"
+      #    cargo-args: "--features gpu --lib"
+      #    # If run in parallel the GPU tests will block and hence fail
+      #    test-args: "--test-threads=1"
+      #    requires:
+      #      - cargo_fetch
       #- coverage_run:
       #    name: coverage_gpu_feature_integration
       #    prof-name: "gpu_integration"

@@ -291,7 +291,7 @@ jobs:
             ls -al
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
-      # Codecov automatically merges the reports
+      # Codecov automatically merges the reports in case there are several uploaded
       - generate-and-upload-coverage-report
   ## Generates a single report out of all coverage runs.
   #coverage_generate:

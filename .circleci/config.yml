@@ -63,7 +63,7 @@ commands:
             OBJECT_FILES=$(find ./target/debug/deps/* -name '*' -not -name '*\.*' -printf '%p,'|head --bytes -1)
             # Only export the coverage of this project, we don't care about coverage of
             # dependencies
-            llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata --objects ${OBJECT_FILES} > lcov.info
+            llvm-cov export --ignore-filename-regex=".cargo|.rustup" --format=lcov -instr-profile=default.profdata --object=${OBJECT_FILES} > lcov.info
       - codecov/upload:
           file: lcov.info
 

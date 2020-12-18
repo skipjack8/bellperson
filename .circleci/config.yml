@@ -258,10 +258,6 @@ jobs:
   coverage_run:
     executor: default
     parameters:
-      prof-name:
-        description: Prefix for the LLVM instrumentation profile file
-        type: string
-        default: ""
       cargo-args:
         description: Addtional arguments for the cargo command
         type: string
@@ -291,14 +287,10 @@ jobs:
           command: |
             # Run with default features
             #LLVM_PROFILE_FILE="default_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test
-            LLVM_PROFILE_FILE="<< parameters.prof-name >>_%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test --features _coverage << parameters.cargo-args >> -- --nocapture << parameters.test-args >>
+            LLVM_PROFILE_FILE="%m.profraw" RUST_LOG=info cargo +<< pipeline.parameters.nightly-version >> test --features _coverage << parameters.cargo-args >> -- --nocapture << parameters.test-args >>
             ls -al
             ## And with the gpu feature enabled
             #LLVM_PROFILE_FILE="gpu_%m.profraw" cargo +<< pipeline.parameters.nightly-version >> test --features gpu
-      #- persist_to_workspace:
-      #    root: *workspace-root
-      #    paths:
-      #      - gpuci/<< parameters.prof-name >>*.profraw
       # Codecov automatically merges the reports
       - generate-and-upload-coverage-report
   ## Generates a single report out of all coverage runs.
@@ -361,7 +353,6 @@ workflows:
             - cargo_fetch
       - coverage_run:
           name: coverage_gpu_feature_lib
-          prof-name: "gpu_lib"
           cargo-args: "--features gpu --lib"
           # If run in parallel the GPU tests will block and hence fail
           test-args: "--test-threads=1"
@@ -369,7 +360,6 @@ workflows:
             - cargo_fetch
       #- coverage_run:
       #    name: coverage_gpu_feature_integration
-      #    prof-name: "gpu_integration"
       #    cargo-args: "--features gpu --test '*'"
       #    # If run in parallel the GPU tests will block and hence fail
       #    test-args: "--test-threads=1"

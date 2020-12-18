@@ -340,8 +340,3 @@ workflows:
           test-args: "--test-threads=1"
           requires:
             - cargo_fetch
-      - coverage_generate:
-          requires:
-            - coverage_default_features
-            - coverage_gpu_feature_lib
-            - coverage_gpu_feature_integration

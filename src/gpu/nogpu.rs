@@ -73,6 +73,8 @@ macro_rules! locked_kernel {
                 return Err(GPUError::GPUDisabled);
             }
         }
+
+        unsafe impl<E: Engine> Send for $class<E> {}
     };
 }
 

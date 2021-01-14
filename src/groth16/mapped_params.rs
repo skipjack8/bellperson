@@ -1,5 +1,6 @@
 use crate::bls::Engine;
 use groupy::{CurveAffine, EncodedPoint};
+use rayon::prelude::*;
 
 use crate::SynthesisError;
 

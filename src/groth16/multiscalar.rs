@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
 
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt};
 use ff::PrimeField;
 use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use rayon::prelude::*;
@@ -70,10 +70,10 @@ impl<G: CurveAffine> MultiscalarPrecompOwned<G> {
         let window_size = self.window_size as u32;
         let table_entries = self.table_entries as u32;
 
-        writer.write_all(&num_points.to_le_bytes())?;
-        writer.write_all(&window_size.to_le_bytes())?;
-        writer.write_all(&self.window_mask.to_le_bytes())?;
-        writer.write_all(&table_entries.to_le_bytes())?;
+        writer.write_all(&num_points.to_be_bytes())?;
+        writer.write_all(&window_size.to_be_bytes())?;
+        writer.write_all(&self.window_mask.to_be_bytes())?;
+        writer.write_all(&table_entries.to_be_bytes())?;
 
         for table in &self.tables {
             for point in table {
@@ -85,25 +85,37 @@ impl<G: CurveAffine> MultiscalarPrecompOwned<G> {
     }
 
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
-        let num_points = reader.read_u32::<LittleEndian>()? as usize;
-        let window_size = reader.read_u32::<LittleEndian>()? as usize;
-        let window_mask = reader.read_u64::<LittleEndian>()?;
-        let table_entries = reader.read_u32::<LittleEndian>()? as usize;
+        let num_points = reader.read_u32::<BigEndian>()? as usize;
+        let window_size = reader.read_u32::<BigEndian>()? as usize;
+        let window_mask = reader.read_u64::<BigEndian>()?;
+        let table_entries = reader.read_u32::<BigEndian>()? as usize;
 
-        let mut tables: Vec<Vec<G>> = Vec::with_capacity(num_points);
-        for _ in 0..num_points {
-            let mut table: Vec<G> = Vec::with_capacity(table_entries);
-            for _ in 0..table_entries {
-                let mut g_repr = G::Uncompressed::empty();
-                reader.read_exact(g_repr.as_mut())?;
-                let g = g_repr
-                    .into_affine()
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let entry_len = std::mem::size_of::<G::Uncompressed>();
+        let table_len = table_entries * entry_len;
 
-                table.push(g);
-            }
-            tables.push(table);
-        }
+        let mut data = vec![0; table_len * num_points];
+        reader.read_exact(&mut data)?;
+
+        let tables: Vec<Vec<G>> = (0..num_points)
+            .into_par_iter()
+            .map(|i| {
+                let mut table = Vec::with_capacity(table_entries);
+                for j in 0..table_entries {
+                    let data_start = (i * table_len) + (j * entry_len);
+                    let data_end = data_start + entry_len;
+                    let ptr = &data[data_start..data_end];
+
+                    // Safety: this operation is safe because it's a read on
+                    // a buffer that's already allocated and being iterated on.
+                    let g_repr: G::Uncompressed = unsafe {
+                        *(ptr as *const [u8] as *const G::Uncompressed)
+                    };
+
+                    table.push(g_repr.into_affine().unwrap());
+                }
+
+                table
+        }).collect();
 
         Ok(MultiscalarPrecompOwned {
             num_points,

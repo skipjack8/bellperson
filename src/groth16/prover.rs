@@ -315,6 +315,7 @@ where
         );
     }
 
+    info!("log_d");
     let mut log_d = 0;
     while (1 << log_d) < n {
         log_d += 1;
@@ -330,6 +331,7 @@ where
 
     let mut fft_kern = Some(LockedFFTKernel::<E>::new(log_d, priority));
 
+    info!("a_s");
     let a_s = provers
         .iter_mut()
         .map(|prover| {
@@ -340,22 +342,14 @@ where
             let mut c =
                 EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.c, Vec::new()))?;
 
-            // execute 1 fft on the CPU, and 2 on the GPU if enabled
-            let (a_res, bc_res) = rayon::join(
-                || {
-                    a.ifft(&worker, &mut None)?;
-                    a.coset_fft(&worker, &mut None)
-                },
-                || {
-                    b.ifft(&worker, &mut fft_kern)?;
-                    b.coset_fft(&worker, &mut fft_kern)?;
+            a.ifft(&worker, &mut fft_kern)?;
+            a.coset_fft(&worker, &mut fft_kern)?;
 
-                    c.ifft(&worker, &mut fft_kern)?;
-                    c.coset_fft(&worker, &mut fft_kern)
-                },
-            );
-            a_res?;
-            bc_res?;
+            b.ifft(&worker, &mut fft_kern)?;
+            b.coset_fft(&worker, &mut fft_kern)?;
+
+            c.ifft(&worker, &mut fft_kern)?;
+            c.coset_fft(&worker, &mut fft_kern)?;
 
             a.mul_assign(&worker, &b);
             a.sub_assign(&worker, &c);
@@ -379,11 +373,13 @@ where
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
     drop(fft_kern);
+    info!("fft done");
     let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
 
     let params_h = params.get_h(n)?;
     let params_l = params.get_l(provers.len())?;
 
+    info!("h_s");
     let h_s = a_s
         .into_iter()
         .map(|a| {
@@ -398,6 +394,7 @@ where
         })
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
+    info!("l_s");
     let l_s = aux_assignments
         .iter()
         .map(|aux_assignment| {
@@ -418,6 +415,7 @@ where
     let (b_g2_inputs_source, b_g2_aux_source) =
         params.get_b_g2(b_input_density_total, b_aux_density_total)?;
 
+    info!("inputs");
     let inputs = provers
         .into_iter()
         .zip(input_assignments.iter())
@@ -485,6 +483,7 @@ where
         .collect::<Result<Vec<_>, SynthesisError>>()?;
     drop(multiexp_kern);
 
+    info!("proofs");
     let proofs = h_s
         .into_iter()
         .zip(l_s.into_iter())

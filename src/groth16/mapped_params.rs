@@ -1,5 +1,6 @@
 use crate::bls::Engine;
 use groupy::{CurveAffine, EncodedPoint};
+use log::info;
 use rayon::prelude::*;
 
 use crate::SynthesisError;
@@ -59,6 +60,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
     }
 
     fn get_h(&self, _num_h: usize) -> Result<Self::G1Builder, SynthesisError> {
+        info!("get_h:start");
         let builder = self
             .h
             .par_iter()
@@ -66,17 +68,19 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .map(|h| read_g1::<E>(&self.params, h, self.checked))
             .collect::<Result<_, _>>()?;
 
+        info!("get_h:end");
         Ok((Arc::new(builder), 0))
     }
 
     fn get_l(&self, _num_l: usize) -> Result<Self::G1Builder, SynthesisError> {
+        info!("get_l:start");
         let builder = self
             .l
             .par_iter()
             .cloned()
             .map(|l| read_g1::<E>(&self.params, l, self.checked))
             .collect::<Result<_, _>>()?;
-
+        info!("get_l:end");
         Ok((Arc::new(builder), 0))
     }
 
@@ -85,6 +89,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
         num_inputs: usize,
         _num_a: usize,
     ) -> Result<(Self::G1Builder, Self::G1Builder), SynthesisError> {
+        info!("get_a:start");
         let builder = self
             .a
             .par_iter()
@@ -93,6 +98,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .collect::<Result<_, _>>()?;
 
         let builder: Arc<Vec<_>> = Arc::new(builder);
+        info!("get_a:end");
 
         Ok(((builder.clone(), 0), (builder, num_inputs)))
     }
@@ -102,6 +108,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
         num_inputs: usize,
         _num_b_g1: usize,
     ) -> Result<(Self::G1Builder, Self::G1Builder), SynthesisError> {
+        info!("get_b_g1:start");
         let builder = self
             .b_g1
             .par_iter()
@@ -110,7 +117,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .collect::<Result<_, _>>()?;
 
         let builder: Arc<Vec<_>> = Arc::new(builder);
-
+        info!("get_b_g1:end");
         Ok(((builder.clone(), 0), (builder, num_inputs)))
     }
 
@@ -119,6 +126,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
         num_inputs: usize,
         _num_b_g2: usize,
     ) -> Result<(Self::G2Builder, Self::G2Builder), SynthesisError> {
+        info!("get_b_g2:start");
         let builder = self
             .b_g2
             .par_iter()
@@ -127,7 +135,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
             .collect::<Result<_, _>>()?;
 
         let builder: Arc<Vec<_>> = Arc::new(builder);
-
+        info!("get_b_g2:end");
         Ok(((builder.clone(), 0), (builder, num_inputs)))
     }
 }

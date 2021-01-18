@@ -277,7 +277,7 @@ where
 
     // Preparing things for the proofs is done a lot in parallel with the help of Rayon. Make
     // sure that those things run on the correct thread pool.
-    let (start, mut provers, input_assignments, aux_assignments) =
+    let (start, mut provers) =
         RAYON_THREAD_POOL.install(|| create_proof_batch_priority_inner(circuits))?;
 
     // The rest of the proving also has parallelism, but not on the outer loops, but within e.g. the
@@ -332,67 +332,150 @@ where
     let mut fft_kern = Some(LockedFFTKernel::<E>::new(log_d, priority));
 
     info!("a_s");
-    let a_s = provers
-        .iter_mut()
-        .map(|prover| {
-            let mut a =
-                EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.a, Vec::new()))?;
-            let mut b =
-                EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.b, Vec::new()))?;
-            let mut c =
-                EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.c, Vec::new()))?;
+    let provers_len = provers.len();
+    let (a_s, params_h_l) = rayon::join(
+        || {
+            provers
+                .iter_mut()
+                .map(|prover| {
+                    let mut a = EvaluationDomain::from_coeffs(std::mem::replace(
+                        &mut prover.a,
+                        Vec::new(),
+                    ))?;
+                    let mut b = EvaluationDomain::from_coeffs(std::mem::replace(
+                        &mut prover.b,
+                        Vec::new(),
+                    ))?;
+                    let mut c = EvaluationDomain::from_coeffs(std::mem::replace(
+                        &mut prover.c,
+                        Vec::new(),
+                    ))?;
 
-            a.ifft(&worker, &mut fft_kern)?;
-            a.coset_fft(&worker, &mut fft_kern)?;
+                    a.ifft(&worker, &mut fft_kern)?;
+                    a.coset_fft(&worker, &mut fft_kern)?;
 
-            b.ifft(&worker, &mut fft_kern)?;
-            b.coset_fft(&worker, &mut fft_kern)?;
+                    b.ifft(&worker, &mut fft_kern)?;
+                    b.coset_fft(&worker, &mut fft_kern)?;
 
-            c.ifft(&worker, &mut fft_kern)?;
-            c.coset_fft(&worker, &mut fft_kern)?;
+                    c.ifft(&worker, &mut fft_kern)?;
+                    c.coset_fft(&worker, &mut fft_kern)?;
 
-            a.mul_assign(&worker, &b);
-            a.sub_assign(&worker, &c);
+                    a.mul_assign(&worker, &b);
+                    a.sub_assign(&worker, &c);
 
-            drop(b);
-            drop(c);
+                    drop(b);
+                    drop(c);
 
-            a.divide_by_z_on_coset(&worker);
-            a.icoset_fft(&worker, &mut fft_kern)?;
+                    a.divide_by_z_on_coset(&worker);
+                    a.icoset_fft(&worker, &mut fft_kern)?;
 
-            let a = a.into_coeffs();
-            let a_len = a.len() - 1;
+                    let a = a.into_coeffs();
+                    let a_len = a.len() - 1;
 
-            Ok(Arc::new(
-                a.into_iter()
-                    .take(a_len)
-                    .map(|s| s.0.into_repr())
-                    .collect::<Vec<_>>(),
-            ))
-        })
-        .collect::<Result<Vec<_>, SynthesisError>>()?;
+                    Ok(Arc::new(
+                        a.into_iter()
+                            .take(a_len)
+                            .map(|s| s.0.into_repr())
+                            .collect::<Vec<_>>(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, SynthesisError>>()
+        },
+        || -> Result<_, SynthesisError> {
+            let params_h = params.get_h(n)?;
+            let params_l = params.get_l(provers_len)?;
+
+            Ok((params_h, params_l))
+        },
+    );
+    let a_s = a_s?;
+    let (params_h, params_l) = params_h_l?;
 
     drop(fft_kern);
     info!("fft done");
     let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
 
-    let params_h = params.get_h(n)?;
-    let params_l = params.get_l(provers.len())?;
+    let ((h_s, params_other), (input_assignments, aux_assignments)) = rayon::join(
+        || {
+            rayon::join(
+                || {
+                    info!("h_s");
+                    a_s.into_iter()
+                        .map(|a| {
+                            let h = multiexp(
+                                &worker,
+                                params_h.clone(),
+                                FullDensity,
+                                a,
+                                &mut multiexp_kern,
+                            );
+                            Ok(h)
+                        })
+                        .collect::<Result<Vec<_>, SynthesisError>>()
+                },
+                || -> Result<_, SynthesisError> {
+                    let (a_inputs_source, a_aux_source) =
+                        params.get_a(input_len, a_aux_density_total)?;
+                    let (b_g1_inputs_source, b_g1_aux_source) =
+                        params.get_b_g1(b_input_density_total, b_aux_density_total)?;
+                    let (b_g2_inputs_source, b_g2_aux_source) =
+                        params.get_b_g2(b_input_density_total, b_aux_density_total)?;
 
-    info!("h_s");
-    let h_s = a_s
-        .into_iter()
-        .map(|a| {
-            let h = multiexp(
-                &worker,
-                params_h.clone(),
-                FullDensity,
-                a,
-                &mut multiexp_kern,
-            );
-            Ok(h)
-        })
-        .collect::<Result<Vec<_>, SynthesisError>>()?;
+                    Ok((
+                        a_inputs_source,
+                        a_aux_source,
+                        b_g1_inputs_source,
+                        b_g1_aux_source,
+                        b_g2_inputs_source,
+                        b_g2_aux_source,
+                    ))
+                },
+            )
+        },
+        || {
+            info!("input_assignments");
+            let input_assignments = provers
+                .par_iter_mut()
+                .map(|prover| {
+                    let input_assignment =
+                        std::mem::replace(&mut prover.input_assignment, Vec::new());
+                    Arc::new(
+                        input_assignment
+                            .into_iter()
+                            .map(|s| s.into_repr())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            info!("aux_assignments");
+            let aux_assignments = provers
+                .par_iter_mut()
+                .map(|prover| {
+                    let aux_assignment = std::mem::replace(&mut prover.aux_assignment, Vec::new());
+                    Arc::new(
+                        aux_assignment
+                            .into_iter()
+                            .map(|s| s.into_repr())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            (input_assignments, aux_assignments)
+        },
+    );
+    let h_s = h_s?;
+    let (
+        a_inputs_source,
+        a_aux_source,
+        b_g1_inputs_source,
+        b_g1_aux_source,
+        b_g2_inputs_source,
+        b_g2_aux_source,
+    ) = params_other?;
+
+    drop(params_h);
 
     info!("l_s");
     let l_s = aux_assignments
@@ -408,12 +491,7 @@ where
             Ok(l)
         })
         .collect::<Result<Vec<_>, SynthesisError>>()?;
-
-    let (a_inputs_source, a_aux_source) = params.get_a(input_len, a_aux_density_total)?;
-    let (b_g1_inputs_source, b_g1_aux_source) =
-        params.get_b_g1(b_input_density_total, b_aux_density_total)?;
-    let (b_g2_inputs_source, b_g2_aux_source) =
-        params.get_b_g2(b_input_density_total, b_aux_density_total)?;
+    drop(params_l);
 
     info!("inputs");
     let inputs = provers
@@ -481,15 +559,22 @@ where
             ))
         })
         .collect::<Result<Vec<_>, SynthesisError>>()?;
+
+    drop(a_inputs_source);
+    drop(a_aux_source);
+    drop(b_g1_inputs_source);
+    drop(b_g1_aux_source);
+    drop(b_g2_inputs_source);
+    drop(b_g2_aux_source);
     drop(multiexp_kern);
 
     info!("proofs");
     let proofs = h_s
-        .into_iter()
-        .zip(l_s.into_iter())
-        .zip(inputs.into_iter())
-        .zip(r_s.into_iter())
-        .zip(s_s.into_iter())
+        .into_par_iter()
+        .zip(l_s.into_par_iter())
+        .zip(inputs.into_par_iter())
+        .zip(r_s.into_par_iter())
+        .zip(s_s.into_par_iter())
         .map(
             |(
                 (((h, l), (a_inputs, a_aux, b_g1_inputs, b_g1_aux, b_g2_inputs, b_g2_aux)), r),
@@ -555,20 +640,12 @@ where
 #[allow(clippy::type_complexity)]
 fn create_proof_batch_priority_inner<E, C>(
     circuits: Vec<C>,
-) -> Result<
-    (
-        Instant,
-        std::vec::Vec<ProvingAssignment<E>>,
-        std::vec::Vec<std::sync::Arc<std::vec::Vec<<E::Fr as PrimeField>::Repr>>>,
-        std::vec::Vec<std::sync::Arc<std::vec::Vec<<E::Fr as PrimeField>::Repr>>>,
-    ),
-    SynthesisError,
->
+) -> Result<(Instant, std::vec::Vec<ProvingAssignment<E>>), SynthesisError>
 where
     E: Engine,
     C: Circuit<E> + Send,
 {
-    let mut provers = circuits
+    let provers = circuits
         .into_par_iter()
         .map(|circuit| -> Result<_, SynthesisError> {
             let mut prover = ProvingAssignment::new();
@@ -589,33 +666,7 @@ where
     let start = Instant::now();
     info!("starting proof timer");
 
-    let input_assignments = provers
-        .par_iter_mut()
-        .map(|prover| {
-            let input_assignment = std::mem::replace(&mut prover.input_assignment, Vec::new());
-            Arc::new(
-                input_assignment
-                    .into_iter()
-                    .map(|s| s.into_repr())
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let aux_assignments = provers
-        .par_iter_mut()
-        .map(|prover| {
-            let aux_assignment = std::mem::replace(&mut prover.aux_assignment, Vec::new());
-            Arc::new(
-                aux_assignment
-                    .into_iter()
-                    .map(|s| s.into_repr())
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    Ok((start, provers, input_assignments, aux_assignments))
+    Ok((start, provers))
 }
 
 #[cfg(test)]

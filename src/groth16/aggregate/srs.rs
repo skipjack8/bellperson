@@ -16,8 +16,10 @@ pub struct SRS<E: Engine> {
     pub g_alpha_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
     /// $\{h^a^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
     pub h_alpha_powers: Vec<E::G2Affine>,
+    pub h_alpha_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
     /// $\{g^b^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
     pub g_beta_powers: Vec<E::G1Affine>,
+    pub g_beta_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
     /// $\{h^b^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
     pub h_beta_powers: Vec<E::G2Affine>,
     pub h_beta_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
@@ -128,7 +130,8 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
 
     let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers, WINDOW_SIZE);
     let h_beta_powers_table = precompute_fixed_window(&h_beta_powers, WINDOW_SIZE);
-    // TODO for the rest
+    let g_beta_powers_table = precompute_fixed_window(&g_beta_powers, WINDOW_SIZE);
+    let h_alpha_powers_table = precompute_fixed_window(&h_alpha_powers, WINDOW_SIZE);
 
     SRS {
         g_alpha_powers,
@@ -136,7 +139,9 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
         h_beta_powers,
         h_beta_powers_table,
         g_beta_powers,
+        g_beta_powers_table,
         h_beta_powers,
+        h_beta_powers_table,
     }
 }
 

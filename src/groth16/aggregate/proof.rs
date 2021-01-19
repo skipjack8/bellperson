@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::bls::Engine;
+use crate::groth16::aggregagte::commit;
 
 #[derive(Serialize, Deserialize)]
 pub struct AggregateProof<E: Engine> {
@@ -19,6 +20,29 @@ pub struct AggregateProof<E: Engine> {
         deserialize = "MultiExpInnerProductCProof<E>: Deserialize<'de>",
     ))]
     pub tipa_proof_c: MultiExpInnerProductCProof<E>,
+}
+
+/// GipaTIPP proof contains all the information necessary to verify the Gipa
+/// TIPP statement. All GIPA related elements are given in order of generation
+/// by the prover.
+pub struct GipaTIPP<E: Engine> {
+    /// ((T_L, U_L),(T_R,U_R)) values accross all steps
+    pub comms: Vec<(commit::Output<E>, commit::Output<E>)>,
+    /// Z values left and right
+    pub z_vec: Vec<(E::Fqk, E::Fqk)>,
+    /// final values of A and B at the end of the recursion
+    pub final_A: E::G1,
+    pub final_B: E::G2,
+    /// final commitment keys $v$ and $w$ - there is only one element at the
+    /// end for v1 and v2 hence it's a tuple.
+    pub final_vkey: (E::G2, E::G2),
+    pub final_wkey: (E::G1, E::G1),
+}
+
+pub struct TIPPProof<E: Engine> {
+    pub gipa: GipaTIPP<E>,
+    pub vkey_opening: KZGOpening<E::G2>,
+    pub wkey_opening: KZGOpening<E::G1>,
 }
 
 #[derive(Serialize, Deserialize)]

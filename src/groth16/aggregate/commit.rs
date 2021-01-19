@@ -10,6 +10,7 @@ use crate::groth16::multiscalar::*;
 
 /// Key is a generic commitment key that is instanciated with g and h as basis,
 /// and a and b as powers.
+#[derive(Clone,Debug)]
 pub type Key struct<G: CurveProjective> {
     /// Exponent is a
     pub a: Vec<G>,
@@ -27,11 +28,61 @@ pub type VKey<E: Engine> = Key<E::G2>;
 pub type WKey<E: Engine> = Key<E::G1>;
 
 impl<G> Key<G> where G: CurveProjective {
+    /// correct_len returns true if both commitment keys have the same size as
+    /// the argument. It is necessary for the IPP scheme to work that commitment
+    /// key have the exact same number of arguments as the number of proofs to
+    /// aggregate.
     pub fn correct_len(&self,n:usize) -> bool {
         self.cka.len() == n && self.ckb.len() == n 
     }
-}
 
+    /// scale returns both vectors scaled by the given vector entrywise.
+    /// In other words, it returns $\{v_i^{s_i}\}$
+    pub fn scale(&self,s_vec: &[G::Scalar]) -> Self {
+        let a = self.a.par_iter()
+                    .zip(r_vec.par_iter())
+                    .map(|(a, s)| mul!(a, s))
+                    .collect::<Vec<_>>();
+        let b = self.b.par_iter()
+                    .zip(s_vec.par_iter())
+                    .map(|(b, s)| mul!(a, s))
+                    .collect::<Vec<_>>();
+        Self { a: a, b: b }
+    }
+
+    pub fn split(&self, at: usize) -> (Self,Self) {
+        let a_l,a_r = self.a.split_at(at);
+        let b_l,b_r = self.b.split_at(at);
+        (
+            Self{a:a_l,b:b_l},
+            Self{a:a_r,b:b_r}
+        )
+    }
+
+    /// Compress takes a left and right commitment key and returns a commitment
+    /// key $left \circ right^{scale} = (left_i*right_i^{scale} ...)$. This is
+    /// required step during GIPA recursion.
+    pub fn compress(left: &Self, right: &Self, scale: &G::Scalar) -> Self {
+        let a = left.a.par_iter().zip(right.a.par_iter()).map(|(left,right)| {
+            let mut g = right.mul_assign(scale);
+            g.add_assign(left);
+            g
+        }).collect::<Vec<_>>()
+        let b = left.b.par_iter().zip(right.b.par_iter()).map(|(left,right)| {
+            let mut g = right.mul_assign(scale);
+            g.add_assign(left);
+            g
+        }).collect::<Vec<_>>();
+        Self{ a:a, b:b }
+    }
+
+    /// first returns the first values in the vector of v1 and v2 (respectively
+    /// w1 and w2). When commitment key is of size one, it's a proxy to get the
+    /// final values.
+    pub fn first(&self) -> (G,G) {
+        (self.a[0],self.b[0])
+    }
+}
 
 /// Both commitment outputs a pair of $F_q^k$ element.
 type Output<E: Engine> = (E::Fqk, E::Fqk);
@@ -55,6 +106,7 @@ pub fn pair<E: Engine>(
     A: &[E::G1],
     B: &[E::G2],
 ) -> Output<E> {
+    // TODO parralelize that
     let mut T1 = inner_product::pairing_miller(A, vkey.a);
     let T2 = inner_product::pairing_miller(wkey.a, B);
     let mut U1 = inner_product::pairing_miller(A, vkey.b);

@@ -79,6 +79,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
             let now = Instant::now();
             let tuple = verify_with_structured_scalar_message::<E>(
                 ip_verifier_srs,
+                // com_c = C * v
+                // agg_c = C ^ r
                 (&proof.com_c, &proof.agg_c),
                 &r,
                 &proof.tipa_proof_c,
@@ -108,6 +110,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         let p3 = send_tuple.clone();
         s.spawn(move |_| {
             let tuple = PairingTuple::from_miller(E::miller_loop(&[(
+                // e(c^r vector form, h^delta)
+                // let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec)
                 &proof.agg_c.into_affine().prepare(),
                 &pvk.delta_g2,
             )]));
@@ -483,10 +487,14 @@ fn verify_with_structured_scalar_message<E: Engine>(
         &c,
     );
 
+    // final rescaled U Z
     let (com_a, com_t) = base_com;
+
+    // final c and r from proof binary
     let a_base = [proof.gipa_proof.r_base.0.clone().into_affine()];
 
     let a = PairingTuple::from_pair(
+        // e(c, v) = U
         inner_product::pairing_miller_affine::<E>(&a_base, &[ck_a_final.into_affine()]),
         com_a.clone(),
     );
@@ -495,9 +503,11 @@ fn verify_with_structured_scalar_message<E: Engine>(
     let now = Instant::now();
 
     // Compute final scalar
+    // r
     let mut power_2_b = scalar_b.clone();
     let mut b_base = E::Fr::one();
     for x in transcript.iter() {
+        // 1 * (1 + x^-1 * r)
         b_base.mul_assign(&add!(
             E::Fr::one(),
             &(mul!(x.inverse().unwrap(), &power_2_b))
@@ -505,7 +515,11 @@ fn verify_with_structured_scalar_message<E: Engine>(
         power_2_b.mul_assign(&power_2_b.clone());
     }
 
+    println!(" |||| r_base.1 = {:?}", proof.gipa_proof.r_base.1);
+    println!(" |||| b_base = {:?}", b_base);
+
     // Verify base inner product commitment
+    // Z ==  c ^ r
     let t_base = inner_product::multiexponentiation(&a_base, &[b_base]);
     let b = t_base == com_t;
 
@@ -577,11 +591,14 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine>(
             let c_repr = c.into_repr();
             let c_inv_repr = c_inv.into_repr();
 
+            // C_r^x (x challenge)
             let mut x = com_1.1;
             x.mul_assign(c_repr);
+            // Z_l^x^-1
             let mut y = com_2.1;
             y.mul_assign(c_inv_repr);
 
+            // U_r^x  , U_l^x^-1
             (com_1.0.pow(c_repr), com_2.0.pow(c_inv_repr), x, y)
         })
         .collect();
@@ -591,8 +608,11 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine>(
         now.elapsed().as_millis(),
         prep.len()
     );
+    // com_a = C * v == U
+    // com_t = C^r == Z
 
     for (a_x_c, a_z_c_inv, t_x_c, t_z_c_inv) in prep.iter() {
+        //
         com_a.mul_assign(a_x_c);
         com_a.mul_assign(a_z_c_inv);
 

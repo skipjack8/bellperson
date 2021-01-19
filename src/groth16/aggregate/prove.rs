@@ -93,7 +93,9 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         ),
         let tipa_proof_c = prove_with_structured_scalar_message::<E>(
             &ip_srs,
+            // c^r
             (c, r_vec),
+            // v
             &ck_1,
         ),
         let ip_ab = inner_product::pairing::<E>(&a_r, b),
@@ -269,7 +271,9 @@ impl<E: Engine> GIPAProof<E> {
                 .par_iter()
                 .zip(m_a_2.par_iter_mut())
                 .for_each(|(a_1, a_2)| {
+                    // c[:n'] + c[n':] ^ x
                     let mut x: E::G1 = mul!(a_1.into_projective(), c);
+
                     x.add_assign_mixed(&a_2);
                     *a_2 = x.into_affine();
                 });
@@ -365,6 +369,7 @@ impl<E: Engine> GIPAProofWithSSM<E> {
         values: (&[E::G1Affine], &[E::Fr]),
         ck: &[E::G2Affine],
     ) -> Result<(Self, GIPAAuxWithSSM<E>), SynthesisError> {
+        // c  and r
         let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
         let mut ck_a = ck.to_vec();
 
@@ -379,20 +384,27 @@ impl<E: Engine> GIPAProofWithSSM<E> {
             // Recurse with problem of half size
             let split = m_a.len() / 2;
 
+            // c[:n']   c[n':]
             let (m_a_2, m_a_1) = m_a.split_at_mut(split);
+            // v[:n']   v[n':]
             let (ck_a_1, ck_a_2) = ck_a.split_at_mut(split);
+            // r[:n']   r[:n']
             let (m_b_1, m_b_2) = m_b.split_at_mut(split);
 
             let (com_1, com_2) = rayon::join(
                 || {
                     rayon::join(
+                        // U_r = c[n':] * v[:n']
                         || inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC::commit
+                        // C_r = c[n':] ^ r[:n']
                         || inner_product::multiexponentiation::<E::G1Affine>(m_a_1, m_b_1), // IPC::commit
                     )
                 },
                 || {
                     rayon::join(
+                        // U_l = c[:n'] * v[n':]
                         || inner_product::pairing::<E>(m_a_2, ck_a_2),
+                        // Z_l = c[:n'] ^ r[n':]
                         || inner_product::multiexponentiation::<E::G1Affine>(m_a_2, m_b_2),
                     )
                 },
@@ -430,6 +442,7 @@ impl<E: Engine> GIPAProofWithSSM<E> {
                 .par_iter()
                 .zip(m_a_2.par_iter_mut())
                 .for_each(|(a_1, a_2)| {
+                    // c[:n'] + c[n':]^x
                     let mut x: E::G1 = mul!(a_1.into_projective(), c);
                     x.add_assign_mixed(&a_2);
                     *a_2 = x.into_affine();
@@ -442,6 +455,7 @@ impl<E: Engine> GIPAProofWithSSM<E> {
                 .par_iter_mut()
                 .zip(m_b_2.par_iter_mut())
                 .for_each(|(b_1, b_2)| {
+                    // r[:n'] + r[n':]^x^-1
                     b_2.mul_assign(&c_inv);
                     b_1.add_assign(b_2);
                 });
@@ -453,6 +467,7 @@ impl<E: Engine> GIPAProofWithSSM<E> {
                 .par_iter_mut()
                 .zip(ck_a_2.par_iter())
                 .for_each(|(ck_1, ck_2)| {
+                    // v[:n'] + v[n':]^x^-1
                     let mut x = ck_2.into_projective();
                     x.mul_assign(c_inv);
                     x.add_assign_mixed(ck_1);
@@ -466,7 +481,9 @@ impl<E: Engine> GIPAProofWithSSM<E> {
             r_transcript.push(c);
         }
         // base case
+        // final c and r
         let m_base = (m_a[0], m_b[0]);
+        // final v
         let ck_base = ck_a[0];
 
         r_transcript.reverse();

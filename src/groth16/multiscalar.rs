@@ -112,7 +112,8 @@ impl<G: CurveAffine> MultiscalarPrecompOwned<G> {
                             unsafe { *(ptr as *const [u8] as *const G::Uncompressed) };
 
                         g_repr.into_affine().unwrap()
-                    }).collect();
+                    })
+                    .collect();
 
                 table
             })

@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective, EncodedPoint};
+use rayon::prelude::*;
 
 use super::msm;
 use crate::bls::Engine;
@@ -71,31 +72,54 @@ impl<E: Engine> SRS<E> {
     }
 
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let g1_len = std::mem::size_of::<<E::G1Affine as CurveAffine>::Uncompressed>();
+        let g2_len = std::mem::size_of::<<E::G2Affine as CurveAffine>::Uncompressed>();
+
         let g_alpha_power_len = reader.read_u32::<BigEndian>()? as usize;
 
-        let mut g_alpha_powers = Vec::with_capacity(g_alpha_power_len);
-        for _ in 0..g_alpha_power_len {
-            let mut g1_repr = <E::G1Affine as CurveAffine>::Uncompressed::empty();
-            reader.read_exact(g1_repr.as_mut())?;
-            let alpha_g1 = g1_repr
-                .into_affine()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            g_alpha_powers.push(alpha_g1);
-        }
+        let mut data = vec![0; g_alpha_power_len * g1_len];
+        reader.read_exact(&mut data)?;
+
+        let g_alpha_powers = (0..g_alpha_power_len)
+            .into_par_iter()
+            .map(|i| {
+                let data_start = i * g1_len;
+                let data_end = data_start + g1_len;
+                let ptr = &data[data_start..data_end];
+
+                // Safety: this operation is safe because it's a read on
+                // a buffer that's already allocated and being iterated on.
+                let g1_repr: <E::G1Affine as CurveAffine>::Uncompressed = unsafe {
+                    *(ptr as *const [u8] as *const <E::G1Affine as CurveAffine>::Uncompressed)
+                };
+
+                g1_repr.into_affine().unwrap()
+            })
+            .collect();
 
         let g_alpha_powers_table = MultiscalarPrecompOwned::<E::G1Affine>::read::<R>(reader)?;
 
         let h_beta_power_len = reader.read_u32::<BigEndian>()? as usize;
 
-        let mut h_beta_powers = Vec::with_capacity(h_beta_power_len);
-        for _ in 0..h_beta_power_len {
-            let mut g1_repr = <E::G2Affine as CurveAffine>::Uncompressed::empty();
-            reader.read_exact(g1_repr.as_mut())?;
-            let alpha_g1 = g1_repr
-                .into_affine()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            h_beta_powers.push(alpha_g1);
-        }
+        let mut data = vec![0; h_beta_power_len * g2_len];
+        reader.read_exact(&mut data)?;
+
+        let h_beta_powers = (0..h_beta_power_len)
+            .into_par_iter()
+            .map(|i| {
+                let data_start = i * g2_len;
+                let data_end = data_start + g2_len;
+                let ptr = &data[data_start..data_end];
+
+                // Safety: this operation is safe because it's a read on
+                // a buffer that's already allocated and being iterated on.
+                let g2_repr: <E::G2Affine as CurveAffine>::Uncompressed = unsafe {
+                    *(ptr as *const [u8] as *const <E::G2Affine as CurveAffine>::Uncompressed)
+                };
+
+                g2_repr.into_affine().unwrap()
+            })
+            .collect();
 
         let h_beta_powers_table = MultiscalarPrecompOwned::<E::G2Affine>::read::<R>(reader)?;
 

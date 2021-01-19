@@ -1,8 +1,10 @@
 use std::io::{self, Read, Write};
+use std::mem::size_of;
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective, EncodedPoint};
+use memmap::Mmap;
 use rayon::prelude::*;
 
 use super::msm;
@@ -72,8 +74,8 @@ impl<E: Engine> SRS<E> {
     }
 
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
-        let g1_len = std::mem::size_of::<<E::G1Affine as CurveAffine>::Uncompressed>();
-        let g2_len = std::mem::size_of::<<E::G2Affine as CurveAffine>::Uncompressed>();
+        let g1_len = size_of::<<E::G1Affine as CurveAffine>::Uncompressed>();
+        let g2_len = size_of::<<E::G2Affine as CurveAffine>::Uncompressed>();
 
         let g_alpha_power_len = reader.read_u32::<BigEndian>()? as usize;
 
@@ -134,6 +136,95 @@ impl<E: Engine> SRS<E> {
         let h_alpha = g2_repr
             .into_affine()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        Ok(SRS {
+            g_alpha_powers,
+            g_alpha_powers_table,
+            h_beta_powers,
+            h_beta_powers_table,
+            g_beta: g_beta.into_projective(),
+            h_alpha: h_alpha.into_projective(),
+        })
+    }
+
+    pub fn read_mmap(reader: &Mmap) -> io::Result<Self> {
+        let u32_len = size_of::<u32>();
+
+        let g1_len = size_of::<<E::G1Affine as CurveAffine>::Uncompressed>();
+        let g2_len = size_of::<<E::G2Affine as CurveAffine>::Uncompressed>();
+
+        let read_length = |mmap: &Mmap, offset: &mut usize| -> Result<usize, std::io::Error> {
+            let mut raw_len = &mmap[*offset..*offset + u32_len];
+            *offset += u32_len;
+
+            match raw_len.read_u32::<BigEndian>() {
+                Ok(len) => Ok(len as usize),
+                Err(err) => Err(err),
+            }
+        };
+
+        let mut offset: usize = 0;
+        let g_alpha_power_len = read_length(&reader, &mut offset)?;
+
+        let g_alpha_powers = (0..g_alpha_power_len)
+            .into_par_iter()
+            .map(|i| {
+                let data_start = offset + (i * g1_len);
+                let data_end = data_start + g1_len;
+                let ptr = &reader[data_start..data_end];
+
+                // Safety: this operation is safe because it's a read on
+                // a buffer that's already allocated and being iterated on.
+                let g1_repr: <E::G1Affine as CurveAffine>::Uncompressed = unsafe {
+                    *(ptr as *const [u8] as *const <E::G1Affine as CurveAffine>::Uncompressed)
+                };
+
+                g1_repr.into_affine().unwrap()
+            })
+            .collect();
+        offset += g_alpha_power_len * g1_len;
+
+        let g_alpha_powers_table =
+            MultiscalarPrecompOwned::<E::G1Affine>::read_mmap(reader, &mut offset)?;
+
+        let h_beta_power_len = read_length(&reader, &mut offset)?;
+
+        let h_beta_powers = (0..h_beta_power_len)
+            .into_par_iter()
+            .map(|i| {
+                let data_start = offset + (i * g2_len);
+                let data_end = data_start + g2_len;
+                let ptr = &reader[data_start..data_end];
+
+                // Safety: this operation is safe because it's a read on
+                // a buffer that's already allocated and being iterated on.
+                let g2_repr: <E::G2Affine as CurveAffine>::Uncompressed = unsafe {
+                    *(ptr as *const [u8] as *const <E::G2Affine as CurveAffine>::Uncompressed)
+                };
+
+                g2_repr.into_affine().unwrap()
+            })
+            .collect();
+        offset += h_beta_power_len * g2_len;
+
+        let h_beta_powers_table =
+            MultiscalarPrecompOwned::<E::G2Affine>::read_mmap(reader, &mut offset)?;
+
+        let ptr = &reader[offset..offset + g1_len];
+        let g1_repr: <E::G1Affine as CurveAffine>::Uncompressed =
+            unsafe { *(ptr as *const [u8] as *const <E::G1Affine as CurveAffine>::Uncompressed) };
+        let g_beta = g1_repr
+            .into_affine()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        offset += g1_len;
+
+        let ptr = &reader[offset..offset + g2_len];
+        let g2_repr: <E::G2Affine as CurveAffine>::Uncompressed =
+            unsafe { *(ptr as *const [u8] as *const <E::G2Affine as CurveAffine>::Uncompressed) };
+        let h_alpha = g2_repr
+            .into_affine()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        //offset += g2_len;
 
         Ok(SRS {
             g_alpha_powers,

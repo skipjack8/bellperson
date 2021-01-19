@@ -177,6 +177,8 @@ impl<E: Engine> Circuit<E> for TestCircuit<E> {
 
 #[test]
 fn test_groth16_srs_io() {
+    use memmap::MmapOptions;
+    use std::fs::File;
     use std::io::{Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 
@@ -205,8 +207,21 @@ fn test_groth16_srs_io() {
     // Ensure that the parameters match
     assert_eq!(srs, srs2);
 
-    // Remove temp file
     let cache_path = cache_file.into_temp_path();
+    let mapped_file = File::open(&cache_path).expect("failed to open file");
+    let mmap = unsafe {
+        MmapOptions::new()
+            .map(&mapped_file)
+            .expect("failed to mmap")
+    };
+
+    let srs3: bellperson::groth16::SRS<Bls12> = bellperson::groth16::SRS::<Bls12>::read_mmap(&mmap)
+        .expect("failed to read srs from cache file");
+
+    // Ensure that the parameters match
+    assert_eq!(srs, srs3);
+
+    // Remove temp file
     cache_path.close().expect("failed to close temp path");
 }
 

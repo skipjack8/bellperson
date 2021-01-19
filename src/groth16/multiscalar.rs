@@ -1,8 +1,10 @@
 use std::io::{self, Read, Write};
+use std::mem::size_of;
 
 use byteorder::{BigEndian, ReadBytesExt};
 use ff::PrimeField;
 use groupy::{CurveAffine, CurveProjective, EncodedPoint};
+use memmap::Mmap;
 use rayon::prelude::*;
 
 pub const WINDOW_SIZE: usize = 8;
@@ -90,7 +92,7 @@ impl<G: CurveAffine> MultiscalarPrecompOwned<G> {
         let window_mask = reader.read_u64::<BigEndian>()?;
         let table_entries = reader.read_u32::<BigEndian>()? as usize;
 
-        let entry_len = std::mem::size_of::<G::Uncompressed>();
+        let entry_len = size_of::<G::Uncompressed>();
         let table_len = table_entries * entry_len;
 
         let mut data = vec![0; table_len * num_points];
@@ -118,6 +120,72 @@ impl<G: CurveAffine> MultiscalarPrecompOwned<G> {
                 table
             })
             .collect();
+
+        Ok(MultiscalarPrecompOwned {
+            num_points,
+            window_size,
+            window_mask,
+            table_entries,
+            tables,
+        })
+    }
+
+    pub fn read_mmap(reader: &Mmap, offset: &mut usize) -> io::Result<Self> {
+        let u32_len = size_of::<u32>();
+        let u64_len = size_of::<u64>();
+
+        let read_length = |mmap: &Mmap, offset: &mut usize| -> Result<usize, std::io::Error> {
+            let mut raw_len = &mmap[*offset..*offset + u32_len];
+            *offset += u32_len;
+
+            match raw_len.read_u32::<BigEndian>() {
+                Ok(len) => Ok(len as usize),
+                Err(err) => Err(err),
+            }
+        };
+
+        let read_u64_length = |mmap: &Mmap, offset: &mut usize| -> Result<u64, std::io::Error> {
+            let mut raw_len = &mmap[*offset..*offset + u64_len];
+            *offset += u64_len;
+
+            match raw_len.read_u64::<BigEndian>() {
+                Ok(len) => Ok(len),
+                Err(err) => Err(err),
+            }
+        };
+
+        let num_points = read_length(&reader, offset)?;
+        let window_size = read_length(&reader, offset)?;
+        let window_mask = read_u64_length(&reader, offset)?;
+        let table_entries = read_length(&reader, offset)?;
+
+        let entry_len = size_of::<G::Uncompressed>();
+        let table_len = table_entries * entry_len;
+
+        let tables: Vec<Vec<G>> = (0..num_points)
+            .into_par_iter()
+            .map(|i| {
+                let table = (0..table_entries)
+                    .into_par_iter()
+                    .map(|j| {
+                        let data_start = *offset + ((i * table_len) + (j * entry_len));
+                        let data_end = data_start + entry_len;
+                        let ptr = &reader[data_start..data_end];
+
+                        // Safety: this operation is safe because it's a read on
+                        // a buffer that's already allocated and being iterated on.
+                        let g_repr: G::Uncompressed =
+                            unsafe { *(ptr as *const [u8] as *const G::Uncompressed) };
+
+                        g_repr.into_affine().unwrap()
+                    })
+                    .collect();
+
+                table
+            })
+            .collect();
+
+        *offset += num_points * table_len;
 
         Ok(MultiscalarPrecompOwned {
             num_points,
@@ -228,7 +296,7 @@ pub fn multiscalar<G: CurveAffine>(
     precomp_table: &dyn MultiscalarPrecomp<G>,
     nbits: usize,
 ) -> G::Projective {
-    const BITS_PER_LIMB: usize = std::mem::size_of::<u64>() * 8;
+    const BITS_PER_LIMB: usize = size_of::<u64>() * 8;
     // TODO: support more bit sizes
     if nbits % precomp_table.window_size() != 0 || BITS_PER_LIMB % precomp_table.window_size() != 0
     {
@@ -583,7 +651,7 @@ mod tests {
                 let fast_result = multiscalar::<G1Affine>(
                     &scalars,
                     &table,
-                    std::mem::size_of::<<Fr as PrimeField>::Repr>() * 8,
+                    size_of::<<Fr as PrimeField>::Repr>() * 8,
                 );
 
                 assert_eq!(naive_result, fast_result);
@@ -614,7 +682,7 @@ mod tests {
                 let fast_result = par_multiscalar::<&Getter<G1Affine>, G1Affine>(
                     &ScalarList::Slice(&scalars),
                     &table,
-                    std::mem::size_of::<<Fr as PrimeField>::Repr>() * 8,
+                    size_of::<<Fr as PrimeField>::Repr>() * 8,
                 );
 
                 assert_eq!(naive_result, fast_result);

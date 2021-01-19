@@ -18,7 +18,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError> {
-    let (ck_1, ck_2) = ip_srs.get_commitment_keys();
+    let (vkey, wkey) = ip_srs.get_commitment_keys();
 
     if ck_1.len() != proofs.len() || ck_2.len() != proofs.len() {
         return Err(SynthesisError::MalformedSrs);

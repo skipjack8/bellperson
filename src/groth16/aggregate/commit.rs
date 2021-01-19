@@ -8,23 +8,30 @@ use crate::groth16::aggregate::accumulator::PairingTuple;
 use crate::groth16::aggregate::inner_product;
 use crate::groth16::multiscalar::*;
 
+/// Key is a generic commitment key that is instanciated with g and h as basis,
+/// and a and b as powers.
+pub type Key struct<G: CurveProjective> {
+    /// Exponent is a
+    pub a: Vec<G>,
+    /// Exponent is b
+    pub b: Vec<G>,
+}
 /// VKey is a commitment key used by the "single" commitment on G1 values as
 /// well as in the "pair" commtitment.
-type VKey struct<E: Engine>{
-    /// $\{h^a^i\}_{i=1}^n$
-    pub v1: &[E::G2],
-    /// $\{h^b^i\}_{i=1}^n$
-    pub v2: &[E::G2],
-}
+/// It contains $\{h^a^i\}_{i=1}^n$ and $\{h^b^i\}_{i=1}^n$
+pub type VKey<E: Engine> = Key<E::G2>;
 
 /// WKey is a commitment key used by the "pair" commitment. Note the sequence of
 /// powers starts at $n$ already.
-type WKey struct<E :Engine>{
-    /// $\{g^{a^{n+i}}\}_{i=1}^n$
-    pub w1: &[E::G1],
-    /// $\{g^{b^{n+i}}\}_{i=1}^n$
-    pub w2: &[E::G2],
+/// It contains $\{g^{a^{n+i}}\}_{i=1}^n$ and $\{g^{b^{n+i}}\}_{i=1}^n$
+pub type WKey<E: Engine> = Key<E::G1>;
+
+impl<G> Key<G> where G: CurveProjective {
+    pub fn correct_len(&self,n:usize) -> bool {
+        self.cka.len() == n && self.ckb.len() == n 
+    }
 }
+
 
 /// Both commitment outputs a pair of $F_q^k$ element.
 type Output<E: Engine> = (E::Fqk, E::Fqk);
@@ -34,8 +41,8 @@ type Output<E: Engine> = (E::Fqk, E::Fqk);
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})$
 /// Output is $(T,U)$
 pub fn single_g1<E: Engine>(vkey: &VKey<E>, A: &[E::G1]) -> Output<E> {
-    let T = inner_product::pairing_miller(A, v1);
-    let U = inner_product::pairing_miller(A, v2);
+    let T = inner_product::pairing_miller(A, vkey.a);
+    let U = inner_product::pairing_miller(A, vkey.b);
     return Output(T, U);
 }
 
@@ -48,10 +55,10 @@ pub fn pair<E: Engine>(
     A: &[E::G1],
     B: &[E::G2],
 ) -> Output<E> {
-    let mut T1 = inner_product::pairing_miller(A, v1);
-    let T2 = inner_product::pairing_miller(w1, B);
-    let mut U1 = inner_product::pairing_miller(A, v2);
-    let U2 = inner_product::pairing_miller(w2, B);
+    let mut T1 = inner_product::pairing_miller(A, vkey.a);
+    let T2 = inner_product::pairing_miller(wkey.a, B);
+    let mut U1 = inner_product::pairing_miller(A, vkey.b);
+    let U2 = inner_product::pairing_miller(wkey.b, B);
     T1.mul_assign(&T2);
     U1.mul_assign(&U2);
     return Output(T1, U1);

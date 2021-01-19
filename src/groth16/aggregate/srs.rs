@@ -53,7 +53,7 @@ impl<E: Engine> SRS<E> {
             .take(self.n)
             .map(|p| p.into_projective())
             .collect::<Vec<E::G2>>();
-        VKey { v1: v1, v2: v2 }
+        VKey { a: v1, b: v2 }
     }
 
     pub fn get_wkey(&self) -> WKey<E> {
@@ -70,7 +70,7 @@ impl<E: Engine> SRS<E> {
             .skip(self.n + 1)
             .map(|p| p.into_projective())
             .collect::<Vec<_>>();
-        WKey { w1: w1, w2: w2 }
+        WKey { a: w1, b: w2 }
     }
 
     pub fn get_verifier_key(&self) -> VerifierSRS<E> {

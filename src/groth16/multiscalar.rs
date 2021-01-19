@@ -99,23 +99,24 @@ impl<G: CurveAffine> MultiscalarPrecompOwned<G> {
         let tables: Vec<Vec<G>> = (0..num_points)
             .into_par_iter()
             .map(|i| {
-                let mut table = Vec::with_capacity(table_entries);
-                for j in 0..table_entries {
-                    let data_start = (i * table_len) + (j * entry_len);
-                    let data_end = data_start + entry_len;
-                    let ptr = &data[data_start..data_end];
+                let table = (0..table_entries)
+                    .into_par_iter()
+                    .map(|j| {
+                        let data_start = (i * table_len) + (j * entry_len);
+                        let data_end = data_start + entry_len;
+                        let ptr = &data[data_start..data_end];
 
-                    // Safety: this operation is safe because it's a read on
-                    // a buffer that's already allocated and being iterated on.
-                    let g_repr: G::Uncompressed = unsafe {
-                        *(ptr as *const [u8] as *const G::Uncompressed)
-                    };
+                        // Safety: this operation is safe because it's a read on
+                        // a buffer that's already allocated and being iterated on.
+                        let g_repr: G::Uncompressed =
+                            unsafe { *(ptr as *const [u8] as *const G::Uncompressed) };
 
-                    table.push(g_repr.into_affine().unwrap());
-                }
+                        g_repr.into_affine().unwrap()
+                    }).collect();
 
                 table
-        }).collect();
+            })
+            .collect();
 
         Ok(MultiscalarPrecompOwned {
             num_points,

@@ -50,6 +50,8 @@ impl<G> Key<G> where G: CurveProjective {
         Self { a: a, b: b }
     }
 
+    /// split returns the left and right commitment key part. It makes copy.
+    /// TODO: remove the copy
     pub fn split(&self, at: usize) -> (Self,Self) {
         let a_l,a_r = self.a.split_at(at);
         let b_l,b_r = self.b.split_at(at);
@@ -63,16 +65,17 @@ impl<G> Key<G> where G: CurveProjective {
     /// key $left \circ right^{scale} = (left_i*right_i^{scale} ...)$. This is
     /// required step during GIPA recursion.
     pub fn compress(left: &Self, right: &Self, scale: &G::Scalar) -> Self {
-        let a = left.a.par_iter().zip(right.a.par_iter()).map(|(left,right)| {
-            let mut g = right.mul_assign(scale);
-            g.add_assign(left);
-            g
-        }).collect::<Vec<_>>()
-        let b = left.b.par_iter().zip(right.b.par_iter()).map(|(left,right)| {
-            let mut g = right.mul_assign(scale);
-            g.add_assign(left);
-            g
-        }).collect::<Vec<_>>();
+        let (a,b) = rayon::join(
+            || left.a.par_iter().zip(right.a.par_iter()).map(|(left,right)| {
+                let mut g = right.mul_assign(scale);
+                g.add_assign(left);
+                g
+            }).collect::<Vec<_>>(),
+            || left.b.par_iter().zip(right.b.par_iter()).map(|(left,right)| {
+                let mut g = right.mul_assign(scale);
+                g.add_assign(left);
+                g
+            }).collect::<Vec<_>>());
         Self{ a:a, b:b }
     }
 

@@ -6,8 +6,12 @@ use rayon::prelude::*;
 use sha2::Sha256;
 
 use super::{
-    inner_product, poly::DensePolynomial, structured_scalar_power, AggregateProof, GIPAProof,
-    GIPAProofWithSSM, MultiExpInnerProductCProof, PairingInnerProductABProof, SRS,
+    commit,
+    commit::{VKey, WKey},
+    inner_product,
+    poly::DensePolynomial,
+    structured_scalar_power, AggregateProof, GipaMIPP, GipaTIPP, KZGOpening, MIPPProof, TIPPProof,
+    SRS,
 };
 use crate::bls::Engine;
 use crate::groth16::{multiscalar::*, Proof};
@@ -21,26 +25,28 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 ) -> Result<AggregateProof<E>, SynthesisError> {
     let (vkey, wkey) = ip_srs.get_commitment_keys();
 
-    if vkey.correct_ley(proofs.len()) || wkey.correct_len(proofs.len()) {
+    if vkey.correct_len(proofs.len()) || wkey.correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
     }
 
     // We first commit to A B and C - these commitments are what the verifier
     // will use later to verify the TIPP and MIPP proofs - even though the TIPP
     // and MIPP proofs doesn't use them directly.
-    par! {
-        let (A,B, com_ab) = {
-            let A = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
-            let B = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
-            let com_ab = commit::pair::<E>(&vkey, &wkey,&A,&B);
-            (A,B, com_ab)
-        },
-        let (C, com_c) = {
-            let C = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>();
-            let com_c = commit::single_g1::<E>(&vkey, &C);
-            (C, com_c)
-        }
-    }
+    // TODO parallelize that
+    let A = proofs
+        .iter()
+        .map(|proof| proof.a.into_projective())
+        .collect::<Vec<_>>();
+    let B = proofs
+        .iter()
+        .map(|proof| proof.b.into_projective())
+        .collect::<Vec<_>>();
+    let com_ab = commit::pair::<E>(&vkey, &wkey, &A, &B);
+    let C = proofs
+        .iter()
+        .map(|proof| proof.c.into_projective())
+        .collect::<Vec<_>>();
+    let com_c = commit::single_g1::<E>(&vkey, &C);
 
     // Random linear combination of proofs
     // TODO: extract logic in separate function (might require a macro for
@@ -50,10 +56,10 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         // TODO use serde to avoid specifying fields by hand
-        bincode::serialize_into(&mut hash_input, &com_ab.a).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_ab.b).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_c.a).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_c.b).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_ab.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_ab.1).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_c.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_c.1).expect("vec");
 
         if let Some(r) = E::Fr::from_random_bytes(&Sha256::digest(&hash_input).as_slice()[..]) {
             break r;
@@ -69,37 +75,28 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .map(|r| r.inverse().unwrap())
         .collect::<Vec<_>>();
 
-    par! {
-        // A^{r}
-        let A_r = A.par_iter()
-                   .zip(r_vec.par_iter())
-                   .map(|(a, r)| mul!(a.into_projective(), *r).into_affine())
-                   .collect::<Vec<E::G1Affine>>(),
-        // V^{r^{-1}}
-        let vkey_r_inv = vkey.scale(r_inv),
-    };
+    // A^{r}
+    let A_r = A
+        .par_iter()
+        .zip(r_vec.par_iter())
+        .map(|(a, r)| *mul!(a, *r))
+        .collect::<Vec<E::G1>>();
+    // V^{r^{-1}}
+    let vkey_r_inv = vkey.scale(&r_inv);
 
-    par! {
-        let tipa_proof_ab = prove_tipp::<E>(
-                &ip_srs,
-                &A_r, &B,
-                &vkey_r_inv, &wkey,
-                &r,
-        ),
-        let tipa_proof_c = prove_mipp::<E>(
-            &ip_srs,
-            &C, &r_vec,
-            // v - note we dont use the rescaled here since we dont need the
-            // trick as in AB - we just need to commit to C normally.
-            &vkey,
-        ),
-        let ip_ab = inner_product::pairing::<E>(&A_r, &B),
-        let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&C, r_vec)
-    };
+    let tipa_proof_ab = prove_tipp::<E>(&ip_srs, &A_r, &B, &vkey_r_inv, &wkey, &r);
+    let tipa_proof_c = prove_mipp::<E>(
+        &ip_srs, &C, &r_vec,
+        // v - note we dont use the rescaled here since we dont need the
+        // trick as in AB - we just need to commit to C normally.
+        &vkey,
+    );
+    let ip_ab = inner_product::pairing_proj::<E>(&A_r, &B);
+    let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&C, r_vec);
 
     // TODO - move assertion to a test - this is a property of the scheme
     let computed_com_ab = commit::pair::<E>(&vkey_r_inv, &wkey, &A, &B);
-    assert_eq!(com_a, computed_com_a);
+    assert_eq!(com_ab, computed_com_ab);
 
     Ok(AggregateProof {
         com_ab,
@@ -116,25 +113,24 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 /// is scaled by r^{-1}.
 fn prove_tipp<E: Engine>(
     srs: &SRS<E>,
-    A: &[E::G1Affine],
-    B: &[E::G2Affine], // values: (&[E::G1Affine], &[E::G2Affine]),
+    A: &[E::G1],
+    B: &[E::G2],
     vkey: &VKey<E>,
-    wkey: &WKey<E>  // vkey: (&[E::G2Affine], &[E::G1Affine]),
+    wkey: &WKey<E>,
     r_shift: &E::Fr,
-) -> Result<PairingInnerProductABProof<E>, SynthesisError> {
-    if !m_a.len().is_power_of_two() {
-            return Err(SynthesisError::MalformedProofs);
+) -> Result<TIPPProof<E>, SynthesisError> {
+    if !A.len().is_power_of_two() || A.len() != B.len() {
+        return Err(SynthesisError::MalformedProofs);
     }
     // Run GIPA
-    let (proof, challenges) = gipa_tipp(A,B, vkey,wkey)?;
+    let (proof, challenges) = gipa_tipp(A, B, vkey, wkey);
 
     // Prove final commitment keys are wellformed
-    let transcript = challenges;
     // we reverse the transcript so the polynomial in kzg opening is constructed
     // correctly - the formula indicates x_{l-j}. Also for deriving KZG
     // challenge point, input must be the last challenge.
-    transcript.reverse();
-    let transcript_inverse = challenges
+    challenges.reverse();
+    let challenges_inv = challenges
         .par_iter()
         .map(|x| x.inverse().unwrap())
         .collect::<Vec<_>>();
@@ -145,9 +141,11 @@ fn prove_tipp<E: Engine>(
     let z = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
-        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
-        bincode::serialize_into(&mut hash_input, &ck_b_final).expect("vec");
+        bincode::serialize_into(&mut hash_input, &challenges.first().unwrap()).expect("vec");
+        bincode::serialize_into(&mut hash_input, &vkey.a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &vkey.b).expect("vec");
+        bincode::serialize_into(&mut hash_input, &wkey.a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &wkey.b).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
             &Sha256::digest(&hash_input).as_slice()
@@ -158,21 +156,21 @@ fn prove_tipp<E: Engine>(
         counter_nonce += 1;
     };
 
-       // Complete KZG proofs
+    // Complete KZG proofs
     par! {
         let vkey_opening = prove_commitment_key_kzg_opening(
-            srs.h_alpha_powers_table,
-            srs.h_beta_powers_table,
+            &srs.h_alpha_powers_table,
+            &srs.h_beta_powers_table,
             srs.n,
-            &transcript_inverse,
+            &challenges_inv,
             &r_inverse,
             &z,
         ),
         let wkey_opening = prove_commitment_key_kzg_opening(
-            srs.g_alpha_powers_table,
-            srs.g_beta_powers_table,
-            srs.g_beta_powers,
-            &transcript,
+            &srs.g_alpha_powers_table,
+            &srs.g_beta_powers_table,
+            srs.n,
+            &challenges,
             &<E::Fr>::one(),
             &z,
         )
@@ -190,249 +188,257 @@ fn prove_tipp<E: Engine>(
 /// challenges generated necessary to do the polynomial commitment proof later
 /// in TIPP.
 fn gipa_tipp<E: Engine>(
-        A: &[E::G1Affine],
-        B: &[E::G2Affine],
-        vkey: &VKey<E>, 
-        wkey: &WKey<E>,
-    ) -> GipaTIPP<E> {
-        let (mut m_a, mut m_b) = (A.to_vec(), B.to_vec());
-        let (mut vkey, mut wkey) = (vkey.clone(), wkey.clone());
-        let mut comms = Vec::new();
-        let mut z_vec = Vec::new();
-        let mut challenges = Vec::new();
+    A: &[E::G1],
+    B: &[E::G2],
+    vkey: &VKey<E>,
+    wkey: &WKey<E>,
+) -> (GipaTIPP<E>, Vec<E::Fr>) {
+    let (mut m_a, mut m_b) = (A.to_vec(), B.to_vec());
+    let (mut vkey, mut wkey) = (vkey.clone(), wkey.clone());
+    let mut comms = Vec::new();
+    let mut z_vec = Vec::new();
+    let mut challenges: Vec<E::Fr> = Vec::new();
 
-            while m_a.len() > 1 {
-            // recursive step
-            // Recurse with problem of half size
-            let split = m_a.len() / 2;
-            
-            let (A_left, A_right) = m_a.split_at_mut(split);
-            let (B_left, B_right) = m_b.split_at_mut(split);
-            // TODO: make that mutable split to avoid copying - may require to
-            // not use struct...  for the moment i prefer readability 
-            let (vk_left, vk_right) = vkey.split(split);
-            let (wk_left, wk_right) = wkey.split(split);
+    while m_a.len() > 1 {
+        // recursive step
+        // Recurse with problem of half size
+        let split = m_a.len() / 2;
 
-            // See section 3.3 for paper version with equivalent names
-            let ((C_l,C_r),(Z_l,Z_r))= rayon::join(
-                || {
-                    rayon::join(
-                        || commit::pair(vk_left,wk_right,A_right,B_left),
-                        || commit::pair(vk_right,wk_left,A_left,B_right)
-                    )
-                },
-                || {
-                    rayon::join(
-                        || inner_product::pairing::<E>(A_right, B_left),
-                        || inner_product::pairing::<E>(A_left, B_right)
-                    )
-                },
-            );
+        let (A_left, A_right) = m_a.split_at_mut(split);
+        let (B_left, B_right) = m_b.split_at_mut(split);
+        // TODO: make that mutable split to avoid copying - may require to
+        // not use struct...  for the moment i prefer readability
+        let (vk_left, vk_right) = vkey.split(split);
+        let (wk_left, wk_right) = wkey.split(split);
 
-            // Fiat-Shamir challenge
-            // TODO extract logic in separate function and use the same as in
-            // verification
-            let mut counter_nonce: usize = 0;
-            let default_transcript = E::Fr::zero();
-            let transcript = r_transcript.last().unwrap_or(&default_transcript);
+        // See section 3.3 for paper version with equivalent names
+        let ((C_l, C_r), (Z_l, Z_r)) = rayon::join(
+            || {
+                rayon::join(
+                    || commit::pair(&vk_left, &wk_right, &A_right, &B_left),
+                    || commit::pair(&vk_right, &wk_left, &A_left, &B_right),
+                )
+            },
+            || {
+                rayon::join(
+                    || inner_product::pairing::<E>(&A_right, &B_left),
+                    || inner_product::pairing::<E>(&A_left, &B_right),
+                )
+            },
+        );
 
-            let (c, c_inv) = 'challenge: loop {
-                let mut hash_input = Vec::new();
-                hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-                bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-                bincode::serialize_into(&mut hash_input, &C_r.0).expect("vec");
-                bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
-                bincode::serialize_into(&mut hash_input, &C_l.0).expect("vec");
-                bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
-                bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
-                bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
+        // Fiat-Shamir challenge
+        // TODO extract logic in separate function and use the same as in
+        // verification
+        let mut counter_nonce: usize = 0;
+        let default_transcript = E::Fr::zero();
+        let transcript = challenges.last().unwrap_or(&default_transcript);
 
-                let d = Sha256::digest(&hash_input);
-                let c = fr_from_u128::<E::Fr>(d.as_slice());
-                if let Some(c_inv) = c.inverse() {
-                    // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                    // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                    break 'challenge (c_inv, c);
-                }
+        let (c, c_inv) = 'challenge: loop {
+            let mut hash_input = Vec::new();
+            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
+            bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_r.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_l.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
-                counter_nonce += 1;
-            };
+            let d = Sha256::digest(&hash_input);
+            let c = fr_from_u128::<E::Fr>(d.as_slice());
+            if let Some(c_inv) = c.inverse() {
+                // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                break 'challenge (c_inv, c);
+            }
 
-            // Set up values for next step of recursion
-            // A[:n'] + A[n':] ^ x
-            A_right
-                .par_iter()
-                .zip(A_left.par_iter_mut())
-                .for_each(|(a_r, a_l)| {
-                    let mut x: E::G1 = mul!(a_r.into_projective(), c);
-                    x.add_assign_mixed(&a_l);
-                    *a_l = x.into_affine();
-                });
+            counter_nonce += 1;
+        };
 
-            let len = A_left.len();
-            m_a.resize(len, E::G1Affine::zero()); // shrink to new size
+        // Set up values for next step of recursion
+        // A[:n'] + A[n':] ^ x
+        A_right
+            .par_iter()
+            .zip(A_left.par_iter_mut())
+            .for_each(|(a_r, a_l)| {
+                let mut x: E::G1 = mul!(a_r.into_projective(), c);
+                x.add_assign_mixed(&a_l);
+                *a_l = x.into_affine();
+            });
 
-            // B[:n'] + B[n':] ^ x^-1
-            B_left
-                .par_iter_mut()
-                .zip(B_right.par_iter())
-                .for_each(|(b_l, b_r)| {
-                    let mut x = b_r.into_projective();
-                    x.mul_assign(c_inv);
-                    x.add_assign_mixed(&b_l);
-                    *b_l = x.into_affine();
-                });
+        let len = A_left.len();
+        m_a.resize(len, E::G1Affine::zero()); // shrink to new size
 
-            let len = B_right.len();
-            m_b.resize(len, E::G2Affine::zero()); // shrink to new size
+        // B[:n'] + B[n':] ^ x^-1
+        B_left
+            .par_iter_mut()
+            .zip(B_right.par_iter())
+            .for_each(|(b_l, b_r)| {
+                let mut x = b_r.into_projective();
+                x.mul_assign(c_inv);
+                x.add_assign_mixed(&b_l);
+                *b_l = x.into_affine();
+            });
 
-            // v_left + v_right^x^-1
-            vkey = VKey::<E>::compress(vk_left,vk_right,c_inv);
-            // w_left + w_right^x
-            wkey = WKey::<E>::compress(wk_left,wk_right,c);
+        let len = B_right.len();
+        m_b.resize(len, E::G2Affine::zero()); // shrink to new size
 
-            comms.push((C_l,C_r));
-            z_vec.push((Z_l,Z_r))
-            challenges.push(c);
-        }
+        // v_left + v_right^x^-1
+        vkey = VKey::<E>::compress(&vk_left, &vk_right, &c_inv);
+        // w_left + w_right^x
+        wkey = WKey::<E>::compress(&wk_left, &wk_right, &c);
 
-        let (final_A, final_B) = (m_a[0], m_b[0]);
-        let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
+        comms.push((C_l, C_r));
+        z_vec.push((Z_l, Z_r));
+        challenges.push(c);
+    }
 
-        // TODO should we reverse those?
-        //r_transcript.reverse();
-        //r_commitment_steps.reverse();
+    let (final_A, final_B) = (m_a[0], m_b[0]);
+    let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
 
-        (GipaTIPP{
-                comms: comms,
-                z_vec: z_vec,
-                final_A: final_A,
-                final_B: final_B,
-                final_vkey: final_vkey,
-                final_wkey: final_wkey,
-        }, challenges)
+    // TODO should we reverse those?
+    //r_transcript.reverse();
+    //r_commitment_steps.reverse();
+
+    (
+        GipaTIPP {
+            comms: comms,
+            z_vec: z_vec,
+            final_A: final_A,
+            final_B: final_B,
+            final_vkey: final_vkey,
+            final_wkey: final_wkey,
+        },
+        challenges,
+    )
 }
 
 /// gipa_mipp proves the relation Z = C^r and V = C * v
 /// Returns vector of recursive commitments and transcripts in reverse order.
-fn gipa_mipp(
-        C: &[E::G1Affine], 
-        r: &[E::Fr],
-        vkey: &VKey<E>,
-    ) -> GipaMIPP { 
-        let (mut m_c, mut m_r) = (C.to_vec(),r.to_vec());
-        let mut comms = Vec::new();
-        let mut z_vec = Vec::new();
-        let mut challenges = Vec::new();
-        let mut vkey = vkey;
+fn gipa_mipp<E: Engine>(
+    C: &[E::G1Affine],
+    r: &[E::Fr],
+    vkey: &VKey<E>,
+) -> (GipaMIPP<E>, Vec<E::Fr>) {
+    let (mut m_c, mut m_r) = (C.to_vec(), r.to_vec());
+    let mut comms = Vec::new();
+    let mut z_vec = Vec::new();
+    let mut challenges = Vec::new();
+    let mut vkey = vkey;
 
-        while m_a.len() > 1 {
-            // recursive step
-            // Recurse with problem of half size
-            let split = m_a.len() / 2;
+    while m_c.len() > 1 {
+        // recursive step
+        // Recurse with problem of half size
+        let split = m_c.len() / 2;
 
-            // c[:n']   c[n':]
-            let (C_left, C_right) = m_c.split_at_mut(split);
-            // r[:n']   r[:n']
-            let (r_left, r_right) = m_r.split_at_mut(split);
-            // v[:n']   v[n':]
-            let (vk_left,vk_right) = vkey.split(split);
+        // c[:n']   c[n':]
+        let (C_left, C_right) = m_c.split_at_mut(split);
+        // r[:n']   r[:n']
+        let (r_left, r_right) = m_r.split_at_mut(split);
+        // v[:n']   v[n':]
+        let (vk_left, vk_right) = vkey.split(split);
 
-            let ((Z_r,Z_l),(TU_r,TU_l))= rayon::join(
-                || {
-                    rayon::join(
-                        // Z_r = c[:n'] ^ r[n':]
-                        || inner_product::multiexponentiation::<E::G1Affine>(C_left, r_right),
-                        // Z_l = c[n':] ^ r[:n']
-                        || inner_product::multiexponentiation::<E::G1Affine>(C_right, r_left),
-                    )
-                },
-                || {
-                    rayon::join(
-                        // U_r = c[:n'] * v[n':]
-                        || commit::pair::<E>(vk_right, C_left),
-                        // U_l = c[n':] * v[:n']
-                        || commit::pair::<E>(vk_left, C_right), 
-                    )
-                },
-            );
+        let ((Z_r, Z_l), (TU_r, TU_l)) = rayon::join(
+            || {
+                rayon::join(
+                    // Z_r = c[:n'] ^ r[n':]
+                    || inner_product::multiexponentiation::<E::G1Affine>(C_left, r_right),
+                    // Z_l = c[n':] ^ r[:n']
+                    || inner_product::multiexponentiation::<E::G1Affine>(C_right, r_left),
+                )
+            },
+            || {
+                rayon::join(
+                    // U_r = c[:n'] * v[n':]
+                    || commit::single_g1::<E>(vk_right, C_left),
+                    // U_l = c[n':] * v[:n']
+                    || commit::single_g1::<E>(vk_left, C_right),
+                )
+            },
+        );
 
-            // Fiat-Shamir challenge
-            // TODO move that to separate function
-            let mut counter_nonce: usize = 0;
-            let default_transcript = E::Fr::zero();
-            let transcript = r_transcript.last().unwrap_or(&default_transcript);
+        // Fiat-Shamir challenge
+        // TODO move that to separate function
+        let mut counter_nonce: usize = 0;
+        let default_transcript = E::Fr::zero();
+        let transcript = challenges.last().unwrap_or(&default_transcript);
 
-            let (c, c_inv) = 'challenge: loop {
-                let mut hash_input = Vec::new();
-                hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-                bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-                bincode::serialize_into(&mut hash_input, &TU.0).expect("vec");
-                bincode::serialize_into(&mut hash_input, &TU.1).expect("vec");
-                bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
-                bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
+        let (c, c_inv) = 'challenge: loop {
+            let mut hash_input = Vec::new();
+            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
+            bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
+            bincode::serialize_into(&mut hash_input, &TU_r.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &TU_r.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &TU_l.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &TU_l.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
-                let d = Sha256::digest(&hash_input);
-                let c = fr_from_u128::<E::Fr>(d.as_slice());
-                if let Some(c_inv) = c.inverse() {
-                    // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                    // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                    break 'challenge (c_inv, c);
-                }
+            let d = Sha256::digest(&hash_input);
+            let c = fr_from_u128::<E::Fr>(d.as_slice());
+            if let Some(c_inv) = c.inverse() {
+                // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
+                // Swap 'c' and 'c_inv' since can't control bit size of c_inv
+                break 'challenge (c_inv, c);
+            }
 
-                counter_nonce += 1;
-            };
+            counter_nonce += 1;
+        };
 
-            // Set up values for next step of recursion
-            C_right
-                .par_iter()
-                .zip(C_left.par_iter_mut())
-                .for_each(|(c_r, c_l)| {
-                    // c[:n'] + c[n':]^x
-                    let mut x: E::G1 = mul!(c_r.into_projective(), c);
-                    x.add_assign_mixed(&c_l);
-                    *c_l = x.into_affine();
-                });
+        // Set up values for next step of recursion
+        C_right
+            .par_iter()
+            .zip(C_left.par_iter_mut())
+            .for_each(|(c_r, c_l)| {
+                // c[:n'] + c[n':]^x
+                let mut x: E::G1 = mul!(c_r.into_projective(), c);
+                x.add_assign_mixed(&c_l);
+                *c_l = x.into_affine();
+            });
 
-            let len = C_left.len();
-            m_c.resize(len, E::G1Affine::zero()); // shrink to new size
+        let len = C_left.len();
+        m_c.resize(len, E::G1Affine::zero()); // shrink to new size
 
-            r_left
-                .par_iter_mut()
-                .zip(r_right.par_iter_mut())
-                .for_each(|(r_l, r_r)| {
-                    // r[:n'] + r[n':]^x^-1
-                    r_r.mul_assign(&c_inv);
-                    r_l.add_assign(b_2);
-                });
+        r_left
+            .par_iter_mut()
+            .zip(r_right.par_iter_mut())
+            .for_each(|(r_l, r_r)| {
+                // r[:n'] + r[n':]^x^-1
+                r_r.mul_assign(&c_inv);
+                r_l.add_assign(r_r);
+            });
 
-            let len = r_left.len();
-            m_r.resize(len, E::Fr::zero()); // shrink to new size
+        let len = r_left.len();
+        m_r.resize(len, E::Fr::zero()); // shrink to new size
 
-            // v[:n'] + v[n':]^{x^{-1}}
-            vkey = vkey.compress(vk_left,vk_right,c_inv);
+        // v[:n'] + v[n':]^{x^{-1}}
+        vkey = vkey.compress(vk_left, vk_right, c_inv);
 
-            comms.push(TU);
-            z_vec.push((Z_l,Z_r));
-            challenges.push(c);
-        }
-        
-        // final c and r
-        let (final_C,final_r) = (m_c[0], m_r[0]);
-        // final v
-        let final_vkey = vkey.first();
+        comms.push((TU_l, TU_r));
+        z_vec.push((Z_l, Z_r));
+        challenges.push(c);
+    }
 
-        // TODO should we reverse those? 
-        //r_transcript.reverse();
-        //r_commitment_steps.reverse();
+    // final c and r
+    let (final_C, final_r) = (m_c[0], m_r[0]);
+    // final v
+    let final_vkey = vkey.first();
 
-        (GipaMIPP{
+    // TODO should we reverse those?
+    //r_transcript.reverse();
+    //r_commitment_steps.reverse();
+
+    (
+        GipaMIPP {
             comms: comms,
             z_vec: z_vec,
             final_C: final_C,
             final_r: final_r,
             final_vkey: final_vkey,
-        }, challenges)
+        },
+        challenges,
+    )
 }
 
 /// Returns the KZG opening proof for the given commitment key. In math, it
@@ -444,7 +450,7 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     transcript: &[G::Scalar],
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
-) -> KZGOpening {
+) -> KZGOpening<G> {
     // f_v
     let vkey_poly =
         DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(transcript, r_shift));
@@ -461,8 +467,7 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     neg_kzg_challenge.negate();
 
     // f_v(X) - f_v(z) / (X - z)
-    let quotient_polynomial = &(&vkey_poly
-        - &DensePolynomial::from_coeffs(vec![vkey_poly_z]))
+    let quotient_polynomial = &(&vkey_poly - &DensePolynomial::from_coeffs(vec![vkey_poly_z]))
         / &(DensePolynomial::from_coeffs(vec![neg_kzg_challenge, G::Scalar::one()]));
 
     let quotient_polynomial_coeffs = quotient_polynomial.into_coeffs();
@@ -480,16 +485,22 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     // we do one proof over h^a and one proof over h^b (or g^a and g^b depending
     // on the curve we are on). that's the extra cost of the commitment scheme
     // used which is compatible with Groth16 CRS.
-    KZGOpening(rayon::join( || par_multiscalar::<_, G::Affine>(
-        &ScalarList::Getter(getter, srs_powers_len),
-        srs_powers_alpha_table,
-        std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
-    ),
-    || par_multiscalar::<_, G::Affine>(
-        &ScalarList::Getter(getter, srs_powers_len),
-        srs_powers_beta_table,
-        std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
-    )))
+    (rayon::join(
+        || {
+            par_multiscalar::<_, G::Affine>(
+                &ScalarList::Getter(getter, srs_powers_len),
+                srs_powers_alpha_table,
+                std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
+            )
+        },
+        || {
+            par_multiscalar::<_, G::Affine>(
+                &ScalarList::Getter(getter, srs_powers_len),
+                srs_powers_beta_table,
+                std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
+            )
+        },
+    ))
 }
 
 /// It returns the evaluation of the polynomial $\prod (1 + x_{l-j}(rX)^{2j}$ at
@@ -508,12 +519,12 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
 
     // 0 iteration
     let mut res = add!(F::one(), &mul!(transcript[0], &power_zr));
-    power_2_zr.mul_assign(&power_zr.clone());
+    power_zr.mul_assign(&power_zr.clone());
 
     // the rest
     for x in transcript[1..].iter() {
         res.mul_assign(&add!(F::one(), &mul!(*x, &power_zr)));
-        power_2_zr.mul_assign(&power_zr.clone());
+        power_zr.mul_assign(&power_zr.clone());
     }
 
     res
@@ -523,10 +534,10 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
 /// It does this in logarithmic time directly; here is an example with 2
 /// challenges:
 ///
-///     We wish to compute $(1+x_1ra)(1+x_0(ra)^2) = 1 +  x_1ra + x_0(ra)^2 + x_0x_1(ra)^3$ 
+///     We wish to compute $(1+x_1ra)(1+x_0(ra)^2) = 1 +  x_1ra + x_0(ra)^2 + x_0x_1(ra)^3$
 ///     Algorithm: $c_{-1} = [1]$; $c_j = c_{i-1} \| (x_{l-j} * c_{i-1})$; $r = r*r$
 ///     $c_0 = c_{-1} \| (x_1 * r * c_{-1}) = [1] \| [rx_1] = [1, rx_1]$, $r = r^2$
-///     $c_1 = c_0 \| (x_0 * r^2c_0) = [1, rx_1] \| [x_0r^2, x_0x_1r^3] = [1, x_1r, x_0r^2, x_0x_1r^3]$ 
+///     $c_1 = c_0 \| (x_0 * r^2c_0) = [1, rx_1] \| [x_0r^2, x_0x_1r^3] = [1, x_1r, x_0r^2, x_0x_1r^3]$
 ///     which is equivalent to $f(a) = 1 + x_1ra + x_0(ra)^2 + x_0x_1r^2a^3$
 ///
 /// This method expects the coefficients in reverse order so transcript[i] =
@@ -545,19 +556,19 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
     coefficients
 }
 
-/// prove_mipp returns a GIPA and MIPP proof for proving statement Z = C^r 
+/// prove_mipp returns a GIPA and MIPP proof for proving statement Z = C^r
 /// and T = C * v. Section 4 in the paper.
 fn prove_mipp<E: Engine>(
     srs: &SRS<E>,
     C: &[E::G1],
     r: &[E::Fr],
-    vkey: &vkey
+    vkey: &VKey<E>,
 ) -> Result<MIPPProof<E>, SynthesisError> {
-    if !m_a.len().is_power_of_two() {
+    if !C.len().is_power_of_two() || C.len() != r.len() {
         return Err(SynthesisError::MalformedProofs);
     }
     // Run GIPA
-    let (proof, challenges) = gipa_mipp(values, ck);
+    let (proof, challenges) = gipa_mipp(C, r, vkey);
 
     // Prove final commitment key is wellformed
     let transcript = challenges;

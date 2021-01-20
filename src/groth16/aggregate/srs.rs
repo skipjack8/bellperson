@@ -88,8 +88,8 @@ impl<E: Engine> SRS<E> {
             h_alpha: self.h_alpha_powers[1].clone(),
             g_beta: self.g_beta_powers[1].clone(),
             h_beta: self.h_beta_powers[1].clone(),
-            g_alpha_n: self.g_alpha[1 + n].clone(),
-            g_beta_n: self.g_beta[1 + n].clone(),
+            g_alpha_n: self.g_alpha[1 + self.n].clone(),
+            g_beta_n: self.g_beta[1 + self.n].clone(),
         }
     }
 }

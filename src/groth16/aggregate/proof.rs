@@ -1,12 +1,11 @@
-use serde::{Deserialize, Serialize};
-
 use crate::bls::Engine;
-use crate::groth16::aggregagte::commit;
+use crate::groth16::aggregate::commit;
+use groupy::CurveProjective;
+use serde::{Deserialize, Serialize};
 
 /// AggregateProof contains all elements to verify n aggregated Groth16 proofs
 /// using inner pairing product arguments. This proof can be created by any
 /// party in possession of valid Groth16 proofs.
-#[derive(Serialize, Deserialize)]
 pub struct AggregateProof<E: Engine> {
     /// commitment to A and B using the pair commitment scheme needed to verify
     /// TIPP relation.
@@ -51,7 +50,7 @@ pub struct TIPPProof<E: Engine> {
 
 /// KZGOpening represents the KZG opening of a commitment key (which is a tuple
 /// given commitment keys are a tuple).
-type KZGOpening<G: CurveProjective> = (G, G);
+pub type KZGOpening<G: CurveProjective> = (G, G);
 
 /// GipaMIPP is similar to GipaTIPP: it contains information to verify the
 /// GIPA recursion using the commitment of MIPP. Section 4 of the paper.
@@ -73,58 +72,4 @@ pub struct GipaMIPP<E: Engine> {
 pub struct MIPPProof<E: Engine> {
     pub gipa: GipaMIPP<E>,
     pub vkey_opening: KZGOpening<E::G2>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct PairingInnerProductABProof<E: Engine> {
-    #[serde(bound(
-        serialize = "GIPAProof<E>: Serialize",
-        deserialize = "GIPAProof<E>: Deserialize<'de>",
-    ))]
-    pub gipa_proof: GIPAProof<E>,
-    #[serde(bound(
-        serialize = "E::G1: Serialize, E::G2: Serialize",
-        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
-    ))]
-    pub final_ck: (E::G2, E::G1),
-    #[serde(bound(
-        serialize = "E::G1: Serialize, E::G2: Serialize",
-        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
-    ))]
-    pub final_ck_proof: (E::G2, E::G1),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GIPAProof<E: Engine> {
-    #[serde(bound(
-        serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
-        deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
-    ))]
-    pub r_commitment_steps: Vec<((E::Fqk, E::Fqk, E::Fqk), (E::Fqk, E::Fqk, E::Fqk))>,
-    #[serde(bound(
-        serialize = "E::G1: Serialize, E::G2: Serialize",
-        deserialize = "E::G1: Deserialize<'de>, E::G2: Deserialize<'de>",
-    ))]
-    pub r_base: (E::G1, E::G2),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct MultiExpInnerProductCProof<E: Engine> {
-    #[serde(bound(
-        serialize = "GIPAProofWithSSM<E>: Serialize",
-        deserialize = "GIPAProofWithSSM<E>: Deserialize<'de>",
-    ))]
-    pub gipa_proof: GIPAProofWithSSM<E>,
-    pub final_ck: E::G2,
-    pub final_ck_proof: E::G2,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GIPAProofWithSSM<E: Engine> {
-    #[serde(bound(
-        serialize = "E::Fqk: Serialize, E::Fr: Serialize,E::G1: Serialize",
-        deserialize = "E::Fqk: Deserialize<'de>, E::Fr: Deserialize<'de>, E::G1: Deserialize<'de>",
-    ))]
-    pub r_commitment_steps: Vec<((E::Fqk, E::G1), (E::Fqk, E::G1))>,
-    pub r_base: (E::G1, E::Fr),
 }

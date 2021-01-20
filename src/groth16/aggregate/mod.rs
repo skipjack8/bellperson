@@ -4,6 +4,7 @@ use ff::Field;
 mod macros;
 
 mod accumulator;
+mod commit;
 mod inner_product;
 mod msm;
 mod poly;
@@ -12,6 +13,7 @@ mod prove;
 mod srs;
 mod verify;
 
+pub use self::commit::*;
 pub use self::proof::*;
 pub use self::prove::*;
 pub use self::srs::*;

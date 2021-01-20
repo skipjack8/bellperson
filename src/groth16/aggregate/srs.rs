@@ -29,10 +29,15 @@ pub struct SRS<E: Engine> {
 pub struct VerifierSRS<E: Engine> {
     pub g: E::G1,
     pub h: E::G2,
+    // TODO look if g_alpha and g_beta still needed
     pub g_alpha: E::G1,
     pub g_beta: E::G1,
     pub h_alpha: E::G2,
     pub h_beta: E::G2,
+    /// equals to $g^{alpha^{n+1}}$
+    pub g_alpha_n: E::G1,
+    /// equals to $g^{beta^{n+1}}$
+    pub g_beta_n: E::G1,
 }
 
 impl<E: Engine> SRS<E> {
@@ -83,6 +88,8 @@ impl<E: Engine> SRS<E> {
             h_alpha: self.h_alpha_powers[1].clone(),
             g_beta: self.g_beta_powers[1].clone(),
             h_beta: self.h_beta_powers[1].clone(),
+            g_alpha_n: self.g_alpha[1 + n].clone(),
+            g_beta_n: self.g_beta[1 + n].clone(),
         }
     }
 }

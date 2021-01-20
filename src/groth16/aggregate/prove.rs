@@ -49,9 +49,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let r = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        bincode::serialize_into(&mut hash_input, &com_a).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_b).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_c).expect("vec");
+        // TODO use serde to avoid specifying fields by hand
+        bincode::serialize_into(&mut hash_input, &com_ab.a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_ab.b).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_c.a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &com_c.b).expect("vec");
 
         if let Some(r) = E::Fr::from_random_bytes(&Sha256::digest(&hash_input).as_slice()[..]) {
             break r;
@@ -128,6 +130,10 @@ fn prove_tipp<E: Engine>(
 
     // Prove final commitment keys are wellformed
     let transcript = challenges;
+    // we reverse the transcript so the polynomial in kzg opening is constructed
+    // correctly - the formula indicates x_{l-j}. Also for deriving KZG
+    // challenge point, input must be the last challenge.
+    transcript.reverse();
     let transcript_inverse = challenges
         .par_iter()
         .map(|x| x.inverse().unwrap())
@@ -152,11 +158,7 @@ fn prove_tipp<E: Engine>(
         counter_nonce += 1;
     };
 
-    // we reverse the transcript so the polynomial in kzg opening is constructed
-    // correctly - the formula indicates x_{l-j}.
-    transcript.reverse();
-
-    // Complete KZG proofs
+       // Complete KZG proofs
     par! {
         let vkey_opening = prove_commitment_key_kzg_opening(
             srs.h_alpha_powers_table,
@@ -228,7 +230,8 @@ fn gipa_tipp<E: Engine>(
             );
 
             // Fiat-Shamir challenge
-            // TODO extract logic in separate function
+            // TODO extract logic in separate function and use the same as in
+            // verification
             let mut counter_nonce: usize = 0;
             let default_transcript = E::Fr::zero();
             let transcript = r_transcript.last().unwrap_or(&default_transcript);
@@ -237,13 +240,11 @@ fn gipa_tipp<E: Engine>(
                 let mut hash_input = Vec::new();
                 hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
                 bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-
                 bincode::serialize_into(&mut hash_input, &C_r.0).expect("vec");
                 bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
-                bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
-
                 bincode::serialize_into(&mut hash_input, &C_l.0).expect("vec");
                 bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
+                bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
                 bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
                 let d = Sha256::digest(&hash_input);
@@ -366,10 +367,8 @@ fn gipa_mipp(
                 let mut hash_input = Vec::new();
                 hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
                 bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-
                 bincode::serialize_into(&mut hash_input, &TU.0).expect("vec");
                 bincode::serialize_into(&mut hash_input, &TU.1).expect("vec");
-
                 bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
                 bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
@@ -436,10 +435,6 @@ fn gipa_mipp(
         }, challenges)
 }
 
-/// KZGOpening represents the KZG opening of a commitment key (which is a tuple
-/// given commitment keys are a tuple).
-type KZGOpening<G: CurveProjective> = (G,G);
-
 /// Returns the KZG opening proof for the given commitment key. In math, it
 /// returns $g^{f(alpha) - f(z) / (alpha - z)}$ for $a$ and $b$.
 fn prove_commitment_key_kzg_opening<G: CurveProjective>(
@@ -482,6 +477,9 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
         quotient_polynomial_coeffs[i].into_repr()
     };
 
+    // we do one proof over h^a and one proof over h^b (or g^a and g^b depending
+    // on the curve we are on). that's the extra cost of the commitment scheme
+    // used which is compatible with Groth16 CRS.
     KZGOpening(rayon::join( || par_multiscalar::<_, G::Affine>(
         &ScalarList::Getter(getter, srs_powers_len),
         srs_powers_alpha_table,
@@ -489,28 +487,33 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     ),
     || par_multiscalar::<_, G::Affine>(
         &ScalarList::Getter(getter, srs_powers_len),
-        srs_powers_alpha_table,
+        srs_powers_beta_table,
         std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
     )))
 }
 
+/// It returns the evaluation of the polynomial $\prod (1 + x_{l-j}(rX)^{2j}$ at
+/// the point z, where transcript contains the reversed order of all challenges (the x).
+/// See polynomial_coefficients_from_transcript for explanation of the
+/// algorithm.
 pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
     transcript: &[F],
     z: &F,
     r_shift: &F,
 ) -> F {
-    let mut power_2_zr = *z;
-    power_2_zr.mul_assign(z);
-    power_2_zr.mul_assign(r_shift);
+    // this is the term (rz) that will get squared at each step to produce the
+    // $(rz)^{2j}$ of the formula
+    let mut power_zr = *z;
+    power_zr.mul_assign(r_shift);
 
     // 0 iteration
-    let mut res = add!(F::one(), &mul!(transcript[0], &power_2_zr));
-    power_2_zr.mul_assign(&power_2_zr.clone());
+    let mut res = add!(F::one(), &mul!(transcript[0], &power_zr));
+    power_2_zr.mul_assign(&power_zr.clone());
 
     // the rest
     for x in transcript[1..].iter() {
-        res.mul_assign(&add!(F::one(), &mul!(*x, &power_2_zr)));
-        power_2_zr.mul_assign(&power_2_zr.clone());
+        res.mul_assign(&add!(F::one(), &mul!(*x, &power_zr)));
+        power_2_zr.mul_assign(&power_zr.clone());
     }
 
     res
@@ -558,6 +561,9 @@ fn prove_mipp<E: Engine>(
 
     // Prove final commitment key is wellformed
     let transcript = challenges;
+    // we reverse the transcript so challenges are in the right order (inverse
+    // from creation) for the KZG opening proof
+    transcript.reverse();
     let transcript_inverse = transcript
         .iter()
         .map(|x| x.inverse().unwrap())
@@ -570,7 +576,8 @@ fn prove_mipp<E: Engine>(
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
-        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.final_vkey.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.final_vkey.1).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
             &Sha256::digest(&hash_input).as_slice()

@@ -88,6 +88,7 @@ impl<G> Key<G> where G: CurveProjective {
 }
 
 /// Both commitment outputs a pair of $F_q^k$ element.
+#[derive(Clone,Debug)]
 type Output<E: Engine> = (E::Fqk, E::Fqk);
 
 /// single_g1 commits to a single vector of G1 elements in the following way:

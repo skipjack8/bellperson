@@ -49,6 +49,10 @@ pub struct TIPPProof<E: Engine> {
     pub wkey_opening: KZGOpening<E::G1>,
 }
 
+/// KZGOpening represents the KZG opening of a commitment key (which is a tuple
+/// given commitment keys are a tuple).
+type KZGOpening<G: CurveProjective> = (G, G);
+
 /// GipaMIPP is similar to GipaTIPP: it contains information to verify the
 /// GIPA recursion using the commitment of MIPP. Section 4 of the paper.
 pub struct GipaMIPP<E: Engine> {

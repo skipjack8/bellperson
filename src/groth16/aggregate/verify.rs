@@ -8,7 +8,7 @@ use sha2::Sha256;
 
 use super::{
     accumulator::PairingTuple,
-    inner_product,
+    commit, inner_product,
     prove::{fr_from_u128, polynomial_evaluation_product_form_from_transcript},
     structured_scalar_power, AggregateProof, GIPAProof, GIPAProofWithSSM,
     MultiExpInnerProductCProof, PairingInnerProductABProof, VerifierSRS,
@@ -30,14 +30,16 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
     info!("verify_aggregate_proof");
 
     // Random linear combination of proofs
+    // TODO: move that to seprate function or macro
     let mut counter_nonce: usize = 0;
     let r = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
 
-        bincode::serialize_into(&mut hash_input, &proof.com_a).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.com_b).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.com_c).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.com_ab.a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.com_ab.b).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.com_c.a).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.com_c.b).expect("vec");
 
         if let Some(r) = E::Fr::from_random_bytes(
             &Sha256::digest(&hash_input).as_slice()
@@ -63,10 +65,11 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         let tipa_ab = send_tuple.clone();
         s.spawn(move |_| {
             let now = Instant::now();
-            let tuple = verify_with_srs_shift::<E>(
+            let tuple = verify_tipp::<E>(
                 ip_verifier_srs,
-                (&proof.com_a, &proof.com_b, &proof.ip_ab),
-                &proof.tipa_proof_ab,
+                &proof.com_ab,
+                &proof.ip_ab,
+                &proof.proof_ab,
                 &r,
             );
             println!("TIPA AB took {} ms", now.elapsed().as_millis());
@@ -77,13 +80,14 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         let tipa_c = send_tuple.clone();
         s.spawn(move |_| {
             let now = Instant::now();
-            let tuple = verify_with_structured_scalar_message::<E>(
+            let tuple = verify_mipp::<E>(
                 ip_verifier_srs,
                 // com_c = C * v
+                &proof.com_c, 
                 // agg_c = C ^ r
-                (&proof.com_c, &proof.agg_c),
+                &proof.agg_c,
                 &r,
-                &proof.tipa_proof_c,
+                &proof.proof_c,
             );
             tipa_c.send(tuple).unwrap();
             println!("TIPA proof c took {} ms", now.elapsed().as_millis());
@@ -194,30 +198,40 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
     Ok(res)
 }
 
-fn verify_with_srs_shift<E: Engine>(
+/// verify_tipp returns a pairing equation to check the tipp proof. commAB is
+/// the commitment output of A and B, Z is the aggregated value: $A^r * B$ as
+/// described in the paper. $r$ is the randomness used to produce a random
+/// linear combination of A and B.
+fn verify_tipp<E: Engine>(
     v_srs: &VerifierSRS<E>,
-    com: (&E::Fqk, &E::Fqk, &E::Fqk),
-    proof: &PairingInnerProductABProof<E>,
+    comAB: &commit::Output<E>,
+    Z: &E::Fqk,
+    proof: &TIPPProof<E>,
     r_shift: &E::Fr,
 ) -> PairingTuple<E> {
     info!("verify with srs shift");
     let now = Instant::now();
-    let (base_com, transcript, transcript_inverse) =
-        gipa_verify_recursive_challenge_transcript(com, &proof.gipa_proof);
-    println!("TIPA AB: verify recursive {}ms", now.elapsed().as_millis());
+    // (T,U), Z, and all challenges
+    let (final_ab,final_z, challenges, challenges_inv) = gipa_verify_tipp(comAB, Z, &proof.gipa);
+    println!("TIPA AB: gipa verify tipp {}ms", now.elapsed().as_millis());
 
+    // we reverse the order so the KZG polynomial have them in the expected
+    // order to construct them in logn time.
+    challenges.reverse();
+    challenges_inv.reverse();
     // Verify commitment keys wellformed
-    let (ck_a_final, ck_b_final) = &proof.final_ck;
-    let (ck_a_proof, ck_b_proof) = &proof.final_ck_proof;
-
+    let fvkey = proof.gipa.final_vkey;
+    let fwkey = proof.gipa.final_wkey;
     // KZG challenge point
     let mut counter_nonce: usize = 0;
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
-        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
-        bincode::serialize_into(&mut hash_input, &ck_b_final).expect("vec");
+        bincode::serialize_into(&mut hash_input, &challenges.first().unwrap()).expect("vec");
+        bincode::serialize_into(&mut hash_input, &fvkey.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &fvkey.1).expect("vec");
+        bincode::serialize_into(&mut hash_input, &fvkey.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &fvkey.1).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
             &Sha256::digest(&hash_input).as_slice()
@@ -229,87 +243,104 @@ fn verify_with_srs_shift<E: Engine>(
     };
 
     let now = Instant::now();
-
-    // Verify base inner product commitment
-    let (com_a, com_b, com_t) = base_com;
-    let a_base = [proof.gipa_proof.r_base.0.clone()];
-    let b_base = [proof.gipa_proof.r_base.1.clone()];
-
     par! {
-        let aid = verify_commitment_key_g2_kzg_opening(
+        // Section 3.4. step 5 check the opening proof for v
+        let mut vtuple = verify_kzg_opening_g2(
             v_srs,
-            &ck_a_final,
-            &ck_a_proof,
+            &fvkey,
+            &proof.vkey_opening,
             &transcript_inverse,
             &r_shift.inverse().unwrap(),
             &c,
         ),
-        let bid = verify_commitment_key_g1_kzg_opening(
+        // Section 3.4 step 6 check the opening proof for w
+        let wtuple = verify_kzg_opening_g1(
             v_srs,
-            &ck_b_final,
-            &ck_b_proof,
+            &fwkey,
+            &proof.wkey_opening,
             &transcript,
             &E::Fr::one(),
             &c,
         ),
-        let a = PairingTuple::from_pair(
-            inner_product::pairing_miller::<E>(&a_base, &[ck_a_final.clone()]),
-            com_a,
-        ),
-        let b = PairingTuple::from_pair(
-            inner_product::pairing_miller::<E>(&[ck_b_final.clone()], &b_base),
-            com_b,
-        ),
-        let t_base = PairingTuple::from_pair(
-            inner_product::pairing_miller::<E>(&a_base, &b_base),
-            com_t,
-        )
-    };
+        println!("TIPA AB verify KZG: {}ms", now.elapsed().as_millis());
+        let now = Instant::now();
+        
+        // Section 3.4 step 2
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        let mut out = E::Fqk::one();
+        let (T,U) = final_ab;
+        //  final_AB.0 = T = e(A,v1)e(w1,B)
+        left.push(proof.gipa.final_A.clone());
+        right.push(fvkey.0.clone()); 
+        left.push(fwkey.0.clone());
+        left.push(proof.gipa.final_B.clone());
+        out.mul_assign(T);
+        // final_AB.1 = U = e(A,v2)e(w2,B)
+        left.push(proof.gipa.final_A.clone());
+        right.push(fvkey.1.clone());
+        left.push(fwkey.1.clone());
+        right.push(proof.gipa.final_B.clone());
+        out.mul_assign(U);
+        // final_Z = e(A,B) 
+        left.push(proof.final_A);
+        right.push(proof.final_B);
+        out.mul_assign(final_z);
 
+        // TODO check if doing one big miller loop is faster than doing the
+        // three in parallels and combine
+        let check = PairingTuple::from_pair(inner_product::pairing_miller(&left,&right),out)
+    };
     println!("TIPA AB inner product: {}ms", now.elapsed().as_millis());
 
     let now = Instant::now();
-    let mut a = a;
-    a.merge(&b);
-    a.merge(&t_base);
-    a.merge(&aid);
-    a.merge(&bid);
+    vtuple.merge(&wtuple);
+    vtuple.merge(&check);
     println!("TIPA AB merge : {}ms", now.elapsed().as_millis());
-    a
+    vtuple
 }
 
-fn gipa_verify_recursive_challenge_transcript<E: Engine>(
-    com: (&E::Fqk, &E::Fqk, &E::Fqk),
+/// gipa_verify_tipp recurse on the proof and statement and produces the final
+/// values to be checked by TIPP verifier, namely:
+/// (T, U), Z, challenges, challenges_inv 
+/// T,U are the final commitment values of A and B and Z the final product
+/// between A and B. Challenges are returned in inverse order as well to avoid
+/// repeating the operation multiple times later on.
+fn gipa_verify_tipp<E: Engine>(
+    comAB: &commit::Output<E>,
+    Z: &E::Fqk,
     proof: &GIPAProof<E>,
-) -> ((E::Fqk, E::Fqk, E::Fqk), Vec<E::Fr>, Vec<E::Fr>) {
-    info!("gipa verify recursive challenge transcript");
+) -> (commit::Output<E>,E::Fqk, Vec<E::Fr>, Vec<E::Fr>) {
+    info!("gipa verify TIPP");
 
     let now = Instant::now();
 
-    let mut r_transcript = Vec::new();
-    let mut r_transcript_inverse = Vec::new();
+    let mut challenges = Vec::new();
+    let mut challenges_inv = Vec::new();
 
     let default_transcript = E::Fr::zero();
 
-    for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
+    // We first generate all challenges as this is the only consecutive process
+    // that can not be parallelized then we scale the commitments in a
+    // parallelized way
+    for (comms_ab, z_comm) in proof.comms.iter().zip(proof.z_vec.iter()) {
+        let (C_l, C_r) = comms_ab;
+        let (Z_l,Z_r) z_comm;
         // Fiat-Shamir challenge
+        // TODO use same function as in proving
         let mut counter_nonce: usize = 0;
-
-        let transcript = r_transcript.last().unwrap_or(&default_transcript);
-
+        let transcript = challenges.last().unwrap_or(&default_transcript);
         let (c, c_inv) = 'challenge: loop {
             let mut hash_input = Vec::new();
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
 
             bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-
-            bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_1.2).expect("vec");
-
-            bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_2.2).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_r.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_l.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &C_l.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
             let d = Sha256::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -321,9 +352,8 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine>(
             }
             counter_nonce += 1;
         };
-
-        r_transcript.push(c);
-        r_transcript_inverse.push(c_inv);
+        challenges.push(c);
+        challenges_inv.push(c_inv);
     }
 
     println!(
@@ -332,27 +362,30 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine>(
     );
 
     let now = Instant::now();
-    let mut com_a = com.0.clone();
-    let mut com_b = com.1.clone();
-    let mut com_t = com.2.clone();
+    // paper names the output of the pair commitment T and U in TIPP 
+    let mut (T,U) = comm_ab.clone();
+    let mut Z = Z.clone();
 
+    // we first multiply each entry of the Z U and L vectors by the respective
+    // challenges independently - step 3.4.1 (b) of paper.
     let prep: Vec<(_, _, _, _, _, _)> = proof
-        .r_commitment_steps
+        .comms
         .par_iter()
-        .rev()
-        .zip(r_transcript.par_iter())
-        .zip(r_transcript_inverse.par_iter())
-        .map(|(((com_1, com_2), c), c_inv)| {
+        .zip(proof.z_vec.par_iter())
+        .zip(challenges.par_iter())
+        .zip(challenges_inv.par_iter())
+        .map(|((((C_l, C_r),(Z_l,Z_r)), c), c_inv)| {
+            let (T_l, U_l) = C_l;
+            let (T_r, U_r) = C_r;
             let c_repr = c.into_repr();
             let c_inv_repr = c_inv.into_repr();
-
             (
-                com_1.0.pow(c_repr),
-                com_2.0.pow(c_inv_repr),
-                com_1.1.pow(c_repr),
-                com_2.1.pow(c_inv_repr),
-                com_1.2.pow(c_repr),
-                com_2.2.pow(c_inv_repr),
+                T_l.pow(c_repr),
+                T_r.pow(c_inv_repr),
+                U_l.pow(c_repr),
+                U_r.pow(c_inv_repr),
+                Z_l.pow(c_repr),
+                Z_r.pow(c_inv_repr),
             )
         })
         .collect();
@@ -360,107 +393,166 @@ fn gipa_verify_recursive_challenge_transcript<E: Engine>(
 
     let now = Instant::now();
 
-    for (a_x_c, a_z_c_inv, b_x_c, b_z_c_inv, t_x_c, t_z_c_inv) in prep.iter() {
-        com_a.mul_assign(a_x_c);
-        com_a.mul_assign(a_z_c_inv);
+    for (T_l_c, T_r_cinv, U_l_c, U_l_cinv, Z_l_c, Z_l_cinv) in prep.iter() {
+        // T = T_l^x . T . T_r^{x^-1}
+        T.mul_assign(T_l_c);
+        T.mul_assign(T_r_cinv);
 
-        com_b.mul_assign(b_x_c);
-        com_b.mul_assign(b_z_c_inv);
+        // U = U_l^x . U . U_r^{x-1}
+        U.mul_assign(U_l_c);
+        U.mul_assign(U_l_cinv);
 
-        com_t.mul_assign(t_x_c);
-        com_t.mul_assign(t_z_c_inv);
+        // Z = Z_l^x . Z . Z_r^{x^-1}
+        Z.mul_assign(Z_l_c);
+        Z.mul_assign(Z_l_cinv);
     }
     println!("TIPA AB: recursive took {}ms", now.elapsed().as_millis());
     let now = Instant::now();
-    r_transcript.reverse();
-    r_transcript_inverse.reverse();
-
     println!(
         "TIPA AB: reversed transcript took {}ms",
         now.elapsed().as_millis()
     );
-    ((com_a, com_b, com_t), r_transcript, r_transcript_inverse)
+    (commit::Output<E>(T, U),Z, challenges, challenges_inv)
 }
 
-pub fn verify_commitment_key_g2_kzg_opening<E: Engine>(
+/// verify_kzg_opening_g2 takes a KZG opening, the final commitment key, SRS and
+/// any shift (in TIPP we shift the v commitment by r^-1) and returns a pairing
+/// tuple to check if the opening is correct or not.
+/// TODO potential optimization to avoid doing too many operation in Fqk
+pub fn verify_kzg_opening_g2<E: Engine>(
     v_srs: &VerifierSRS<E>,
-    ck_final: &E::G2,
-    ck_opening: &E::G2,
-    transcript: &[E::Fr],
+    final_vkey: &(E::G2,E::G2),
+    vkey_opening: &KZGOpening<E::G2>,
+    challenges: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
 ) -> PairingTuple<E> {
-    let ck_polynomial_c_eval =
+    // f_v(z)
+    let vpoly_eval_z =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
 
+    // verify first part of opening - v1
+    // e(g, v1 h^{-f_v(z)})
     let p1 = E::miller_loop(&[(
         &v_srs.g.into_affine().prepare(),
-        &sub!(*ck_final, &mul!(v_srs.h, ck_polynomial_c_eval))
+        // in additive notation: final_vkey = uH, 
+        // uH - f_v(z)H = (u - f_v)H --> v1h^{-f_v(z)}
+        &sub!(*final_vkey.0, &mul!(v_srs.h, vpoly_eval_z))
             .into_affine()
             .prepare(),
     )]);
+    // e(g^{a - z}, opening_1)
     let p2 = E::miller_loop(&[(
+        &sub!(v_srs.g_alpha, &mul!(v_srs.g, kzg_challenge.clone()))
+            .into_affine()
+            .prepare(),
+        &vkey_opening.0.into_affine().prepare(),
+    )]);
+
+    // verify second part of opening - v2 - similar but changing secret exponent
+    // e(g, v2 h^{-f_v(z)})
+    let q1 = E::miller_loop(&[(
+        &v_srs.g.into_affine().prepare(),
+        // in additive notation: final_vkey = uH, 
+        // uH - f_v(z)H = (u - f_v)H --> v1h^{-f_v(z)}
+        &sub!(*final_vkey.1, &mul!(v_srs.h, vpoly_eval_z))
+            .into_affine()
+            .prepare(),
+    )]);
+    // e(g^{b - z}, opening_1)
+    let q2 = E::miller_loop(&[(
         &sub!(v_srs.g_beta, &mul!(v_srs.g, kzg_challenge.clone()))
             .into_affine()
             .prepare(),
-        &ck_opening.into_affine().prepare(),
+        &vkey_opening.0.into_affine().prepare(),
     )]);
+
+
+    // inverse so p1^-1 * p2 == 1
     let ip1 = p1.inverse().unwrap();
+    let iq1 = q1.inverse().unwrap();
     // this pair should be one when multiplied
-    PairingTuple::from_miller(mul!(ip1, &p2))
+    PairingTuple::from_miller(mul!(mul!(iq1,&q2),mul!(ip1, &p2)))
 }
 
-pub fn verify_commitment_key_g1_kzg_opening<E: Engine>(
+/// Similar to verify_kzg_opening_g2 but for g1.
+pub fn verify_kzg_opening_g1<E: Engine>(
     v_srs: &VerifierSRS<E>,
-    ck_final: &E::G1,
-    ck_opening: &E::G1,
+    final_wkey: &(E::G1,E::G1),
+    wkey_opening: &KZGOpening<E::G1>,
     transcript: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
 ) -> PairingTuple<E> {
-    let ck_polynomial_c_eval =
+    let wkey_poly_eval =
         polynomial_evaluation_product_form_from_transcript(transcript, kzg_challenge, r_shift);
+
+    // first check on w1
+    // let K = g^{a^{n+1}}
+    // e(w1 K^{-f_w(z)},h)
     let p1 = E::miller_loop(&[(
-        &sub!(*ck_final, &mul!(v_srs.g, ck_polynomial_c_eval))
+        &sub!(*final_wkey.0, &mul!(v_srs.g_alpha_n, wkey_poly_eval))
             .into_affine()
             .prepare(),
         &v_srs.h.into_affine().prepare(),
     )]);
+    // e(opening, h^{a - z})
     let p2 = E::miller_loop(&[(
-        &ck_opening.into_affine().prepare(),
+        &wkey_opening.0.into_affine().prepare(),
         &sub!(v_srs.h_alpha, &mul!(v_srs.h, *kzg_challenge))
             .into_affine()
             .prepare(),
     )]);
     let ip1 = p1.inverse().unwrap();
-    PairingTuple::from_miller(mul!(ip1, &p2))
+    // then do second check
+    // let K = g^{b^{n+1}}
+    // e(w2 K^{-f_w(z)},h)
+    let q1 = E::miller_loop(&[(
+        &sub!(*final_wkey.1, &mul!(v_srs.g_beta_n, wkey_poly_eval))
+            .into_affine()
+            .prepare(),
+        &v_srs.h.into_affine().prepare(),
+    )]);
+    // e(opening, h^{b - z})
+    let q2 = E::miller_loop(&[(
+        &wkey_opening.1.into_affine().prepare(),
+        &sub!(v_srs.h_beta, &mul!(v_srs.h, *kzg_challenge))
+            .into_affine()
+            .prepare(),
+    )]);
+    let iq1 = q1.inverse().unwrap();
+
+    PairingTuple::from_miller(mul!(mul!(iq1,&q2),mul!(ip1, &p2)))
 }
 
-fn verify_with_structured_scalar_message<E: Engine>(
+fn verify_mipp<E: Engine>(
     v_srs: &VerifierSRS<E>,
-    com: (&E::Fqk, &E::G1),
+    com_C: &commit::Output<E>, // CM(v1,v2,C)
+    agg_C: &E::G1, // C^r
+    //com: (&E::Fqk, &E::G1),
     scalar_b: &E::Fr,
-    proof: &MultiExpInnerProductCProof<E>,
+    proof: &<E>,
 ) -> PairingTuple<E> {
     info!("verify with structured scalar message");
     let now = Instant::now();
-    let (base_com, transcript, transcript_inverse) =
-        gipa_with_ssm_verify_recursive_challenge_transcript((com.0, com.1), &proof.gipa_proof);
+    let (com_TU, com_Z, transcript, transcript_inverse) =
+        gipa_verify_mipp(com_C,agg_C &proof.gipa);
 
-    println!("TIPA AB: vssm gipa took {}ms", now.elapsed().as_millis());
+    println!("TIPA AB: gipa mipp verification took {}ms", now.elapsed().as_millis());
     let now = Instant::now();
 
-    let ck_a_final = &proof.final_ck;
-    let ck_a_proof = &proof.final_ck_proof;
+    let final_vkey = proof.final_vkey;
+    transcript.reverse();
+    transcript_inverse.reverse();
 
     // KZG challenge point
     let mut counter_nonce: usize = 0;
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-
         bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
-        bincode::serialize_into(&mut hash_input, &ck_a_final).expect("vec");
+        bincode::serialize_into(&mut hash_input, &final_vkey.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &final_vkey.1).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
             &Sha256::digest(&hash_input).as_slice()
@@ -472,95 +564,92 @@ fn verify_with_structured_scalar_message<E: Engine>(
     };
 
     println!(
-        "TIPA AB: vssm challenge took {}ms",
+        "TIPA AB: mipp verification challenge took {}ms",
         now.elapsed().as_millis()
     );
     let now = Instant::now();
 
-    // Check commitment key
-    let mut aid = verify_commitment_key_g2_kzg_opening(
-        v_srs,
-        &ck_a_final,
-        &ck_a_proof,
-        &transcript_inverse,
-        &E::Fr::one(),
-        &c,
-    );
+        // final rescaled T U Z
+    let (T,U) = com_TU;
 
-    // final rescaled U Z
-    let (com_a, com_t) = base_com;
-
-    // final c and r from proof binary
-    let a_base = [proof.gipa_proof.r_base.0.clone().into_affine()];
-
-    let a = PairingTuple::from_pair(
-        // e(c, v) = U
-        inner_product::pairing_miller_affine::<E>(&a_base, &[ck_a_final.into_affine()]),
-        com_a.clone(),
-    );
-
-    println!("TIPA AB: vssm aid took {}ms", now.elapsed().as_millis());
-    let now = Instant::now();
-
-    // Compute final scalar
-    // r
-    let mut power_2_b = scalar_b.clone();
-    let mut b_base = E::Fr::one();
-    for x in transcript.iter() {
-        // 1 * (1 + x^-1 * r)
-        b_base.mul_assign(&add!(
-            E::Fr::one(),
-            &(mul!(x.inverse().unwrap(), &power_2_b))
-        ));
-        power_2_b.mul_assign(&power_2_b.clone());
-    }
-
-    println!(" |||| r_base.1 = {:?}", proof.gipa_proof.r_base.1);
-    println!(" |||| b_base = {:?}", b_base);
+    // final c from proof 
+    let final_C = proof.gipa.final_C.clone().into_affine();
+    let final_r = proof.gipa.final_r.clone();
 
     // Verify base inner product commitment
     // Z ==  c ^ r
-    let t_base = inner_product::multiexponentiation(&a_base, &[b_base]);
-    let b = t_base == com_t;
-
-    println!("TIPA AB: vssm b took {}ms", now.elapsed().as_millis());
     let now = Instant::now();
-
+    let final_Z = inner_product::multiexponentiation(&[final_C], &[final_r]);
+    let b = final_Z == com_Z;
+    println!("MIPP: check Z took {}ms", now.elapsed().as_millis());
     // only check that doesn't require pairing so we can give a tuple that will
     // render the equation wrong in case it's false
     if !b {
         return PairingTuple::new_invalid();
     }
 
-    aid.merge(&a);
+    let now = Instant::now();
+    // Check commitment key corectness
+    let mut vtuple = verify_kzg_opening_g2(
+        v_srs,
+        &final_vkey,
+        &proof.vkey_opening,
+        &transcript_inverse,
+        &E::Fr::one(),
+        &c,
+    );
+    println!("MIPP: check KZG took {}ms", now.elapsed().as_millis());
+    let now = Instant::now();
+
+    // Check commiment correctness 4.2.2
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut out = E::Fqk::one();
+    // T = e(C,v1)
+    left.push(final_C.clone());
+    right.push(final_vkey.0);
+    out.mul_assign(&T);
+    // U = e(A,v2)
+    left.push(final_C.clone());
+    right.push(final_vkey.1);
+    out.mul_assign(&U);
+    
+    let miller_out = inner_product::pairing_miller::<E>(&left,&right);
+    let pair = PairingTuple::from_pair(miller_out,out);
+    println!("TIPA AB: vssm check took {}ms", now.elapsed().as_millis());
+    
+    let now = Instant::now();
+    vtuple.merge(&pair);
     println!("TIPA AB: vssm merge took {}ms", now.elapsed().as_millis());
-    aid
+    vtuple
 }
 
-fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine>(
-    com: (&E::Fqk, &E::G1),
-    proof: &GIPAProofWithSSM<E>,
-) -> ((E::Fqk, E::G1), Vec<E::Fr>, Vec<E::Fr>) {
+/// gipa_verify_mipp returns the final reconstructed Z T U values, as described
+/// in section 4.2.1 as well as all challenges generated.
+fn gipa_verify_mipp<E: Engine>(
+    com_C: &commit::Output<E>,
+    Z: &E::G1,
+    //com: (&E::Fqk, &E::G1),
+    proof: &GipaMIPP<E>,
+) -> (commit::Output<E>,E::G1,&[E::Fr],&[E::Fr])
     info!("gipa ssm verify recursive challenge transcript");
-    let mut r_transcript = Vec::new();
-    let mut r_transcript_inverse = Vec::new();
+    let mut challenges = Vec::new();
+    let mut challenges_inv = Vec::new();
 
-    for (com_1, com_2) in proof.r_commitment_steps.iter().rev() {
+    for ((TU_l,TU_r),(Z_l,Z_r)) in proof.comms.iter().zip(z_vec.iter()) {
         // Fiat-Shamir challenge
+        // TODO use same code for prover and verifier
         let mut counter_nonce: usize = 0;
         let default_transcript = E::Fr::zero();
-        let transcript = r_transcript.last().unwrap_or(&default_transcript);
+        let transcript = challenges.last().unwrap_or(&default_transcript);
         let (c, c_inv) = 'challenge: loop {
             let mut hash_input = Vec::new();
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-
             bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-
-            bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
-
-            bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &TU.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &TU.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
             let d = Sha256::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -572,55 +661,62 @@ fn gipa_with_ssm_verify_recursive_challenge_transcript<E: Engine>(
             }
             counter_nonce += 1;
         };
-        r_transcript.push(c);
-        r_transcript_inverse.push(c_inv);
+        challenges.push(c);
+        challenges_inv.push(c_inv);
     }
 
-    let mut com_a = com.0.clone();
-    let mut com_t = com.1.clone();
+    let mut (comm_T,comm_U) = com_C.clone();
+    let mut Z = Z.clone();
 
     let now = Instant::now();
 
+    // Prepare the final commitment section 4.2. - steps 1.b
     let prep: Vec<(_, _, _, _)> = proof
-        .r_commitment_steps
+        .comms
         .par_iter()
-        .rev()
-        .zip(r_transcript.par_iter())
-        .zip(r_transcript_inverse.par_iter())
-        .map(|(((com_1, com_2), c), c_inv)| {
+        .zip(proof.z_vec.par_iter())
+        .zip(challenges.par_iter())
+        .zip(challenges_inv.par_iter())
+        .map(|((((C_l, C_r), (Z_l,Z_r)),c), c_inv)| {
+            let (T_l,U_l) = C_l;
+            let (T_r, U_r) = C_r;
             let c_repr = c.into_repr();
             let c_inv_repr = c_inv.into_repr();
 
-            // C_r^x (x challenge)
-            let mut x = com_1.1;
-            x.mul_assign(c_repr);
-            // Z_l^x^-1
-            let mut y = com_2.1;
-            y.mul_assign(c_inv_repr);
+            // Z_l^x
+            let mut Z_l = Z_l;
+            Z_l.mul_assign(c_repr);
+            // Z_r^{x^{-1}}
+            let mut Z_r = Z_r;
+            Z_r.mul_assign(c_inv_repr);
 
             // U_r^x  , U_l^x^-1
-            (com_1.0.pow(c_repr), com_2.0.pow(c_inv_repr), x, y)
+            (
+                T_l.pow(c_repr), 
+                U_l.pow(c_repr),
+                T_r.pow(c_inv_repr);
+                U_r.pow(c_inv_repr);
+                Z_l,
+                Z_r,
+            )
         })
         .collect();
 
     println!(
-        "TIPA AB: vssm prep took {}ms ({})",
+        "MIPP C: GIPA preparation took {}ms ({})",
         now.elapsed().as_millis(),
         prep.len()
     );
-    // com_a = C * v == U
-    // com_t = C^r == Z
 
-    for (a_x_c, a_z_c_inv, t_x_c, t_z_c_inv) in prep.iter() {
-        //
-        com_a.mul_assign(a_x_c);
-        com_a.mul_assign(a_z_c_inv);
+    for (T_l_c,U_l_c,T_r_cinv,U_r_cinv,Z_l_c,Z_r_cinv) in prep.iter() {
+        comm_T.mul_assign(T_l_c);
+        comm_T.mul_assign(T_r_cinv);
+        comm_U.mul_assign(U_l_c);
+        comm_U.mul_assign(U_r_c);
 
-        com_t.add_assign(t_x_c);
-        com_t.add_assign(t_z_c_inv);
+        Z.add_assign(Z_l_c);
+        Z.add_assign(Z_l_cinv);
     }
 
-    r_transcript.reverse();
-    r_transcript_inverse.reverse();
-    ((com_a, com_t), r_transcript, r_transcript_inverse)
+    (commit::Output<E>(comm_T,comm_U), Z, challenges, challenges_inv)
 }

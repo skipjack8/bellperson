@@ -14,6 +14,7 @@ use crate::groth16::{multiscalar::*, Proof};
 use crate::SynthesisError;
 
 /// Aggregate `n` zkSnark proofs, where `n` must be a power of two.
+/// It implements the algorithm section 5 of the paper.
 pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
@@ -24,6 +25,9 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         return Err(SynthesisError::MalformedSrs);
     }
 
+    // We first commit to A B and C - these commitments are what the verifier
+    // will use later to verify the TIPP and MIPP proofs - even though the TIPP
+    // and MIPP proofs doesn't use them directly.
     par! {
         let (A,B, com_ab) = {
             let A = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
@@ -56,6 +60,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         counter_nonce += 1;
     };
 
+    // r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
     let r_inv = r_vec
         .par_iter()
@@ -73,16 +78,15 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     };
 
     par! {
-        let tipa_proof_ab = prove_with_srs_shift::<E>(
+        let tipa_proof_ab = prove_tipp::<E>(
                 &ip_srs,
-                (&A_r, &B),
-                (&vkey_r_inv, &wkey),
+                &A_r, &B,
+                &vkey_r_inv, &wkey,
                 &r,
         ),
-        let tipa_proof_c = prove_with_structured_scalar_message::<E>(
+        let tipa_proof_c = prove_mipp::<E>(
             &ip_srs,
-            // c^r
-            (&C, &r_vec),
+            &C, &r_vec,
             // v - note we dont use the rescaled here since we dont need the
             // trick as in AB - we just need to commit to C normally.
             &vkey,
@@ -96,13 +100,12 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     assert_eq!(com_a, computed_com_a);
 
     Ok(AggregateProof {
-        com_a,
-        com_b,
+        com_ab,
         com_c,
         ip_ab,
         agg_c,
-        tipa_proof_ab: tipa_proof_ab?,
-        tipa_proof_c: tipa_proof_c?,
+        proof_ab: tipa_proof_ab?,
+        proof_c: tipa_proof_c?,
     })
 }
 
@@ -149,6 +152,10 @@ fn prove_tipp<E: Engine>(
         counter_nonce += 1;
     };
 
+    // we reverse the transcript so the polynomial in kzg opening is constructed
+    // correctly - the formula indicates x_{l-j}.
+    transcript.reverse();
+
     // Complete KZG proofs
     par! {
         let vkey_opening = prove_commitment_key_kzg_opening(
@@ -169,11 +176,11 @@ fn prove_tipp<E: Engine>(
         )
     };
 
-    TIPPProof {
+    Ok(TIPPProof {
         gipa: proof,
         vkey_opening: vkey_opening,
         wkey_opening: wkey_opening,
-    }
+    })
 }
 
 /// gipa_tipp peforms the recursion of the GIPA protocol for TIPP. It returns a
@@ -205,7 +212,7 @@ fn gipa_tipp<E: Engine>(
             let (wk_left, wk_right) = wkey.split(split);
 
             // See section 3.3 for paper version with equivalent names
-            let ((C_r,C_l),(Z_l,Z_r))= rayon::join(
+            let ((C_l,C_r),(Z_l,Z_r))= rayon::join(
                 || {
                     rayon::join(
                         || commit::pair(vk_left,wk_right,A_right,B_left),
@@ -291,9 +298,10 @@ fn gipa_tipp<E: Engine>(
         let (final_A, final_B) = (m_a[0], m_b[0]);
         let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
 
-        // TODO should we reverse?
+        // TODO should we reverse those?
         //r_transcript.reverse();
         //r_commitment_steps.reverse();
+
         (GipaTIPP{
                 comms: comms,
                 z_vec: z_vec,
@@ -304,40 +312,18 @@ fn gipa_tipp<E: Engine>(
         }, challenges)
 }
 
-// IPAWithSSMProof<
-//    MultiexponentiationInnerProduct<<P as PairingEngine>::G1Projective>,
-//    AFGHOCommitmentG1<P>,
-//    IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,
-//    P,
-//    D,
-// >;
-//
-// GIPAProof<
-//   IP = MultiexponentiationInnerProduct<<P as PairingEngine>::G1Projective>,
-//   LMC = AFGHOCommitmentG1<P>,
-//   RMC = SSMPlaceholderCommitment<LMC::Scalar>
-//   IPC = IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,,
-// D>,
-//
-// IP: MultiexponentiationInnerProduct<<P as PairingEngine>::G1Projective>,
-// LMC: AFGHOCommitmentG1<P>,
-// RMC: SSMPlaceholderCommitment<LMC::Scalar>,
-// IPC: IdentityCommitment<<P as PairingEngine>::G1Projective, <P as PairingEngine>::Fr>,
-impl<E: Engine> GIPAProofWithSSM<E> {
-    /// Returns vector of recursive commitments and transcripts in reverse order.
-    fn prove_with_aux(
-        values: (&[E::G1Affine], &[E::Fr]),
-        ck: &[E::G2Affine],
-    ) -> Result<(Self, GIPAAuxWithSSM<E>), SynthesisError> {
-        // c  and r
-        let (mut m_a, mut m_b) = (values.0.to_vec(), values.1.to_vec());
-        let mut ck_a = ck.to_vec();
-
-        let mut r_commitment_steps = Vec::new();
-        let mut r_transcript = Vec::new();
-        if !m_a.len().is_power_of_two() {
-            return Err(SynthesisError::MalformedProofs);
-        }
+/// gipa_mipp proves the relation Z = C^r and V = C * v
+/// Returns vector of recursive commitments and transcripts in reverse order.
+fn gipa_mipp(
+        C: &[E::G1Affine], 
+        r: &[E::Fr],
+        vkey: &VKey<E>,
+    ) -> GipaMIPP { 
+        let (mut m_c, mut m_r) = (C.to_vec(),r.to_vec());
+        let mut comms = Vec::new();
+        let mut z_vec = Vec::new();
+        let mut challenges = Vec::new();
+        let mut vkey = vkey;
 
         while m_a.len() > 1 {
             // recursive step
@@ -345,32 +331,33 @@ impl<E: Engine> GIPAProofWithSSM<E> {
             let split = m_a.len() / 2;
 
             // c[:n']   c[n':]
-            let (m_a_2, m_a_1) = m_a.split_at_mut(split);
-            // v[:n']   v[n':]
-            let (ck_a_1, ck_a_2) = ck_a.split_at_mut(split);
+            let (C_left, C_right) = m_c.split_at_mut(split);
             // r[:n']   r[:n']
-            let (m_b_1, m_b_2) = m_b.split_at_mut(split);
+            let (r_left, r_right) = m_r.split_at_mut(split);
+            // v[:n']   v[n':]
+            let (vk_left,vk_right) = vkey.split(split);
 
-            let (com_1, com_2) = rayon::join(
+            let ((Z_r,Z_l),(TU_r,TU_l))= rayon::join(
                 || {
                     rayon::join(
-                        // U_r = c[n':] * v[:n']
-                        || inner_product::pairing::<E>(m_a_1, ck_a_1), // LMC::commit
-                        // C_r = c[n':] ^ r[:n']
-                        || inner_product::multiexponentiation::<E::G1Affine>(m_a_1, m_b_1), // IPC::commit
+                        // Z_r = c[:n'] ^ r[n':]
+                        || inner_product::multiexponentiation::<E::G1Affine>(C_left, r_right),
+                        // Z_l = c[n':] ^ r[:n']
+                        || inner_product::multiexponentiation::<E::G1Affine>(C_right, r_left),
                     )
                 },
                 || {
                     rayon::join(
-                        // U_l = c[:n'] * v[n':]
-                        || inner_product::pairing::<E>(m_a_2, ck_a_2),
-                        // Z_l = c[:n'] ^ r[n':]
-                        || inner_product::multiexponentiation::<E::G1Affine>(m_a_2, m_b_2),
+                        // U_r = c[:n'] * v[n':]
+                        || commit::pair::<E>(vk_right, C_left),
+                        // U_l = c[n':] * v[:n']
+                        || commit::pair::<E>(vk_left, C_right), 
                     )
                 },
             );
 
             // Fiat-Shamir challenge
+            // TODO move that to separate function
             let mut counter_nonce: usize = 0;
             let default_transcript = E::Fr::zero();
             let transcript = r_transcript.last().unwrap_or(&default_transcript);
@@ -380,11 +367,11 @@ impl<E: Engine> GIPAProofWithSSM<E> {
                 hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
                 bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
 
-                bincode::serialize_into(&mut hash_input, &com_1.0).expect("vec");
-                bincode::serialize_into(&mut hash_input, &com_1.1).expect("vec");
+                bincode::serialize_into(&mut hash_input, &TU.0).expect("vec");
+                bincode::serialize_into(&mut hash_input, &TU.1).expect("vec");
 
-                bincode::serialize_into(&mut hash_input, &com_2.0).expect("vec");
-                bincode::serialize_into(&mut hash_input, &com_2.1).expect("vec");
+                bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
+                bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
                 let d = Sha256::digest(&hash_input);
                 let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -398,68 +385,55 @@ impl<E: Engine> GIPAProofWithSSM<E> {
             };
 
             // Set up values for next step of recursion
-            m_a_1
+            C_right
                 .par_iter()
-                .zip(m_a_2.par_iter_mut())
-                .for_each(|(a_1, a_2)| {
+                .zip(C_left.par_iter_mut())
+                .for_each(|(c_r, c_l)| {
                     // c[:n'] + c[n':]^x
-                    let mut x: E::G1 = mul!(a_1.into_projective(), c);
-                    x.add_assign_mixed(&a_2);
-                    *a_2 = x.into_affine();
+                    let mut x: E::G1 = mul!(c_r.into_projective(), c);
+                    x.add_assign_mixed(&c_l);
+                    *c_l = x.into_affine();
                 });
 
-            let len = m_a_2.len();
-            m_a.resize(len, E::G1Affine::zero()); // shrink to new size
+            let len = C_left.len();
+            m_c.resize(len, E::G1Affine::zero()); // shrink to new size
 
-            m_b_1
+            r_left
                 .par_iter_mut()
-                .zip(m_b_2.par_iter_mut())
-                .for_each(|(b_1, b_2)| {
+                .zip(r_right.par_iter_mut())
+                .for_each(|(r_l, r_r)| {
                     // r[:n'] + r[n':]^x^-1
-                    b_2.mul_assign(&c_inv);
-                    b_1.add_assign(b_2);
+                    r_r.mul_assign(&c_inv);
+                    r_l.add_assign(b_2);
                 });
 
-            let len = m_b_1.len();
-            m_b.resize(len, E::Fr::zero()); // shrink to new size
+            let len = r_left.len();
+            m_r.resize(len, E::Fr::zero()); // shrink to new size
 
-            ck_a_1
-                .par_iter_mut()
-                .zip(ck_a_2.par_iter())
-                .for_each(|(ck_1, ck_2)| {
-                    // v[:n'] + v[n':]^x^-1
-                    let mut x = ck_2.into_projective();
-                    x.mul_assign(c_inv);
-                    x.add_assign_mixed(ck_1);
-                    *ck_1 = x.into_affine();
-                });
+            // v[:n'] + v[n':]^{x^{-1}}
+            vkey = vkey.compress(vk_left,vk_right,c_inv);
 
-            let len = ck_a_1.len();
-            ck_a.resize(len, E::G2Affine::zero()); // shrink to new size
-
-            r_commitment_steps.push((com_1, com_2));
-            r_transcript.push(c);
+            comms.push(TU);
+            z_vec.push((Z_l,Z_r));
+            challenges.push(c);
         }
-        // base case
+        
         // final c and r
-        let m_base = (m_a[0], m_b[0]);
+        let (final_C,final_r) = (m_c[0], m_r[0]);
         // final v
-        let ck_base = ck_a[0];
+        let final_vkey = vkey.first();
 
-        r_transcript.reverse();
-        r_commitment_steps.reverse();
+        // TODO should we reverse those? 
+        //r_transcript.reverse();
+        //r_commitment_steps.reverse();
 
-        Ok((
-            GIPAProofWithSSM {
-                r_commitment_steps,
-                r_base: (m_base.0.into_projective(), m_base.1),
-            },
-            GIPAAuxWithSSM {
-                r_transcript,
-                ck_base: ck_base.into_projective(),
-            },
-        ))
-    }
+        (GipaMIPP{
+            comms: comms,
+            z_vec: z_vec,
+            final_C: final_C,
+            final_r: final_r,
+            final_vkey: final_vkey,
+        }, challenges)
 }
 
 /// KZGOpening represents the KZG opening of a commitment key (which is a tuple
@@ -551,6 +525,9 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
 ///     $c_0 = c_{-1} \| (x_1 * r * c_{-1}) = [1] \| [rx_1] = [1, rx_1]$, $r = r^2$
 ///     $c_1 = c_0 \| (x_0 * r^2c_0) = [1, rx_1] \| [x_0r^2, x_0x_1r^3] = [1, x_1r, x_0r^2, x_0x_1r^3]$ 
 ///     which is equivalent to $f(a) = 1 + x_1ra + x_0(ra)^2 + x_0x_1r^2a^3$
+///
+/// This method expects the coefficients in reverse order so transcript[i] =
+/// x_{l-j}.
 fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: &F) -> Vec<F> {
     let mut coefficients = vec![F::one()];
     let mut power_2_r = *r_shift;
@@ -565,23 +542,29 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
     coefficients
 }
 
-fn prove_with_structured_scalar_message<E: Engine>(
+/// prove_mipp returns a GIPA and MIPP proof for proving statement Z = C^r 
+/// and T = C * v. Section 4 in the paper.
+fn prove_mipp<E: Engine>(
     srs: &SRS<E>,
-    values: (&[E::G1Affine], &[E::Fr]),
-    ck: &[E::G2Affine],
-) -> Result<MultiExpInnerProductCProof<E>, SynthesisError> {
+    C: &[E::G1],
+    r: &[E::Fr],
+    vkey: &vkey
+) -> Result<MIPPProof<E>, SynthesisError> {
+    if !m_a.len().is_power_of_two() {
+        return Err(SynthesisError::MalformedProofs);
+    }
     // Run GIPA
-    let (proof, aux) = GIPAProofWithSSM::<E>::prove_with_aux(values, ck)?;
+    let (proof, challenges) = gipa_mipp(values, ck);
 
     // Prove final commitment key is wellformed
-    let ck_a_final = aux.ck_base;
-    let transcript = aux.r_transcript;
+    let transcript = challenges;
     let transcript_inverse = transcript
         .iter()
         .map(|x| x.inverse().unwrap())
         .collect::<Vec<_>>();
 
     // KZG challenge point
+    // TODO move to separate function (or macro)
     let mut counter_nonce: usize = 0;
     let c = loop {
         let mut hash_input = Vec::new();
@@ -599,18 +582,18 @@ fn prove_with_structured_scalar_message<E: Engine>(
     };
 
     // Complete KZG proof
-    let ck_a_kzg_opening = prove_commitment_key_kzg_opening(
+    let vkey_opening = prove_commitment_key_kzg_opening(
+        &srs.h_alpha_powers_table,
         &srs.h_beta_powers_table,
-        srs.h_beta_powers.len(),
+        srs.h_beta_powers.n,
         &transcript_inverse,
         &E::Fr::one(),
         &c,
-    )?;
+    );
 
-    Ok(MultiExpInnerProductCProof {
-        gipa_proof: proof,
-        final_ck: ck_a_final,
-        final_ck_proof: ck_a_kzg_opening,
+    Ok(MIPPProof {
+        gipa: proof,
+        vkey_opening: vkey_opening,
     })
 }
 

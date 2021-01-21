@@ -34,11 +34,6 @@ pub fn pairing<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) -> E::Fqk
     E::final_exponentiation(&pairing_miller_affine::<E>(left, right)).expect("invalid pairing")
 }
 
-/// Returns the miller loop result of the inner pairing product
-pub fn pairing_proj<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
-    E::final_exponentiation(&pairing_miller::<E>(left, right)).expect("invalid pairing")
-}
-
 pub fn multiexponentiation<G: CurveAffine>(left: &[G], right: &[G::Scalar]) -> G::Projective {
     debug_assert_eq!(left.len(), right.len());
 

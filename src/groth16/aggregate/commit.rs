@@ -11,7 +11,7 @@ use crate::groth16::multiscalar::*;
 /// Key is a generic commitment key that is instanciated with g and h as basis,
 /// and a and b as powers.
 #[derive(Clone, Debug)]
-pub struct Key<G: CurveProjective> {
+pub struct Key<G: CurveAffine> {
     /// Exponent is a
     pub a: Vec<G>,
     /// Exponent is b
@@ -20,16 +20,16 @@ pub struct Key<G: CurveProjective> {
 /// VKey is a commitment key used by the "single" commitment on G1 values as
 /// well as in the "pair" commtitment.
 /// It contains $\{h^a^i\}_{i=1}^n$ and $\{h^b^i\}_{i=1}^n$
-pub type VKey<E: Engine> = Key<E::G2>;
+pub type VKey<E: Engine> = Key<E::G2Affine>;
 
 /// WKey is a commitment key used by the "pair" commitment. Note the sequence of
 /// powers starts at $n$ already.
 /// It contains $\{g^{a^{n+i}}\}_{i=1}^n$ and $\{g^{b^{n+i}}\}_{i=1}^n$
-pub type WKey<E: Engine> = Key<E::G1>;
+pub type WKey<E: Engine> = Key<E::G1Affine>;
 
 impl<G> Key<G>
 where
-    G: CurveProjective,
+    G: CurveAffine,
 {
     /// correct_len returns true if both commitment keys have the same size as
     /// the argument. It is necessary for the IPP scheme to work that commitment
@@ -48,7 +48,7 @@ where
             .zip(s_vec.par_iter())
             .map(|(ap, s)| {
                 let mut x = ap.clone();
-                x.mul_assign(s.into_repr());
+                x.mul(s.into_repr());
                 x
             })
             .collect::<Vec<_>>();
@@ -58,7 +58,7 @@ where
             .zip(s_vec.par_iter())
             .map(|(bp, s)| {
                 let mut x = bp.clone();
-                x.mul_assign(s.into_repr());
+                x.mul(s.into_repr());
                 x
             })
             .collect::<Vec<_>>();
@@ -92,10 +92,10 @@ where
                     .par_iter()
                     .zip(right.a.par_iter())
                     .map(|(left, right)| {
-                        let mut g = right.clone();
+                        let mut g = right.into_projective();
                         g.mul_assign(scale.into_repr());
-                        g.add_assign(left);
-                        g
+                        g.add_assign_mixed(left);
+                        g.into_affine()
                     })
                     .collect::<Vec<_>>()
             },
@@ -104,10 +104,10 @@ where
                     .par_iter()
                     .zip(right.b.par_iter())
                     .map(|(left, right)| {
-                        let mut g = right.clone();
+                        let mut g = right.into_projective();
                         g.mul_assign(scale.into_repr());
-                        g.add_assign(left);
-                        g
+                        g.add_assign_mixed(left);
+                        g.into_affine()
                     })
                     .collect::<Vec<_>>()
             },
@@ -119,7 +119,7 @@ where
     /// w1 and w2). When commitment key is of size one, it's a proxy to get the
     /// final values.
     pub fn first(&self) -> (G, G) {
-        (self.a[0], self.b[0])
+        (self.a[0].clone(), self.b[0].clone())
     }
 }
 
@@ -130,9 +130,9 @@ pub type Output<E: Engine> = (E::Fqk, E::Fqk);
 /// $T = \prod_{i=0}^n e(A_i, v_{1,i})$
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})$
 /// Output is $(T,U)$
-pub fn single_g1<E: Engine>(vkey: &VKey<E>, A: &[E::G1]) -> Output<E> {
-    let T = inner_product::pairing_miller::<E>(A, &vkey.a);
-    let U = inner_product::pairing_miller::<E>(A, &vkey.b);
+pub fn single_g1<E: Engine>(vkey: &VKey<E>, A: &[E::G1Affine]) -> Output<E> {
+    let T = inner_product::pairing_miller_affine::<E>(A, &vkey.a);
+    let U = inner_product::pairing_miller_affine::<E>(A, &vkey.b);
     return (T, U);
 }
 
@@ -140,12 +140,26 @@ pub fn single_g1<E: Engine>(vkey: &VKey<E>, A: &[E::G1]) -> Output<E> {
 /// $T = \prod_{i=0}^n e(A_i, v_{1,i})e(B_i,w_{1,i})$
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})e(B_i,w_{2,i})$
 /// Output is $(T,U)$
-pub fn pair<E: Engine>(vkey: &VKey<E>, wkey: &WKey<E>, A: &[E::G1], B: &[E::G2]) -> Output<E> {
-    // TODO parralelize that
-    let mut T1 = inner_product::pairing_miller::<E>(A, &vkey.a);
-    let T2 = inner_product::pairing_miller::<E>(&wkey.a, B);
-    let mut U1 = inner_product::pairing_miller::<E>(A, &vkey.b);
-    let U2 = inner_product::pairing_miller::<E>(&wkey.b, B);
+pub fn pair<E: Engine>(
+    vkey: &VKey<E>,
+    wkey: &WKey<E>,
+    A: &[E::G1Affine],
+    B: &[E::G2Affine],
+) -> Output<E> {
+    let ((mut T1, T2), (mut U1, U2)) = rayon::join(
+        || {
+            rayon::join(
+                || inner_product::pairing_miller_affine::<E>(A, &vkey.a),
+                || inner_product::pairing_miller_affine::<E>(&wkey.a, B),
+            )
+        },
+        || {
+            rayon::join(
+                || inner_product::pairing_miller_affine::<E>(A, &vkey.b),
+                || inner_product::pairing_miller_affine::<E>(&wkey.b, B),
+            )
+        },
+    );
     T1.mul_assign(&T2);
     U1.mul_assign(&U2);
     return (T1, U1);

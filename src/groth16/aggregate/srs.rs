@@ -5,6 +5,7 @@ use super::msm;
 use crate::bls::Engine;
 use crate::groth16::aggregate::commit::*;
 use crate::groth16::multiscalar::{precompute_fixed_window, MultiscalarPrecompOwned, WINDOW_SIZE};
+use rayon::prelude::*;
 
 /// SRS is the partial combination of two Groth16 CRS of size 2n.
 #[derive(Clone, Debug)]
@@ -51,16 +52,16 @@ impl<E: Engine> SRS<E> {
             .iter()
             .skip(1) // skip the h
             .take(self.n)
-            .map(|p| p.into_projective())
-            .collect::<Vec<E::G2>>();
+            .cloned()
+            .collect::<Vec<_>>();
         let v2 = self
             .h_beta_powers
             .par_iter()
             .skip(1) // skip the h
             .take(self.n)
-            .map(|p| p.into_projective())
-            .collect::<Vec<E::G2>>();
-        VKey { a: v1, b: v2 }
+            .cloned()
+            .collect::<Vec<_>>();
+        VKey::<E> { a: v1, b: v2 }
     }
 
     pub fn get_wkey(&self) -> WKey<E> {
@@ -69,27 +70,27 @@ impl<E: Engine> SRS<E> {
             .g_alpha_powers
             .par_iter()
             .skip(self.n + 1)
-            .map(|p| p.into_projective())
+            .cloned()
             .collect::<Vec<_>>();
         let w2 = self
             .g_beta_powers
             .par_iter()
             .skip(self.n + 1)
-            .map(|p| p.into_projective())
+            .cloned()
             .collect::<Vec<_>>();
-        WKey { a: w1, b: w2 }
+        WKey::<E> { a: w1, b: w2 }
     }
 
     pub fn get_verifier_key(&self) -> VerifierSRS<E> {
         VerifierSRS {
             g: self.g_alpha_powers[0].into_projective(),
             h: self.h_beta_powers[0].into_projective(),
-            g_alpha: self.g_alpha_powers[1].clone(),
-            h_alpha: self.h_alpha_powers[1].clone(),
-            g_beta: self.g_beta_powers[1].clone(),
-            h_beta: self.h_beta_powers[1].clone(),
-            g_alpha_n: self.g_alpha[1 + self.n].clone(),
-            g_beta_n: self.g_beta[1 + self.n].clone(),
+            g_alpha: self.g_alpha_powers[1].into_projective(),
+            h_alpha: self.h_alpha_powers[1].into_projective(),
+            g_beta: self.g_beta_powers[1].into_projective(),
+            h_beta: self.h_beta_powers[1].into_projective(),
+            g_alpha_n: self.g_alpha_powers[1 + self.n].into_projective(),
+            g_beta_n: self.g_beta_powers[1 + self.n].into_projective(),
         }
     }
 }
@@ -141,14 +142,15 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
     let h_alpha_powers_table = precompute_fixed_window(&h_alpha_powers, WINDOW_SIZE);
 
     SRS {
+        n: size,
         g_alpha_powers,
         g_alpha_powers_table,
         h_beta_powers,
         h_beta_powers_table,
         g_beta_powers,
         g_beta_powers_table,
-        h_beta_powers,
-        h_beta_powers_table,
+        h_alpha_powers,
+        h_alpha_powers_table,
     }
 }
 

@@ -33,19 +33,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     // will use later to verify the TIPP and MIPP proofs - even though the TIPP
     // and MIPP proofs doesn't use them directly.
     // TODO parallelize that
-    let A = proofs
-        .iter()
-        .map(|proof| proof.a.into_projective())
-        .collect::<Vec<_>>();
-    let B = proofs
-        .iter()
-        .map(|proof| proof.b.into_projective())
-        .collect::<Vec<_>>();
+    let A = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
+    let B = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
+    // A and B are committed together in this scheme
     let com_ab = commit::pair::<E>(&vkey, &wkey, &A, &B);
-    let C = proofs
-        .iter()
-        .map(|proof| proof.c.into_projective())
-        .collect::<Vec<_>>();
+    let C = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>();
     let com_c = commit::single_g1::<E>(&vkey, &C);
 
     // Random linear combination of proofs
@@ -70,6 +62,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 
     // r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
+    // r^-1, r^-2, r^-3
     let r_inv = r_vec
         .par_iter()
         .map(|r| r.inverse().unwrap())
@@ -79,8 +72,8 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let A_r = A
         .par_iter()
         .zip(r_vec.par_iter())
-        .map(|(a, r)| *mul!(a, *r))
-        .collect::<Vec<E::G1>>();
+        .map(|(a, r)| mul!(a.into_projective(), *r).into_affine())
+        .collect::<Vec<_>>();
     // V^{r^{-1}}
     let vkey_r_inv = vkey.scale(&r_inv);
 
@@ -91,8 +84,8 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         // trick as in AB - we just need to commit to C normally.
         &vkey,
     );
-    let ip_ab = inner_product::pairing_proj::<E>(&A_r, &B);
-    let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&C, r_vec);
+    let ip_ab = inner_product::pairing::<E>(&A_r, &B);
+    let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&C, &r_vec);
 
     // TODO - move assertion to a test - this is a property of the scheme
     let computed_com_ab = commit::pair::<E>(&vkey_r_inv, &wkey, &A, &B);
@@ -113,8 +106,8 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 /// is scaled by r^{-1}.
 fn prove_tipp<E: Engine>(
     srs: &SRS<E>,
-    A: &[E::G1],
-    B: &[E::G2],
+    A: &[E::G1Affine],
+    B: &[E::G2Affine],
     vkey: &VKey<E>,
     wkey: &WKey<E>,
     r_shift: &E::Fr,
@@ -123,7 +116,7 @@ fn prove_tipp<E: Engine>(
         return Err(SynthesisError::MalformedProofs);
     }
     // Run GIPA
-    let (proof, challenges) = gipa_tipp(A, B, vkey, wkey);
+    let (proof, mut challenges) = gipa_tipp::<E>(A, B, vkey, wkey);
 
     // Prove final commitment keys are wellformed
     // we reverse the transcript so the polynomial in kzg opening is constructed
@@ -178,8 +171,8 @@ fn prove_tipp<E: Engine>(
 
     Ok(TIPPProof {
         gipa: proof,
-        vkey_opening: vkey_opening,
-        wkey_opening: wkey_opening,
+        vkey_opening: vkey_opening?,
+        wkey_opening: wkey_opening?,
     })
 }
 
@@ -188,8 +181,8 @@ fn prove_tipp<E: Engine>(
 /// challenges generated necessary to do the polynomial commitment proof later
 /// in TIPP.
 fn gipa_tipp<E: Engine>(
-    A: &[E::G1],
-    B: &[E::G2],
+    A: &[E::G1Affine],
+    B: &[E::G2Affine],
     vkey: &VKey<E>,
     wkey: &WKey<E>,
 ) -> (GipaTIPP<E>, Vec<E::Fr>) {
@@ -215,8 +208,8 @@ fn gipa_tipp<E: Engine>(
         let ((C_l, C_r), (Z_l, Z_r)) = rayon::join(
             || {
                 rayon::join(
-                    || commit::pair(&vk_left, &wk_right, &A_right, &B_left),
-                    || commit::pair(&vk_right, &wk_left, &A_left, &B_right),
+                    || commit::pair::<E>(&vk_left, &wk_right, &A_right, &B_left),
+                    || commit::pair::<E>(&vk_right, &wk_left, &A_left, &B_right),
                 )
             },
             || {
@@ -226,6 +219,8 @@ fn gipa_tipp<E: Engine>(
                 )
             },
         );
+        let (T_l, U_l) = C_l;
+        let (T_r, U_r) = C_r;
 
         // Fiat-Shamir challenge
         // TODO extract logic in separate function and use the same as in
@@ -238,10 +233,10 @@ fn gipa_tipp<E: Engine>(
             let mut hash_input = Vec::new();
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-            bincode::serialize_into(&mut hash_input, &C_r.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &C_l.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &C_r.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &T_l).expect("vec");
+            bincode::serialize_into(&mut hash_input, &U_l).expect("vec");
+            bincode::serialize_into(&mut hash_input, &T_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &U_r).expect("vec");
             bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
             bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
 
@@ -296,11 +291,6 @@ fn gipa_tipp<E: Engine>(
 
     let (final_A, final_B) = (m_a[0], m_b[0]);
     let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
-
-    // TODO should we reverse those?
-    //r_transcript.reverse();
-    //r_commitment_steps.reverse();
-
     (
         GipaTIPP {
             comms: comms,
@@ -325,7 +315,7 @@ fn gipa_mipp<E: Engine>(
     let mut comms = Vec::new();
     let mut z_vec = Vec::new();
     let mut challenges = Vec::new();
-    let mut vkey = vkey;
+    let mut vkey = vkey.clone();
 
     while m_c.len() > 1 {
         // recursive step
@@ -351,9 +341,9 @@ fn gipa_mipp<E: Engine>(
             || {
                 rayon::join(
                     // U_r = c[:n'] * v[n':]
-                    || commit::single_g1::<E>(vk_right, C_left),
+                    || commit::single_g1::<E>(&vk_right, C_left),
                     // U_l = c[n':] * v[:n']
-                    || commit::single_g1::<E>(vk_left, C_right),
+                    || commit::single_g1::<E>(&vk_left, C_right),
                 )
             },
         );
@@ -413,7 +403,7 @@ fn gipa_mipp<E: Engine>(
         m_r.resize(len, E::Fr::zero()); // shrink to new size
 
         // v[:n'] + v[n':]^{x^{-1}}
-        vkey = vkey.compress(vk_left, vk_right, c_inv);
+        vkey = VKey::<E>::compress(&vk_left, &vk_right, &c_inv);
 
         comms.push((TU_l, TU_r));
         z_vec.push((Z_l, Z_r));
@@ -443,14 +433,14 @@ fn gipa_mipp<E: Engine>(
 
 /// Returns the KZG opening proof for the given commitment key. In math, it
 /// returns $g^{f(alpha) - f(z) / (alpha - z)}$ for $a$ and $b$.
-fn prove_commitment_key_kzg_opening<G: CurveProjective>(
-    srs_powers_alpha_table: &dyn MultiscalarPrecomp<G::Affine>,
-    srs_powers_beta_table: &dyn MultiscalarPrecomp<G::Affine>,
+fn prove_commitment_key_kzg_opening<G: CurveAffine>(
+    srs_powers_alpha_table: &dyn MultiscalarPrecomp<G>,
+    srs_powers_beta_table: &dyn MultiscalarPrecomp<G>,
     srs_powers_len: usize,
     transcript: &[G::Scalar],
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
-) -> KZGOpening<G> {
+) -> Result<KZGOpening<G>, SynthesisError> {
     // f_v
     let vkey_poly =
         DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(transcript, r_shift));
@@ -485,20 +475,22 @@ fn prove_commitment_key_kzg_opening<G: CurveProjective>(
     // we do one proof over h^a and one proof over h^b (or g^a and g^b depending
     // on the curve we are on). that's the extra cost of the commitment scheme
     // used which is compatible with Groth16 CRS.
-    (rayon::join(
+    Ok(rayon::join(
         || {
-            par_multiscalar::<_, G::Affine>(
+            par_multiscalar::<_, G>(
                 &ScalarList::Getter(getter, srs_powers_len),
                 srs_powers_alpha_table,
                 std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
             )
+            .into_affine()
         },
         || {
-            par_multiscalar::<_, G::Affine>(
+            par_multiscalar::<_, G>(
                 &ScalarList::Getter(getter, srs_powers_len),
                 srs_powers_beta_table,
                 std::mem::size_of::<<G::Scalar as PrimeField>::Repr>() * 8,
             )
+            .into_affine()
         },
     ))
 }
@@ -560,7 +552,7 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
 /// and T = C * v. Section 4 in the paper.
 fn prove_mipp<E: Engine>(
     srs: &SRS<E>,
-    C: &[E::G1],
+    C: &[E::G1Affine],
     r: &[E::Fr],
     vkey: &VKey<E>,
 ) -> Result<MIPPProof<E>, SynthesisError> {
@@ -568,14 +560,13 @@ fn prove_mipp<E: Engine>(
         return Err(SynthesisError::MalformedProofs);
     }
     // Run GIPA
-    let (proof, challenges) = gipa_mipp(C, r, vkey);
+    let (proof, mut challenges) = gipa_mipp::<E>(C, r, vkey);
 
     // Prove final commitment key is wellformed
-    let transcript = challenges;
     // we reverse the transcript so challenges are in the right order (inverse
     // from creation) for the KZG opening proof
-    transcript.reverse();
-    let transcript_inverse = transcript
+    challenges.reverse();
+    let challenges_inv = challenges
         .iter()
         .map(|x| x.inverse().unwrap())
         .collect::<Vec<_>>();
@@ -586,7 +577,8 @@ fn prove_mipp<E: Engine>(
     let c = loop {
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        bincode::serialize_into(&mut hash_input, &transcript.first().unwrap()).expect("vec");
+        // we take the last challenge generated
+        bincode::serialize_into(&mut hash_input, &challenges.first().unwrap()).expect("vec");
         bincode::serialize_into(&mut hash_input, &proof.final_vkey.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &proof.final_vkey.1).expect("vec");
 
@@ -603,15 +595,15 @@ fn prove_mipp<E: Engine>(
     let vkey_opening = prove_commitment_key_kzg_opening(
         &srs.h_alpha_powers_table,
         &srs.h_beta_powers_table,
-        srs.h_beta_powers.n,
-        &transcript_inverse,
+        srs.n,
+        &challenges_inv,
         &E::Fr::one(),
         &c,
     );
 
     Ok(MIPPProof {
         gipa: proof,
-        vkey_opening: vkey_opening,
+        vkey_opening: vkey_opening?,
     })
 }
 

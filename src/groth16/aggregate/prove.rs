@@ -24,8 +24,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError> {
     let (vkey, wkey) = ip_srs.get_commitment_keys();
-
-    if vkey.correct_len(proofs.len()) || wkey.correct_len(proofs.len()) {
+    if !vkey.correct_len(proofs.len()) || !wkey.correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
     }
 
@@ -117,7 +116,7 @@ fn prove_tipp<E: Engine>(
     }
     // Run GIPA
     let (proof, mut challenges) = gipa_tipp::<E>(A, B, vkey, wkey);
-
+    println!("\tTIPP.prove challenges: {:?}", challenges.clone());
     // Prove final commitment keys are wellformed
     // we reverse the transcript so the polynomial in kzg opening is constructed
     // correctly - the formula indicates x_{l-j}. Also for deriving KZG
@@ -135,10 +134,10 @@ fn prove_tipp<E: Engine>(
         let mut hash_input = Vec::new();
         hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
         bincode::serialize_into(&mut hash_input, &challenges.first().unwrap()).expect("vec");
-        bincode::serialize_into(&mut hash_input, &vkey.a).expect("vec");
-        bincode::serialize_into(&mut hash_input, &vkey.b).expect("vec");
-        bincode::serialize_into(&mut hash_input, &wkey.a).expect("vec");
-        bincode::serialize_into(&mut hash_input, &wkey.b).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.final_vkey.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.final_vkey.1).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.final_wkey.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &proof.final_wkey.1).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
             &Sha256::digest(&hash_input).as_slice()
@@ -149,6 +148,7 @@ fn prove_tipp<E: Engine>(
         counter_nonce += 1;
     };
 
+    println!("\t PROVE TIPP KZG -> {:?}", &z);
     // Complete KZG proofs
     par! {
         let vkey_opening = prove_commitment_key_kzg_opening(
@@ -253,10 +253,10 @@ fn gipa_tipp<E: Engine>(
 
         // Set up values for next step of recursion
         // A[:n'] + A[n':] ^ x
-        A_right
-            .par_iter()
-            .zip(A_left.par_iter_mut())
-            .for_each(|(a_r, a_l)| {
+        A_left
+            .par_iter_mut()
+            .zip(A_right.par_iter())
+            .for_each(|(a_l, a_r)| {
                 let mut x: E::G1 = mul!(a_r.into_projective(), c);
                 x.add_assign_mixed(&a_l);
                 *a_l = x.into_affine();
@@ -288,6 +288,10 @@ fn gipa_tipp<E: Engine>(
         z_vec.push((Z_l, Z_r));
         challenges.push(c);
     }
+
+    assert!(m_a.len() == 1 && m_b.len() == 1);
+    assert!(vkey.a.len() == 1 && vkey.b.len() == 1);
+    assert!(wkey.a.len() == 1 && wkey.b.len() == 1);
 
     let (final_A, final_B) = (m_a[0], m_b[0]);
     let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
@@ -590,6 +594,9 @@ fn prove_mipp<E: Engine>(
         };
         counter_nonce += 1;
     };
+
+    println!(" +++ MIPP - prove: challenges {:?}", challenges);
+    println!(" +++ MIPP - prove: c {:?}", c);
 
     // Complete KZG proof
     let vkey_opening = prove_commitment_key_kzg_opening(

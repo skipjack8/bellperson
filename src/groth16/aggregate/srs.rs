@@ -13,6 +13,8 @@ pub struct SRS<E: Engine> {
     /// number of proofs to aggregate
     pub n: usize,
     /// $\{g^a^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
+    /// NOTE in practice we only need the first half of that - it may be worth
+    /// doing the logic for that
     pub g_alpha_powers: Vec<E::G1Affine>,
     pub g_alpha_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
     /// $\{h^a^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
@@ -61,6 +63,8 @@ impl<E: Engine> SRS<E> {
             .take(self.n)
             .cloned()
             .collect::<Vec<_>>();
+        assert!(v1.len() == self.n);
+        assert!(v2.len() == self.n);
         VKey::<E> { a: v1, b: v2 }
     }
 
@@ -78,6 +82,8 @@ impl<E: Engine> SRS<E> {
             .skip(self.n + 1)
             .cloned()
             .collect::<Vec<_>>();
+        assert!(w1.len() == self.n);
+        assert!(w2.len() == self.n);
         WKey::<E> { a: w1, b: w2 }
     }
 
@@ -99,12 +105,7 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
     let alpha = E::Fr::random(rng);
     let beta = E::Fr::random(rng);
     let g = E::G1::one();
-    let mut g_beta = g;
-    g_beta.mul_assign(beta);
-
     let h = E::G2::one();
-    let mut h_alpha = h;
-    h_alpha.mul_assign(alpha);
 
     let mut g_alpha_powers = Vec::new();
     let mut g_beta_powers = Vec::new();
@@ -118,21 +119,22 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
 
         let g_alpha_powers = &mut g_alpha_powers;
         s.spawn(move |_| {
-            *g_alpha_powers = structured_generators_scalar_power(2 * size, g, alpha);
+            // +1 because we go to power 2n included and we start at power 0
+            *g_alpha_powers = structured_generators_scalar_power(2 * size + 1, g, alpha);
         });
         let g_beta_powers = &mut g_beta_powers;
         s.spawn(move |_| {
-            *g_beta_powers = structured_generators_scalar_power(2 * size, g, beta);
+            *g_beta_powers = structured_generators_scalar_power(2 * size + 1, g, beta);
         });
 
         let h_alpha_powers = &mut h_alpha_powers;
         s.spawn(move |_| {
-            *h_alpha_powers = structured_generators_scalar_power(2 * size, h, alpha);
+            *h_alpha_powers = structured_generators_scalar_power(2 * size + 1, h, alpha);
         });
 
         let h_beta_powers = &mut h_beta_powers;
         s.spawn(move |_| {
-            *h_beta_powers = structured_generators_scalar_power(2 * size, h, beta);
+            *h_beta_powers = structured_generators_scalar_power(2 * size + 1, h, beta);
         });
     });
 

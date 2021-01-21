@@ -42,26 +42,20 @@ where
     /// scale returns both vectors scaled by the given vector entrywise.
     /// In other words, it returns $\{v_i^{s_i}\}$
     pub fn scale(&self, s_vec: &[G::Scalar]) -> Self {
-        let a = self
+        let (a, b) = self
             .a
             .par_iter()
+            .zip(self.b.par_iter())
             .zip(s_vec.par_iter())
-            .map(|(ap, s)| {
-                let mut x = ap.clone();
-                x.mul(s.into_repr());
-                x
+            .map(|((ap, bp), s)| {
+                let mut xa = ap.clone();
+                let mut xb = bp.clone();
+                xa.mul(s.into_repr());
+                xb.mul(s.into_repr());
+                (xa, xb)
             })
-            .collect::<Vec<_>>();
-        let b = self
-            .b
-            .par_iter()
-            .zip(s_vec.par_iter())
-            .map(|(bp, s)| {
-                let mut x = bp.clone();
-                x.mul(s.into_repr());
-                x
-            })
-            .collect::<Vec<_>>();
+            .unzip();
+
         Self { a: a, b: b }
     }
 
@@ -86,32 +80,24 @@ where
     /// key $left \circ right^{scale} = (left_i*right_i^{scale} ...)$. This is
     /// required step during GIPA recursion.
     pub fn compress(left: &Self, right: &Self, scale: &G::Scalar) -> Self {
-        let (a, b) = rayon::join(
-            || {
-                left.a
-                    .par_iter()
-                    .zip(right.a.par_iter())
-                    .map(|(left, right)| {
-                        let mut g = right.into_projective();
-                        g.mul_assign(scale.into_repr());
-                        g.add_assign_mixed(left);
-                        g.into_affine()
-                    })
-                    .collect::<Vec<_>>()
-            },
-            || {
-                left.b
-                    .par_iter()
-                    .zip(right.b.par_iter())
-                    .map(|(left, right)| {
-                        let mut g = right.into_projective();
-                        g.mul_assign(scale.into_repr());
-                        g.add_assign_mixed(left);
-                        g.into_affine()
-                    })
-                    .collect::<Vec<_>>()
-            },
-        );
+        assert!(left.a.len() == right.a.len());
+        let (a, b): (Vec<G>, Vec<G>) = left
+            .a
+            .par_iter()
+            .zip(left.b.par_iter())
+            .zip(right.a.par_iter())
+            .zip(right.b.par_iter())
+            .map(|(((left_a, left_b), right_a), right_b)| {
+                let mut ra = mul!(right_a.into_projective(), scale.into_repr());
+                let mut rb = mul!(right_b.into_projective(), scale.into_repr());
+                ra.add_assign_mixed(left_a);
+                rb.add_assign_mixed(left_b);
+                (ra.into_affine(), rb.into_affine())
+            })
+            .unzip();
+
+        assert!(a.len() == left.a.len());
+        assert!(b.len() == left.a.len());
         Self { a: a, b: b }
     }
 

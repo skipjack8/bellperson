@@ -72,7 +72,11 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 &proof.proof_ab,
                 &r,
             );
-            println!("TIPA AB took {} ms", now.elapsed().as_millis());
+            println!(
+                "TIPA AB took {} ms -> VERIFIED ? {}",
+                now.elapsed().as_millis(),
+                tuple.verify()
+            );
             tipa_ab.send(tuple).unwrap();
         });
 
@@ -89,8 +93,12 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 &r,
                 &proof.proof_c,
             );
+            println!(
+                "TIPA proof c took {} ms -> VERIFIED ? {}",
+                now.elapsed().as_millis(),
+                tuple.verify()
+            );
             tipa_c.send(tuple).unwrap();
-            println!("TIPA proof c took {} ms", now.elapsed().as_millis());
         });
 
         // Check aggregate pairing product equation
@@ -214,6 +222,7 @@ fn verify_tipp<E: Engine>(
     // (T,U), Z, and all challenges
     let (final_ab, final_z, mut challenges, mut challenges_inv) =
         gipa_verify_tipp(comAB, Z, &proof.gipa);
+    println!("\tTIPP.verify challenges: {:?}", challenges.clone());
     println!("TIPA AB: gipa verify tipp {}ms", now.elapsed().as_millis());
 
     // we reverse the order so the KZG polynomial have them in the expected
@@ -231,8 +240,8 @@ fn verify_tipp<E: Engine>(
         bincode::serialize_into(&mut hash_input, &challenges.first().unwrap()).expect("vec");
         bincode::serialize_into(&mut hash_input, &fvkey.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &fvkey.1).expect("vec");
-        bincode::serialize_into(&mut hash_input, &fvkey.0).expect("vec");
-        bincode::serialize_into(&mut hash_input, &fvkey.1).expect("vec");
+        bincode::serialize_into(&mut hash_input, &fwkey.0).expect("vec");
+        bincode::serialize_into(&mut hash_input, &fwkey.1).expect("vec");
 
         if let Some(c) = E::Fr::from_random_bytes(
             &Sha256::digest(&hash_input).as_slice()
@@ -242,6 +251,8 @@ fn verify_tipp<E: Engine>(
         };
         counter_nonce += 1;
     };
+
+    println!("\t VERIFY TIPP KZG -> {:?}", &c);
 
     let now = Instant::now();
     // Section 3.4. step 5 check the opening proof for v
@@ -262,7 +273,12 @@ fn verify_tipp<E: Engine>(
         &E::Fr::one(),
         &c,
     );
-    println!("TIPA AB verify KZG: {}ms", now.elapsed().as_millis());
+    println!(
+        "TIPA AB verify KZG: {}ms VERIFIED ? v {} w {}",
+        now.elapsed().as_millis(),
+        vtuple.verify(),
+        wtuple.verify()
+    );
     let now = Instant::now();
 
     // Section 3.4 step 2
@@ -270,22 +286,42 @@ fn verify_tipp<E: Engine>(
     let mut right = Vec::new();
     let mut out = E::Fqk::one();
     let (T, U) = final_ab;
+    // final_Z = e(A,B)
+    left.push(proof.gipa.final_A);
+    right.push(proof.gipa.final_B);
+    out.mul_assign(&final_z);
+    let check = PairingTuple::<E>::from_pair(
+        inner_product::pairing_miller_affine::<E>(&left, &right),
+        out,
+    );
+    println!(
+        "TIPA AB inner product Z ONLY: {}ms -> VERIFIED ? {}",
+        now.elapsed().as_millis(),
+        check.verify()
+    );
+
     //  final_AB.0 = T = e(A,v1)e(w1,B)
     left.push(proof.gipa.final_A.clone());
     right.push(fvkey.0.clone());
     left.push(fwkey.0.clone());
     right.push(proof.gipa.final_B.clone());
     out.mul_assign(&T);
+    let check = PairingTuple::<E>::from_pair(
+        inner_product::pairing_miller_affine::<E>(&left, &right),
+        out,
+    );
+    println!(
+        "TIPA AB inner product T ONLY: {}ms -> VERIFIED ? {}",
+        now.elapsed().as_millis(),
+        check.verify()
+    );
+
     // final_AB.1 = U = e(A,v2)e(w2,B)
     left.push(proof.gipa.final_A.clone());
     right.push(fvkey.1.clone());
     left.push(fwkey.1.clone());
     right.push(proof.gipa.final_B.clone());
     out.mul_assign(&U);
-    // final_Z = e(A,B)
-    left.push(proof.gipa.final_A);
-    right.push(proof.gipa.final_B);
-    out.mul_assign(&final_z);
 
     // TODO check if doing one big miller loop is faster than doing the
     // three in parallels and combine
@@ -293,7 +329,11 @@ fn verify_tipp<E: Engine>(
         inner_product::pairing_miller_affine::<E>(&left, &right),
         out,
     );
-    println!("TIPA AB inner product: {}ms", now.elapsed().as_millis());
+    println!(
+        "TIPA AB inner product: {}ms -> VERIFIED ? {}",
+        now.elapsed().as_millis(),
+        check.verify()
+    );
 
     let now = Instant::now();
     vtuple.merge(&wtuple);
@@ -534,9 +574,8 @@ pub fn verify_kzg_opening_g1<E: Engine>(
 
 fn verify_mipp<E: Engine>(
     v_srs: &VerifierSRS<E>,
-    com_C: &commit::Output<E>, // CM(v1,v2,C)
-    agg_C: &E::G1,             // C^r
-    //com: (&E::Fqk, &E::G1),
+    com_C: &commit::Output<E>, // original (T,U) = CM(v1,v2,C) - is rescaled in gipa verify
+    agg_C: &E::G1,             // original Z = C^r - is rescaled in gipa verify
     scalar_b: &E::Fr,
     proof: &MIPPProof<E>,
 ) -> PairingTuple<E> {
@@ -574,6 +613,9 @@ fn verify_mipp<E: Engine>(
         counter_nonce += 1;
     };
 
+    println!(" +++ MIPP - verify: challenges {:?}", challenges);
+    println!(" +++ MIPP - verify: c {:?}", c);
+
     println!(
         "TIPA AB: mipp verification challenge took {}ms",
         now.elapsed().as_millis()
@@ -592,7 +634,11 @@ fn verify_mipp<E: Engine>(
     let now = Instant::now();
     let final_Z = inner_product::multiexponentiation::<E::G1Affine>(&[final_C], &[final_r]);
     let b = final_Z == com_Z;
-    println!("MIPP: check Z took {}ms", now.elapsed().as_millis());
+    println!(
+        "MIPP: check Z took {}ms -> valid Z ? {}",
+        now.elapsed().as_millis(),
+        b
+    );
     // only check that doesn't require pairing so we can give a tuple that will
     // render the equation wrong in case it's false
     if !b {
@@ -620,6 +666,15 @@ fn verify_mipp<E: Engine>(
     left.push(final_C.clone());
     right.push(final_vkey.0);
     out.mul_assign(&T);
+    {
+        let miller_out = inner_product::pairing_miller_affine::<E>(&left, &right);
+        let pair = PairingTuple::<E>::from_pair(miller_out, out);
+        println!(
+            "MIPP - verify: vssm check took {}ms --> T CORRECT? {}",
+            now.elapsed().as_millis(),
+            pair.verify()
+        );
+    }
     // U = e(A,v2)
     left.push(final_C.clone());
     right.push(final_vkey.1);

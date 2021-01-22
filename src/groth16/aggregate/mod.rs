@@ -20,7 +20,8 @@ pub use self::srs::*;
 pub use self::verify::*;
 
 fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
-    let mut powers = vec![F::one()];
+    //let mut powers = vec![F::one()];
+    let mut powers = vec![s.clone()];
     for i in 1..num {
         powers.push(mul!(powers[i - 1], s));
     }

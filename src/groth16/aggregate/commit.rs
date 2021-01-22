@@ -47,12 +47,10 @@ where
             .par_iter()
             .zip(self.b.par_iter())
             .zip(s_vec.par_iter())
-            .map(|((ap, bp), s)| {
-                let mut xa = ap.clone();
-                let mut xb = bp.clone();
-                xa.mul(s.into_repr());
-                xb.mul(s.into_repr());
-                (xa, xb)
+            .map(|((ap, bp), si)| {
+                let v1s = mul!(ap.into_projective(), si.into_repr()).into_affine();
+                let v2s = mul!(bp.into_projective(), si.into_repr()).into_affine();
+                (v1s, v2s)
             })
             .unzip();
 
@@ -105,6 +103,7 @@ where
     /// w1 and w2). When commitment key is of size one, it's a proxy to get the
     /// final values.
     pub fn first(&self) -> (G, G) {
+        assert!(self.a.len() == 1 && self.b.len() == 1);
         (self.a[0].clone(), self.b[0].clone())
     }
 }
@@ -117,8 +116,8 @@ pub type Output<E: Engine> = (E::Fqk, E::Fqk);
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})$
 /// Output is $(T,U)$
 pub fn single_g1<E: Engine>(vkey: &VKey<E>, A: &[E::G1Affine]) -> Output<E> {
-    let T = inner_product::pairing_miller_affine::<E>(A, &vkey.a);
-    let U = inner_product::pairing_miller_affine::<E>(A, &vkey.b);
+    let T = inner_product::pairing::<E>(A, &vkey.a);
+    let U = inner_product::pairing::<E>(A, &vkey.b);
     return (T, U);
 }
 
@@ -135,14 +134,14 @@ pub fn pair<E: Engine>(
     let ((mut T1, T2), (mut U1, U2)) = rayon::join(
         || {
             rayon::join(
-                || inner_product::pairing_miller_affine::<E>(A, &vkey.a),
-                || inner_product::pairing_miller_affine::<E>(&wkey.a, B),
+                || inner_product::pairing::<E>(A, &vkey.a),
+                || inner_product::pairing::<E>(&wkey.a, B),
             )
         },
         || {
             rayon::join(
-                || inner_product::pairing_miller_affine::<E>(A, &vkey.b),
-                || inner_product::pairing_miller_affine::<E>(&wkey.b, B),
+                || inner_product::pairing::<E>(A, &vkey.b),
+                || inner_product::pairing::<E>(&wkey.b, B),
             )
         },
     );

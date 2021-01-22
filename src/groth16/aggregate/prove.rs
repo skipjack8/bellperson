@@ -58,6 +58,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 
         counter_nonce += 1;
     };
+    println!(" ---------------------------- Prove Challenge r: {}", r);
 
     // r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
@@ -71,7 +72,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let A_r = A
         .par_iter()
         .zip(r_vec.par_iter())
-        .map(|(a, r)| mul!(a.into_projective(), *r).into_affine())
+        .map(|(ai, ri)| mul!(ai.into_projective(), *ri).into_affine())
         .collect::<Vec<_>>();
     // V^{r^{-1}}
     let vkey_r_inv = vkey.scale(&r_inv);
@@ -87,7 +88,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&C, &r_vec);
 
     // TODO - move assertion to a test - this is a property of the scheme
-    let computed_com_ab = commit::pair::<E>(&vkey_r_inv, &wkey, &A, &B);
+    let computed_com_ab = commit::pair::<E>(&vkey_r_inv, &wkey, &A_r, &B);
     assert_eq!(com_ab, computed_com_ab);
 
     Ok(AggregateProof {
@@ -270,8 +271,7 @@ fn gipa_tipp<E: Engine>(
             .par_iter_mut()
             .zip(B_right.par_iter())
             .for_each(|(b_l, b_r)| {
-                let mut x = b_r.into_projective();
-                x.mul_assign(c_inv);
+                let mut x: E::G2 = mul!(b_r.into_projective(), c_inv);
                 x.add_assign_mixed(&b_l);
                 *b_l = x.into_affine();
             });
@@ -418,11 +418,6 @@ fn gipa_mipp<E: Engine>(
     let (final_C, final_r) = (m_c[0], m_r[0]);
     // final v
     let final_vkey = vkey.first();
-
-    // TODO should we reverse those?
-    //r_transcript.reverse();
-    //r_commitment_steps.reverse();
-
     (
         GipaMIPP {
             comms: comms,
@@ -607,6 +602,13 @@ fn prove_mipp<E: Engine>(
         &E::Fr::one(),
         &c,
     );
+
+    /*    {*/
+    //// f_v
+    //let vkey_poly = DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(
+    //transcript, r_shift,
+    //));
+    //}
 
     Ok(MIPPProof {
         gipa: proof,

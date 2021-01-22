@@ -16,6 +16,8 @@ pub struct SRS<E: Engine> {
     /// NOTE in practice we only need the first half of that - it may be worth
     /// doing the logic for that
     pub g_alpha_powers: Vec<E::G1Affine>,
+    /// table starts at i=1 since base is offset with commitment keys - it's not g and h
+    /// but g^a and h^a
     pub g_alpha_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
     /// $\{h^a^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
     pub h_alpha_powers: Vec<E::G2Affine>,
@@ -138,11 +140,14 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
         });
     });
 
-    let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers, WINDOW_SIZE);
-    let h_beta_powers_table = precompute_fixed_window(&h_beta_powers, WINDOW_SIZE);
-    let g_beta_powers_table = precompute_fixed_window(&g_beta_powers, WINDOW_SIZE);
-    let h_alpha_powers_table = precompute_fixed_window(&h_alpha_powers, WINDOW_SIZE);
-
+    let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers[1 + size..], WINDOW_SIZE);
+    let h_beta_powers_table = precompute_fixed_window(&h_beta_powers[1..], WINDOW_SIZE);
+    let g_beta_powers_table = precompute_fixed_window(&g_beta_powers[1 + size..], WINDOW_SIZE);
+    let h_alpha_powers_table = precompute_fixed_window(&h_alpha_powers[1..], WINDOW_SIZE);
+    assert!(h_alpha_powers[0] == E::G2::one().into_affine());
+    assert!(h_beta_powers[0] == E::G2::one().into_affine());
+    assert!(g_alpha_powers[0] == E::G1::one().into_affine());
+    assert!(g_beta_powers[0] == E::G1::one().into_affine());
     SRS {
         n: size,
         g_alpha_powers,

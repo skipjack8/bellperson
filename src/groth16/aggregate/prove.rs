@@ -65,14 +65,14 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     // r^-1, r^-2, r^-3
     let r_inv = r_vec
         .par_iter()
-        .map(|r| r.inverse().unwrap())
+        .map(|ri| ri.inverse().unwrap())
         .collect::<Vec<_>>();
 
     // A^{r}
     let A_r = A
         .par_iter()
         .zip(r_vec.par_iter())
-        .map(|(ai, ri)| mul!(ai.into_projective(), *ri).into_affine())
+        .map(|(ai, ri)| mul!(ai.into_projective(), ri.into_repr()).into_affine())
         .collect::<Vec<_>>();
     // V^{r^{-1}}
     let vkey_r_inv = vkey.scale(&r_inv);
@@ -116,17 +116,14 @@ fn prove_tipp<E: Engine>(
         return Err(SynthesisError::MalformedProofs);
     }
     // Run GIPA
-    let (proof, mut challenges) = gipa_tipp::<E>(A, B, vkey, wkey);
+    let (proof, mut challenges, mut challenges_inv) = gipa_tipp::<E>(A, B, vkey, wkey);
     println!("\tTIPP.prove challenges: {:?}", challenges.clone());
     // Prove final commitment keys are wellformed
     // we reverse the transcript so the polynomial in kzg opening is constructed
     // correctly - the formula indicates x_{l-j}. Also for deriving KZG
     // challenge point, input must be the last challenge.
     challenges.reverse();
-    let challenges_inv = challenges
-        .par_iter()
-        .map(|x| x.inverse().unwrap())
-        .collect::<Vec<_>>();
+    challenges_inv.reverse();
     let r_inverse = r_shift.inverse().unwrap();
 
     // KZG challenge point
@@ -186,12 +183,13 @@ fn gipa_tipp<E: Engine>(
     B: &[E::G2Affine],
     vkey: &VKey<E>,
     wkey: &WKey<E>,
-) -> (GipaTIPP<E>, Vec<E::Fr>) {
+) -> (GipaTIPP<E>, Vec<E::Fr>, Vec<E::Fr>) {
     let (mut m_a, mut m_b) = (A.to_vec(), B.to_vec());
     let (mut vkey, mut wkey) = (vkey.clone(), wkey.clone());
     let mut comms = Vec::new();
     let mut z_vec = Vec::new();
     let mut challenges: Vec<E::Fr> = Vec::new();
+    let mut challenges_inv: Vec<E::Fr> = Vec::new();
 
     while m_a.len() > 1 {
         // recursive step
@@ -287,6 +285,7 @@ fn gipa_tipp<E: Engine>(
         comms.push((C_l, C_r));
         z_vec.push((Z_l, Z_r));
         challenges.push(c);
+        challenges_inv.push(c_inv);
     }
 
     assert!(m_a.len() == 1 && m_b.len() == 1);
@@ -305,6 +304,7 @@ fn gipa_tipp<E: Engine>(
             final_wkey: final_wkey,
         },
         challenges,
+        challenges_inv,
     )
 }
 
@@ -496,8 +496,6 @@ fn prove_commitment_key_kzg_opening<G: CurveAffine>(
 
 /// It returns the evaluation of the polynomial $\prod (1 + x_{l-j}(rX)^{2j}$ at
 /// the point z, where transcript contains the reversed order of all challenges (the x).
-/// See polynomial_coefficients_from_transcript for explanation of the
-/// algorithm.
 pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
     transcript: &[F],
     z: &F,
@@ -538,7 +536,9 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
     let mut power_2_r = *r_shift;
 
     for (i, x) in transcript.iter().enumerate() {
-        for j in 0..(2_usize).pow(i as u32) {
+        //for j in 0..(2_usize).pow(i as u32) {
+        let n = coefficients.len();
+        for j in (0..n) {
             let coeff = mul!(coefficients[j], &mul!(*x, &power_2_r));
             coefficients.push(coeff);
         }

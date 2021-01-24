@@ -288,8 +288,8 @@ fn verify_tipp<E: Engine>(
     let mut out = E::Fqk::one();
     let (T, U) = final_ab;
     // final_Z = e(A,B)
-    left.push(proof.gipa.final_A);
-    right.push(proof.gipa.final_B);
+    left.push(proof.gipa.final_A.clone());
+    right.push(proof.gipa.final_B.clone());
     out.mul_assign(&final_z);
     let check = PairingTuple::<E>::from_pair(
         inner_product::pairing_miller_affine::<E>(&left, &right),
@@ -300,7 +300,9 @@ fn verify_tipp<E: Engine>(
         now.elapsed().as_millis(),
         check.verify()
     );
-
+    left.clear();
+    right.clear();
+    out = E::Fqk::one();
     //  final_AB.0 = T = e(A,v1)e(w1,B)
     left.push(proof.gipa.final_A.clone());
     right.push(fvkey.0.clone());

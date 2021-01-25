@@ -182,7 +182,7 @@ fn test_groth16_srs_io() {
     use std::io::{Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 
-    const NUM_PROOFS_TO_AGGREGATE: usize = 8; //1024;
+    const NUM_PROOFS_TO_AGGREGATE: usize = 1024;
     let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
 
     println!("Creating parameters...");

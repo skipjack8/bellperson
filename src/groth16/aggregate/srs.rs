@@ -57,15 +57,11 @@ impl<E: Engine> SRS<E> {
             writer.write_all(g_alpha_power.into_uncompressed().as_ref())?;
         }
 
-        self.g_alpha_powers_table.write::<W>(writer)?;
-
         writer.write_u32::<BigEndian>(self.h_beta_powers.len() as u32)?;
 
         for h_beta_power in &self.h_beta_powers {
             writer.write_all(h_beta_power.into_uncompressed().as_ref())?;
         }
-
-        self.h_beta_powers_table.write::<W>(writer)?;
 
         writer.write_all(self.g_beta.into_affine().into_uncompressed().as_ref())?;
         writer.write_all(self.h_alpha.into_affine().into_uncompressed().as_ref())?;
@@ -82,7 +78,7 @@ impl<E: Engine> SRS<E> {
         let mut data = vec![0; g_alpha_power_len * g1_len];
         reader.read_exact(&mut data)?;
 
-        let g_alpha_powers = (0..g_alpha_power_len)
+        let g_alpha_powers: Vec<E::G1Affine> = (0..g_alpha_power_len)
             .into_par_iter()
             .map(|i| {
                 let data_start = i * g1_len;
@@ -99,14 +95,12 @@ impl<E: Engine> SRS<E> {
             })
             .collect();
 
-        let g_alpha_powers_table = MultiscalarPrecompOwned::<E::G1Affine>::read::<R>(reader)?;
-
         let h_beta_power_len = reader.read_u32::<BigEndian>()? as usize;
 
         let mut data = vec![0; h_beta_power_len * g2_len];
         reader.read_exact(&mut data)?;
 
-        let h_beta_powers = (0..h_beta_power_len)
+        let h_beta_powers: Vec<E::G2Affine> = (0..h_beta_power_len)
             .into_par_iter()
             .map(|i| {
                 let data_start = i * g2_len;
@@ -123,8 +117,6 @@ impl<E: Engine> SRS<E> {
             })
             .collect();
 
-        let h_beta_powers_table = MultiscalarPrecompOwned::<E::G2Affine>::read::<R>(reader)?;
-
         let mut g1_repr = <E::G1Affine as CurveAffine>::Uncompressed::empty();
         reader.read_exact(g1_repr.as_mut())?;
         let g_beta = g1_repr
@@ -136,6 +128,9 @@ impl<E: Engine> SRS<E> {
         let h_alpha = g2_repr
             .into_affine()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers, WINDOW_SIZE);
+        let h_beta_powers_table = precompute_fixed_window(&h_beta_powers, WINDOW_SIZE);
 
         Ok(SRS {
             g_alpha_powers,
@@ -166,7 +161,7 @@ impl<E: Engine> SRS<E> {
         let mut offset: usize = 0;
         let g_alpha_power_len = read_length(&reader, &mut offset)?;
 
-        let g_alpha_powers = (0..g_alpha_power_len)
+        let g_alpha_powers: Vec<E::G1Affine> = (0..g_alpha_power_len)
             .into_par_iter()
             .map(|i| {
                 let data_start = offset + (i * g1_len);
@@ -184,12 +179,9 @@ impl<E: Engine> SRS<E> {
             .collect();
         offset += g_alpha_power_len * g1_len;
 
-        let g_alpha_powers_table =
-            MultiscalarPrecompOwned::<E::G1Affine>::read_mmap(reader, &mut offset)?;
-
         let h_beta_power_len = read_length(&reader, &mut offset)?;
 
-        let h_beta_powers = (0..h_beta_power_len)
+        let h_beta_powers: Vec<E::G2Affine> = (0..h_beta_power_len)
             .into_par_iter()
             .map(|i| {
                 let data_start = offset + (i * g2_len);
@@ -207,9 +199,6 @@ impl<E: Engine> SRS<E> {
             .collect();
         offset += h_beta_power_len * g2_len;
 
-        let h_beta_powers_table =
-            MultiscalarPrecompOwned::<E::G2Affine>::read_mmap(reader, &mut offset)?;
-
         let ptr = &reader[offset..offset + g1_len];
         let g1_repr: <E::G1Affine as CurveAffine>::Uncompressed =
             unsafe { *(ptr as *const [u8] as *const <E::G1Affine as CurveAffine>::Uncompressed) };
@@ -224,7 +213,9 @@ impl<E: Engine> SRS<E> {
         let h_alpha = g2_repr
             .into_affine()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        //offset += g2_len;
+
+        let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers, WINDOW_SIZE);
+        let h_beta_powers_table = precompute_fixed_window(&h_beta_powers, WINDOW_SIZE);
 
         Ok(SRS {
             g_alpha_powers,

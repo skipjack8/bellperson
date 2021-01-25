@@ -1,7 +1,5 @@
 use crate::bls::Engine;
 use crate::groth16::aggregate::commit;
-use groupy::CurveAffine;
-use serde::{Deserialize, Serialize};
 
 /// AggregateProof contains all elements to verify n aggregated Groth16 proofs
 /// using inner pairing product arguments. This proof can be created by any
@@ -31,8 +29,8 @@ pub struct GipaTIPP<E: Engine> {
     /// Z values left and right
     pub z_vec: Vec<(E::Fqk, E::Fqk)>,
     /// final values of A and B at the end of the recursion
-    pub final_A: E::G1Affine,
-    pub final_B: E::G2Affine,
+    pub final_a: E::G1Affine,
+    pub final_b: E::G2Affine,
     /// final commitment keys $v$ and $w$ - there is only one element at the
     /// end for v1 and v2 hence it's a tuple.
     pub final_vkey: (E::G2Affine, E::G2Affine),
@@ -50,7 +48,7 @@ pub struct TIPPProof<E: Engine> {
 
 /// KZGOpening represents the KZG opening of a commitment key (which is a tuple
 /// given commitment keys are a tuple).
-pub type KZGOpening<G: CurveAffine> = (G, G);
+pub type KZGOpening<G> = (G, G);
 
 /// GipaMIPP is similar to GipaTIPP: it contains information to verify the
 /// GIPA recursion using the commitment of MIPP. Section 4 of the paper.
@@ -60,7 +58,7 @@ pub struct GipaMIPP<E: Engine> {
     /// Z values left and right
     pub z_vec: Vec<(E::G1, E::G1)>,
     /// final values of C at the end of the recursion
-    pub final_C: E::G1Affine,
+    pub final_c: E::G1Affine,
     pub final_r: E::Fr,
     /// final commitment keys $v$ - there is only one element at the
     /// end for v1 and v2 hence it's a tuple.

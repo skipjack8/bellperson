@@ -3,10 +3,8 @@ use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use rayon::prelude::*;
 
-use crate::bls::{Engine, PairingCurveAffine};
-use crate::groth16::aggregate::accumulator::PairingTuple;
+use crate::bls::Engine;
 use crate::groth16::aggregate::inner_product;
-use crate::groth16::multiscalar::*;
 
 /// Key is a generic commitment key that is instanciated with g and h as basis,
 /// and a and b as powers.
@@ -20,12 +18,12 @@ pub struct Key<G: CurveAffine> {
 /// VKey is a commitment key used by the "single" commitment on G1 values as
 /// well as in the "pair" commtitment.
 /// It contains $\{h^a^i\}_{i=1}^n$ and $\{h^b^i\}_{i=1}^n$
-pub type VKey<E: Engine> = Key<E::G2Affine>;
+pub type VKey<E> = Key<<E as Engine>::G2Affine>;
 
 /// WKey is a commitment key used by the "pair" commitment. Note the sequence of
 /// powers starts at $n$ already.
 /// It contains $\{g^{a^{n+i}}\}_{i=1}^n$ and $\{g^{b^{n+i}}\}_{i=1}^n$
-pub type WKey<E: Engine> = Key<E::G1Affine>;
+pub type WKey<E> = Key<<E as Engine>::G1Affine>;
 
 impl<G> Key<G>
 where
@@ -109,16 +107,16 @@ where
 }
 
 /// Both commitment outputs a pair of $F_q^k$ element.
-pub type Output<E: Engine> = (E::Fqk, E::Fqk);
+pub type Output<E> = (<E as Engine>::Fqk, <E as Engine>::Fqk);
 
 /// single_g1 commits to a single vector of G1 elements in the following way:
 /// $T = \prod_{i=0}^n e(A_i, v_{1,i})$
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})$
 /// Output is $(T,U)$
-pub fn single_g1<E: Engine>(vkey: &VKey<E>, A: &[E::G1Affine]) -> Output<E> {
-    let T = inner_product::pairing::<E>(A, &vkey.a);
-    let U = inner_product::pairing::<E>(A, &vkey.b);
-    return (T, U);
+pub fn single_g1<E: Engine>(vkey: &VKey<E>, a: &[E::G1Affine]) -> Output<E> {
+    let t = inner_product::pairing::<E>(a, &vkey.a);
+    let u = inner_product::pairing::<E>(a, &vkey.b);
+    return (t, u);
 }
 
 /// pair commits to a tuple of G1 vector and G2 vector in the following way:
@@ -128,27 +126,27 @@ pub fn single_g1<E: Engine>(vkey: &VKey<E>, A: &[E::G1Affine]) -> Output<E> {
 pub fn pair<E: Engine>(
     vkey: &VKey<E>,
     wkey: &WKey<E>,
-    A: &[E::G1Affine],
-    B: &[E::G2Affine],
+    a: &[E::G1Affine],
+    b: &[E::G2Affine],
 ) -> Output<E> {
-    let ((mut T1, T2), (mut U1, U2)) = rayon::join(
+    let ((mut t1, t2), (mut u1, u2)) = rayon::join(
         || {
             rayon::join(
                 // (A * v)
-                || inner_product::pairing::<E>(A, &vkey.a),
+                || inner_product::pairing::<E>(a, &vkey.a),
                 // (w * B)
-                || inner_product::pairing::<E>(&wkey.a, B),
+                || inner_product::pairing::<E>(&wkey.a, b),
             )
         },
         || {
             rayon::join(
-                || inner_product::pairing::<E>(A, &vkey.b),
-                || inner_product::pairing::<E>(&wkey.b, B),
+                || inner_product::pairing::<E>(a, &vkey.b),
+                || inner_product::pairing::<E>(&wkey.b, b),
             )
         },
     );
     // (A * v)(w * B)
-    T1.mul_assign(&T2);
-    U1.mul_assign(&U2);
-    return (T1, U1);
+    t1.mul_assign(&t2);
+    u1.mul_assign(&u2);
+    return (t1, u1);
 }

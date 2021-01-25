@@ -1,28 +1,20 @@
 use ff::PrimeField;
-use groupy::{CurveAffine, CurveProjective};
+use groupy::CurveAffine;
 use rayon::prelude::*;
 
 use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::multiscalar::*;
 
+/// pairing_miller_affine returns the miller loop evaluated on inputs, i.e.
+/// e(l_1,r_1)e(l_2,r_2)...
+/// NOTE: the result is not in the final subgroup, one must run
+/// `E::final_exponentiation` to use the final result.
 pub fn pairing_miller_affine<E: Engine>(left: &[E::G1Affine], right: &[E::G2Affine]) -> E::Fqk {
     debug_assert_eq!(left.len(), right.len());
     let pairs = left
         .par_iter()
         .map(|e| e.prepare())
         .zip(right.par_iter().map(|e| e.prepare()))
-        .collect::<Vec<_>>();
-    let pairs_ref: Vec<_> = pairs.iter().map(|(a, b)| (a, b)).collect();
-
-    E::miller_loop(pairs_ref.iter())
-}
-
-pub fn pairing_miller<E: Engine>(left: &[E::G1], right: &[E::G2]) -> E::Fqk {
-    debug_assert_eq!(left.len(), right.len());
-    let pairs = left
-        .par_iter()
-        .map(|e| e.into_affine().prepare())
-        .zip(right.par_iter().map(|e| e.into_affine().prepare()))
         .collect::<Vec<_>>();
     let pairs_ref: Vec<_> = pairs.iter().map(|(a, b)| (a, b)).collect();
 

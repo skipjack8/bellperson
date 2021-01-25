@@ -49,7 +49,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         };
         counter_nonce += 1;
     };
-    println!(" ---------------------------- VERIFY Challenge r: {}", r);
 
     for pub_input in public_inputs {
         if (pub_input.len() + 1) != pvk.ic.len() {
@@ -73,11 +72,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 &proof.proof_ab,
                 &r, // we give the extra r as it's not part of the proof itself - it is simply used on top for the groth16 aggregation
             );
-            println!(
-                "TIPA AB took {} ms -> VERIFIED ? {}",
-                now.elapsed().as_millis(),
-                tuple.verify()
-            );
+            println!("TIPP took {} ms", now.elapsed().as_millis());
             tipa_ab.send(tuple).unwrap();
         });
 
@@ -93,11 +88,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 &proof.agg_c,
                 &proof.proof_c,
             );
-            println!(
-                "TIPA proof c took {} ms -> VERIFIED ? {}",
-                now.elapsed().as_millis(),
-                tuple.verify()
-            );
+            println!("MIPP proof took {} ms", now.elapsed().as_millis(),);
             tipa_c.send(tuple).unwrap();
         });
 
@@ -212,8 +203,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
 /// linear combination of A and B.
 fn verify_tipp<E: Engine>(
     v_srs: &VerifierSRS<E>,
-    comAB: &commit::Output<E>,
-    Z: &E::Fqk,
+    comm_ab: &commit::Output<E>,
+    z: &E::Fqk,
     proof: &TIPPProof<E>,
     r_shift: &E::Fr,
 ) -> PairingTuple<E> {
@@ -221,9 +212,8 @@ fn verify_tipp<E: Engine>(
     let now = Instant::now();
     // (T,U), Z, and all challenges
     let (final_ab, final_z, mut challenges, mut challenges_inv) =
-        gipa_verify_tipp(comAB, Z, &proof.gipa);
-    println!("\tTIPP.verify challenges: {:?}", challenges.clone());
-    println!("TIPA AB: gipa verify tipp {}ms", now.elapsed().as_millis());
+        gipa_verify_tipp(comm_ab, z, &proof.gipa);
+    println!("TIPP: gipa verify tipp {}ms", now.elapsed().as_millis());
 
     // we reverse the order so the KZG polynomial have them in the expected
     // order to construct them in logn time.
@@ -252,8 +242,6 @@ fn verify_tipp<E: Engine>(
         counter_nonce += 1;
     };
 
-    println!("\t VERIFY TIPP KZG -> {:?}", &c);
-
     let now = Instant::now();
     // Section 3.4. step 5 check the opening proof for v
     let mut vtuple = verify_kzg_opening_g2(
@@ -263,7 +251,6 @@ fn verify_tipp<E: Engine>(
         &challenges_inv,
         &r_shift.inverse().unwrap(),
         &c,
-        true,
     );
     // Section 3.4 step 6 check the opening proof for w
     let wtuple = verify_kzg_opening_g1(
@@ -275,10 +262,8 @@ fn verify_tipp<E: Engine>(
         &c,
     );
     println!(
-        "TIPA AB verify KZG: {}ms VERIFIED ? v {} w {}",
+        "TIPP verify KZG: {}ms VERIFIED ?",
         now.elapsed().as_millis(),
-        vtuple.verify(),
-        wtuple.verify()
     );
     let now = Instant::now();
 
@@ -286,50 +271,23 @@ fn verify_tipp<E: Engine>(
     let mut left = Vec::new();
     let mut right = Vec::new();
     let mut out = E::Fqk::one();
-    let (T, U) = final_ab;
-    // final_Z = e(A,B)
-    left.push(proof.gipa.final_A.clone());
-    right.push(proof.gipa.final_B.clone());
+    let (t, u) = final_ab;
+    // final_z = e(A,B)
+    left.push(proof.gipa.final_a.clone());
+    right.push(proof.gipa.final_b.clone());
     out.mul_assign(&final_z);
-    let check = PairingTuple::<E>::from_pair(
-        inner_product::pairing_miller_affine::<E>(&left, &right),
-        out,
-    );
-    println!(
-        "TIPA AB inner product Z ONLY: {}ms -> VERIFIED ? {}",
-        now.elapsed().as_millis(),
-        check.verify()
-    );
-    left.clear();
-    right.clear();
-    out = E::Fqk::one();
-    //  final_AB.0 = T = e(A,v1)e(w1,B)
-    left.push(proof.gipa.final_A.clone());
+    //  final_aB.0 = T = e(A,v1)e(w1,B)
+    left.push(proof.gipa.final_a.clone());
     right.push(fvkey.0.clone());
-    let mut check = PairingTuple::<E>::from_pair(
-        inner_product::pairing_miller_affine::<E>(&left, &right),
-        E::Fqk::one(),
-    );
     left.push(fwkey.0.clone());
-    right.push(proof.gipa.final_B.clone());
-    out.mul_assign(&T);
-    let check2 = PairingTuple::<E>::from_pair(
-        inner_product::pairing_miller_affine::<E>(&left, &right),
-        out,
-    );
-    check.merge(&check2);
-    println!(
-        "TIPA AB inner product T ONLY: {}ms -> VERIFIED ? {}",
-        now.elapsed().as_millis(),
-        check.verify()
-    );
-
-    // final_AB.1 = U = e(A,v2)e(w2,B)
-    left.push(proof.gipa.final_A.clone());
+    right.push(proof.gipa.final_b.clone());
+    out.mul_assign(&t);
+    // final_aB.1 = U = e(A,v2)e(w2,B)
+    left.push(proof.gipa.final_a.clone());
     right.push(fvkey.1.clone());
     left.push(fwkey.1.clone());
-    right.push(proof.gipa.final_B.clone());
-    out.mul_assign(&U);
+    right.push(proof.gipa.final_b.clone());
+    out.mul_assign(&u);
 
     // TODO check if doing one big miller loop is faster than doing the
     // three in parallels and combine
@@ -337,16 +295,12 @@ fn verify_tipp<E: Engine>(
         inner_product::pairing_miller_affine::<E>(&left, &right),
         out,
     );
-    println!(
-        "TIPA AB inner product: {}ms -> VERIFIED ? {}",
-        now.elapsed().as_millis(),
-        check.verify()
-    );
+    println!("TIPP inner product check: {}ms", now.elapsed().as_millis(),);
 
     let now = Instant::now();
     vtuple.merge(&wtuple);
     vtuple.merge(&check);
-    println!("TIPA AB merge : {}ms", now.elapsed().as_millis());
+    println!("TIPP merge : {}ms", now.elapsed().as_millis());
     vtuple
 }
 
@@ -357,8 +311,8 @@ fn verify_tipp<E: Engine>(
 /// between A and B. Challenges are returned in inverse order as well to avoid
 /// repeating the operation multiple times later on.
 fn gipa_verify_tipp<E: Engine>(
-    comm_AB: &commit::Output<E>,
-    Z: &E::Fqk,
+    comm_ab: &commit::Output<E>,
+    z: &E::Fqk,
     proof: &GipaTIPP<E>,
 ) -> (commit::Output<E>, E::Fqk, Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa verify TIPP");
@@ -374,8 +328,8 @@ fn gipa_verify_tipp<E: Engine>(
     // that can not be parallelized then we scale the commitments in a
     // parallelized way
     for (comms_ab, z_comm) in proof.comms.iter().zip(proof.z_vec.iter()) {
-        let ((T_l, U_l), (T_r, U_r)) = comms_ab;
-        let (Z_l, Z_r) = z_comm;
+        let ((t_l, u_l), (t_r, u_r)) = comms_ab;
+        let (z_l, z_r) = z_comm;
         // Fiat-Shamir challenge
         // TODO use same function as in proving
         let mut counter_nonce: usize = 0;
@@ -385,12 +339,12 @@ fn gipa_verify_tipp<E: Engine>(
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
 
             bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-            bincode::serialize_into(&mut hash_input, &T_l).expect("vec");
-            bincode::serialize_into(&mut hash_input, &U_l).expect("vec");
-            bincode::serialize_into(&mut hash_input, &T_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &U_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
+            bincode::serialize_into(&mut hash_input, &t_l).expect("vec");
+            bincode::serialize_into(&mut hash_input, &u_l).expect("vec");
+            bincode::serialize_into(&mut hash_input, &t_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &u_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &z_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &z_l).expect("vec");
 
             let d = Sha256::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -407,14 +361,14 @@ fn gipa_verify_tipp<E: Engine>(
     }
 
     println!(
-        "TIPA AB: challenge gen took {}ms",
+        "TIPP verify: gipa challenge gen took {}ms",
         now.elapsed().as_millis()
     );
 
     let now = Instant::now();
     // paper names the output of the pair commitment T and U in TIPP
-    let (mut T, mut U) = comm_AB.clone();
-    let mut Z = Z.clone();
+    let (mut t, mut u) = comm_ab.clone();
+    let mut z = z.clone();
 
     // we first multiply each entry of the Z U and L vectors by the respective
     // challenges independently - step 3.4.1 (b) of paper.
@@ -424,51 +378,52 @@ fn gipa_verify_tipp<E: Engine>(
         .zip(proof.z_vec.par_iter())
         .zip(challenges.par_iter())
         .zip(challenges_inv.par_iter())
-        .map(|((((C_l, C_r), (Z_l, Z_r)), c), c_inv)| {
-            let (T_l, U_l) = C_l;
-            let (T_r, U_r) = C_r;
+        .map(|((((c_l, c_r), (z_l, z_r)), c), c_inv)| {
+            let (t_l, u_l) = c_l;
+            let (t_r, u_r) = c_r;
             let c_repr = c.into_repr();
             let c_inv_repr = c_inv.into_repr();
             (
-                T_l.pow(c_repr),
-                T_r.pow(c_inv_repr),
-                U_l.pow(c_repr),
-                U_r.pow(c_inv_repr),
-                Z_l.pow(c_repr),
-                Z_r.pow(c_inv_repr),
+                t_l.pow(c_repr),
+                t_r.pow(c_inv_repr),
+                u_l.pow(c_repr),
+                u_r.pow(c_inv_repr),
+                z_l.pow(c_repr),
+                z_r.pow(c_inv_repr),
             )
         })
         .collect();
-    println!("TIPA AB: prep took {}ms", now.elapsed().as_millis());
-
-    let now = Instant::now();
-
-    for (T_l_c, T_r_cinv, U_l_c, U_l_cinv, Z_l_c, Z_l_cinv) in prep.iter() {
-        // T = T_l^x . T . T_r^{x^-1}
-        T.mul_assign(T_l_c);
-        T.mul_assign(T_r_cinv);
-
-        // U = U_l^x . U . U_r^{x-1}
-        U.mul_assign(U_l_c);
-        U.mul_assign(U_l_cinv);
-
-        // Z = Z_l^x . Z . Z_r^{x^-1}
-        Z.mul_assign(Z_l_c);
-        Z.mul_assign(Z_l_cinv);
-    }
-    println!("TIPA AB: recursive took {}ms", now.elapsed().as_millis());
-    let now = Instant::now();
     println!(
-        "TIPA AB: reversed challenges took {}ms",
+        "TIPP verify: gipa prep took {}ms",
         now.elapsed().as_millis()
     );
-    ((T, U), Z, challenges, challenges_inv)
+
+    let now = Instant::now();
+
+    for (t_l_c, t_r_cinv, u_l_c, u_l_cinv, z_l_c, z_l_cinv) in prep.iter() {
+        // T = t_l^x . T . t_r^{x^-1}
+        t.mul_assign(t_l_c);
+        t.mul_assign(t_r_cinv);
+
+        // U = u_l^x . U . u_r^{x-1}
+        u.mul_assign(u_l_c);
+        u.mul_assign(u_l_cinv);
+
+        // Z = z_l^x . Z . z_r^{x^-1}
+        z.mul_assign(z_l_c);
+        z.mul_assign(z_l_cinv);
+    }
+    println!(
+        "TIPP verify: gipa recursive took {}ms",
+        now.elapsed().as_millis()
+    );
+    ((t, u), z, challenges, challenges_inv)
 }
 
 /// verify_kzg_opening_g2 takes a KZG opening, the final commitment key, SRS and
 /// any shift (in TIPP we shift the v commitment by r^-1) and returns a pairing
 /// tuple to check if the opening is correct or not.
-/// TODO potential optimization to avoid doing too many operation in Fqk
+/// TODO optimization to do all in one miller loop maybe
 pub fn verify_kzg_opening_g2<E: Engine>(
     v_srs: &VerifierSRS<E>,
     final_vkey: &(E::G2Affine, E::G2Affine),
@@ -476,7 +431,6 @@ pub fn verify_kzg_opening_g2<E: Engine>(
     challenges: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
-    debug: bool,
 ) -> PairingTuple<E> {
     // f_v(z)
     let vpoly_eval_z =
@@ -504,12 +458,6 @@ pub fn verify_kzg_opening_g2<E: Engine>(
     )]);
     // inverse so p1^-1 * p2 == 1
     let ip1 = p1.inverse().unwrap();
-    if debug {
-        let mut t1 = PairingTuple::<E>::from_miller(ip1);
-        let t2 = PairingTuple::<E>::from_miller(p2);
-        t1.merge(&t2);
-        println!("@@@@@ Debug KZG t.valid() ? {}", t1.verify());
-    }
 
     // verify second part of opening - v2 - similar but changing secret exponent
     // e(g, v2 h^{-bf_v(z)})
@@ -595,17 +543,17 @@ pub fn verify_kzg_opening_g1<E: Engine>(
 
 fn verify_mipp<E: Engine>(
     v_srs: &VerifierSRS<E>,
-    com_C: &commit::Output<E>, // original (T,U) = CM(v1,v2,C) - is rescaled in gipa verify
-    agg_C: &E::G1,             // original Z = C^r - is rescaled in gipa verify
+    com_c: &commit::Output<E>, // original (T,U) = CM(v1,v2,C) - is rescaled in gipa verify
+    agg_c: &E::G1,             // original Z = C^r - is rescaled in gipa verify
     proof: &MIPPProof<E>,
 ) -> PairingTuple<E> {
     info!("verify with structured scalar message");
     let now = Instant::now();
-    let (com_TU, com_Z, mut challenges, mut challenges_inv) =
-        gipa_verify_mipp(com_C, agg_C, &proof.gipa);
+    let (com_tu, com_z, mut challenges, mut challenges_inv) =
+        gipa_verify_mipp(com_c, agg_c, &proof.gipa);
 
     println!(
-        "TIPA AB: gipa mipp verification took {}ms",
+        "MIPP verify: gipa mipp verification took {}ms",
         now.elapsed().as_millis()
     );
     let now = Instant::now();
@@ -633,32 +581,24 @@ fn verify_mipp<E: Engine>(
         counter_nonce += 1;
     };
 
-    println!(" +++ MIPP - verify: challenges {:?}", challenges);
-    println!(" +++ MIPP - verify: c {:?}", c);
-
     println!(
-        "TIPA AB: mipp verification challenge took {}ms",
+        "MIPP verify: mipp verification challenge took {}ms",
         now.elapsed().as_millis()
     );
     let now = Instant::now();
 
     // final rescaled T U Z
-    let (T, U) = com_TU;
+    let (t, u) = com_tu;
 
     // final c from proof
-    let final_C = proof.gipa.final_C.clone();
+    let final_c = proof.gipa.final_c.clone();
     let final_r = proof.gipa.final_r.clone();
 
     // Verify base inner product commitment
     // Z ==  c ^ r
-    let now = Instant::now();
-    let final_Z = inner_product::multiexponentiation::<E::G1Affine>(&[final_C], &[final_r]);
-    let b = final_Z == com_Z;
-    println!(
-        "MIPP: check Z took {}ms -> valid Z ? {}",
-        now.elapsed().as_millis(),
-        b
-    );
+    let final_z = inner_product::multiexponentiation::<E::G1Affine>(&[final_c], &[final_r]);
+    let b = final_z == com_z;
+    println!("MIPP: check Z took {}ms", now.elapsed().as_millis(),);
     // only check that doesn't require pairing so we can give a tuple that will
     // render the equation wrong in case it's false
     if !b {
@@ -674,13 +614,8 @@ fn verify_mipp<E: Engine>(
         &challenges_inv,
         &E::Fr::one(),
         &c,
-        false,
     );
-    println!(
-        "MIPP: check KZG took {}ms -> verified ? {}",
-        now.elapsed().as_millis(),
-        vtuple.verify()
-    );
+    println!("MIPP: check KZG took {}ms", now.elapsed().as_millis(),);
     let now = Instant::now();
 
     // Check commiment correctness 4.2.2
@@ -688,51 +623,26 @@ fn verify_mipp<E: Engine>(
     let mut right = Vec::new();
     let mut out = E::Fqk::one();
     // T = e(C,v1)
-    left.push(final_C.clone());
+    left.push(final_c.clone());
     right.push(final_vkey.0);
-    out.mul_assign(&T);
-    {
-        let miller_out = inner_product::pairing_miller_affine::<E>(&left, &right);
-        let pair = PairingTuple::<E>::from_pair(miller_out, out);
-        println!(
-            " ------------MIPP - verify: vssm check took {}ms --> T CORRECT? {}",
-            now.elapsed().as_millis(),
-            pair.verify()
-        );
-        left.clear();
-        right.clear();
-        out = E::Fqk::one();
-        // U = e(A,v2)
-        left.push(final_C.clone());
-        right.push(final_vkey.1);
-        out.mul_assign(&U);
-        let miller_out = inner_product::pairing_miller_affine::<E>(&left, &right);
-        let pair = PairingTuple::<E>::from_pair(miller_out, out);
-        println!(
-            "-------------MIPP - verify: check  U=e(A,v2) took {}ms -> verified {}",
-            now.elapsed().as_millis(),
-            pair.verify()
-        );
-    }
+    out.mul_assign(&t);
     // U = e(A,v2)
-    left.push(final_C.clone());
+    left.push(final_c.clone());
     right.push(final_vkey.1);
-    out.mul_assign(&U);
+    out.mul_assign(&u);
 
     let miller_out = inner_product::pairing_miller_affine::<E>(&left, &right);
     let pair = PairingTuple::from_pair(miller_out, out);
     println!(
-        "MIPP - verify: check  U=e(A,v2) took {}ms -> verified {}",
+        "MIPP verify: check  inner product T & U took {}ms",
         now.elapsed().as_millis(),
-        pair.verify()
     );
 
     let now = Instant::now();
     vtuple.merge(&pair);
     println!(
-        " ---- MIPP: final merge took {}ms -- end verify? {}",
+        "MIPP verify: final merge took {}ms",
         now.elapsed().as_millis(),
-        vtuple.verify()
     );
     vtuple
 }
@@ -740,15 +650,15 @@ fn verify_mipp<E: Engine>(
 /// gipa_verify_mipp returns the final reconstructed Z T U values, as described
 /// in section 4.2.1 as well as all challenges generated.
 fn gipa_verify_mipp<E: Engine>(
-    com_C: &commit::Output<E>,
-    Z: &E::G1,
+    com_c: &commit::Output<E>,
+    z: &E::G1,
     proof: &GipaMIPP<E>,
 ) -> (commit::Output<E>, E::G1, Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa ssm verify recursive challenge challenges");
     let mut challenges = Vec::new();
     let mut challenges_inv = Vec::new();
 
-    for ((TU_l, TU_r), (Z_l, Z_r)) in proof.comms.iter().zip(proof.z_vec.iter()) {
+    for ((tu_l, tu_r), (z_l, z_r)) in proof.comms.iter().zip(proof.z_vec.iter()) {
         // Fiat-Shamir challenge
         // TODO use same code for prover and verifier
         let mut counter_nonce: usize = 0;
@@ -758,12 +668,12 @@ fn gipa_verify_mipp<E: Engine>(
             let mut hash_input = Vec::new();
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-            bincode::serialize_into(&mut hash_input, &TU_r.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &TU_r.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &TU_l.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &TU_l.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &Z_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &Z_l).expect("vec");
+            bincode::serialize_into(&mut hash_input, &tu_r.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &tu_r.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &tu_l.0).expect("vec");
+            bincode::serialize_into(&mut hash_input, &tu_l.1).expect("vec");
+            bincode::serialize_into(&mut hash_input, &z_r).expect("vec");
+            bincode::serialize_into(&mut hash_input, &z_l).expect("vec");
 
             let d = Sha256::digest(&hash_input);
             let c = fr_from_u128::<E::Fr>(d.as_slice());
@@ -779,8 +689,8 @@ fn gipa_verify_mipp<E: Engine>(
         challenges_inv.push(c_inv);
     }
 
-    let (mut comm_T, mut comm_U) = com_C.clone();
-    let mut Z = Z.clone();
+    let (mut comm_t, mut comm_u) = com_c.clone();
+    let mut z = z.clone();
 
     let now = Instant::now();
 
@@ -791,46 +701,46 @@ fn gipa_verify_mipp<E: Engine>(
         .zip(proof.z_vec.par_iter())
         .zip(challenges.par_iter())
         .zip(challenges_inv.par_iter())
-        .map(|((((C_l, C_r), (Z_l, Z_r)), c), c_inv)| {
-            let (T_l, U_l) = C_l;
-            let (T_r, U_r) = C_r;
+        .map(|((((c_l, c_r), (z_l, z_r)), c), c_inv)| {
+            let (t_l, u_l) = c_l;
+            let (t_r, u_r) = c_r;
             let c_repr = c.into_repr();
             let c_inv_repr = c_inv.into_repr();
 
-            // Z_l^x
-            let mut Z_l = Z_l.clone();
-            Z_l.mul_assign(c_repr);
-            // Z_r^{x^{-1}}
-            let mut Z_r = Z_r.clone();
-            Z_r.mul_assign(c_inv_repr);
+            // z_l^x
+            let mut z_l = z_l.clone();
+            z_l.mul_assign(c_repr);
+            // z_r^{x^{-1}}
+            let mut z_r = z_r.clone();
+            z_r.mul_assign(c_inv_repr);
 
-            // U_r^x  , U_l^x^-1
+            // u_r^x  , u_l^x^-1
             (
-                T_l.pow(c_repr),
-                U_l.pow(c_repr),
-                T_r.pow(c_inv_repr),
-                U_r.pow(c_inv_repr),
-                Z_l,
-                Z_r,
+                t_l.pow(c_repr),
+                u_l.pow(c_repr),
+                t_r.pow(c_inv_repr),
+                u_r.pow(c_inv_repr),
+                z_l,
+                z_r,
             )
         })
         .collect();
 
     println!(
-        "MIPP C: GIPA preparation took {}ms ({})",
+        "MIPP verify: gipa preparation took {}ms ({})",
         now.elapsed().as_millis(),
         prep.len()
     );
 
-    for (T_l_c, U_l_c, T_r_cinv, U_r_cinv, Z_l_c, Z_r_cinv) in prep.iter() {
-        comm_T.mul_assign(T_l_c);
-        comm_T.mul_assign(T_r_cinv);
-        comm_U.mul_assign(U_l_c);
-        comm_U.mul_assign(U_r_cinv);
+    for (t_l_c, u_l_c, t_r_cinv, u_r_cinv, z_l_c, z_c_cinv) in prep.iter() {
+        comm_t.mul_assign(t_l_c);
+        comm_t.mul_assign(t_r_cinv);
+        comm_u.mul_assign(u_l_c);
+        comm_u.mul_assign(u_r_cinv);
 
-        Z.add_assign(Z_l_c);
-        Z.add_assign(Z_r_cinv);
+        z.add_assign(z_l_c);
+        z.add_assign(z_c_cinv);
     }
 
-    ((comm_T, comm_U), Z, challenges, challenges_inv)
+    ((comm_t, comm_u), z, challenges, challenges_inv)
 }

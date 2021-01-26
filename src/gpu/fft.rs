@@ -7,6 +7,7 @@ use ff::Field;
 use log::info;
 use rust_gpu_tools::*;
 use std::cmp;
+use crate::gpu;
 
 const LOG2_MAX_ELEMENTS: usize = 32; // At most 2^32 elements is supported.
 const MAX_LOG2_RADIX: u32 = 8; // Radix256
@@ -27,7 +28,7 @@ impl<E> FFTKernel<E>
 where
     E: Engine,
 {
-    pub fn create(priority: bool) -> GPUResult<FFTKernel<E>> {
+    pub fn create(_ctxs: gpu::CudaUnownedCtxs, priority: bool) -> GPUResult<FFTKernel<E>> {
         let lock = locks::GPULock::lock();
 
         let devices = opencl::Device::all();

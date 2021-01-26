@@ -2,6 +2,7 @@ use fs2::FileExt;
 use log::{debug, info, warn};
 use std::fs::File;
 use std::path::PathBuf;
+use crate::gpu;
 
 const GPU_LOCK_NAME: &str = "bellman.gpu.lock";
 const PRIORITY_LOCK_NAME: &str = "bellman.priority.lock";
@@ -90,6 +91,7 @@ macro_rules! locked_kernel {
         {
             log_d: usize,
             priority: bool,
+            contexts: gpu::CudaUnownedCtxs,
             kernel: Option<$kern<E>>,
         }
 
@@ -97,10 +99,11 @@ macro_rules! locked_kernel {
         where
             E: Engine,
         {
-            pub fn new(log_d: usize, priority: bool) -> $class<E> {
+            pub fn new(contexts: gpu::CudaUnownedCtxs, log_d: usize, priority: bool) -> $class<E> {
                 $class::<E> {
                     log_d,
                     priority,
+                    contexts,
                     kernel: None,
                 }
             }
@@ -109,7 +112,7 @@ macro_rules! locked_kernel {
                 if self.kernel.is_none() {
                     PriorityLock::wait(self.priority);
                     info!("GPU is available for {}!", $name);
-                    self.kernel = $func::<E>(self.log_d, self.priority);
+                    self.kernel = $func::<E>(self.contexts.clone(), self.log_d, self.priority);
                 }
             }
 

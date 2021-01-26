@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use crate::bls::Engine;
 use ff::{Field, PrimeField};
@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 use super::{ParameterSource, Proof};
 use crate::domain::{EvaluationDomain, Scalar};
-use crate::gpu::{LockedFFTKernel, LockedMultiexpKernel};
+use crate::gpu::{LockedFFTKernel, LockedMultiexpKernel, CudaCtxs, CudaUnownedCtxs};
 use crate::multicore::{Worker, THREAD_POOL};
 use crate::multiexp::{multiexp, DensityTracker, FullDensity};
 use crate::{
@@ -287,6 +287,7 @@ where
     E: Engine,
     C: Circuit<E> + Send,
 {
+    println!("{:?} starting circuit synthesis", SystemTime::now());
     let mut provers = circuits
         .into_par_iter()
         .map(|circuit| -> Result<_, SynthesisError> {
@@ -303,6 +304,7 @@ where
             Ok(prover)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    println!("{:?} circuit synthesis done", SystemTime::now());
 
     // Start fft/multiexp prover timer
     let start = Instant::now();
@@ -334,7 +336,9 @@ where
         None
     };
 
-    let mut fft_kern = Some(LockedFFTKernel::<E>::new(log_d, priority));
+    let cuda_ctxs = CudaCtxs::create().unwrap();
+    let cuda_unowned_ctxs = CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
+    let mut fft_kern = Some(LockedFFTKernel::<E>::new(cuda_unowned_ctxs.clone(), log_d, priority));
 
     let a_s = provers
         .iter_mut()
@@ -370,7 +374,8 @@ where
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
     drop(fft_kern);
-    let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
+
+    let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(cuda_unowned_ctxs, log_d, priority));
 
     let h_s = a_s
         .into_iter()
@@ -565,9 +570,9 @@ where
             },
         )
         .collect::<Result<Vec<_>, SynthesisError>>()?;
-
+    
     let proof_time = start.elapsed();
-    info!("prover time: {:?}", proof_time);
+    println!("prover time: {:?}", proof_time);
 
     Ok(proofs)
 }

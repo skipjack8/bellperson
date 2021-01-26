@@ -314,6 +314,9 @@ where
         }) {
             return Waiter::done(Ok(p));
         }
+        // TODO: For testing only
+        println!("GPU error!!");
+        panic!();
     }
 
     let c = if exponents.len() < 32 {
@@ -393,11 +396,11 @@ fn test_with_bls12() {
     assert_eq!(naive, fast);
 }
 
-pub fn create_multiexp_kernel<E>(_log_d: usize, priority: bool) -> Option<gpu::MultiexpKernel<E>>
+pub fn create_multiexp_kernel<E>(contexts: gpu::CudaUnownedCtxs, _log_d: usize, priority: bool) -> Option<gpu::MultiexpKernel<E>>
 where
     E: crate::bls::Engine,
 {
-    match gpu::MultiexpKernel::<E>::create(priority) {
+    match gpu::MultiexpKernel::<E>::create(contexts, priority) {
         Ok(k) => {
             info!("GPU Multiexp kernel instantiated!");
             Some(k)
@@ -420,7 +423,9 @@ pub fn gpu_multiexp_consistency() {
 
     const MAX_LOG_D: usize = 16;
     const START_LOG_D: usize = 10;
-    let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(MAX_LOG_D, false));
+    let cuda_ctxs = gpu::CudaCtxs::create().unwrap(); // TODO: need to drop!
+    let cuda_unowned_ctxs = gpu::CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
+    let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(cuda_unowned_ctxs, MAX_LOG_D, false));
     let pool = Worker::new();
 
     let rng = &mut rand::thread_rng();

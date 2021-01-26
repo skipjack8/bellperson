@@ -140,6 +140,10 @@
 #[macro_use]
 extern crate hex_literal;
 
+#[macro_use]
+extern crate rustacuda;
+extern crate rustacuda_core;
+
 pub mod bls;
 pub mod domain;
 pub mod gadgets;

@@ -13,9 +13,25 @@ use rust_gpu_tools::*;
 use std::any::TypeId;
 use std::sync::Arc;
 
+use rustacuda::prelude::*;
+use crate::rustacuda::memory::AsyncCopyDestination;
+use std::ffi::CStr;
+use lazy_static::lazy_static;
+
 const MAX_WINDOW_SIZE: usize = 10;
 const LOCAL_WORK_SIZE: usize = 256;
 const MEMORY_PADDING: f64 = 0.2f64; // Let 20% of GPU memory be free
+
+fn gpu_init() -> bool {
+    match rustacuda::init(CudaFlags::empty()) {
+        Ok(()) => return true,
+        Err(_e) => return false,
+    }
+}
+
+lazy_static! {
+    static ref GPU_INIT_RESULT: bool = gpu_init();
+}
 
 pub fn get_cpu_utilization() -> f64 {
     use std::env;
@@ -207,12 +223,263 @@ where
     }
 }
 
+pub struct CudaCtx {
+    context: rustacuda::context::Context,
+    device:rustacuda::device::Device,
+}
+
+pub struct CudaCtxs {
+    contexts: Vec<CudaCtx>,
+}
+
+#[derive(Clone)]
+pub struct CudaUnownedCtx {
+    context: rustacuda::context::UnownedContext,
+    device:rustacuda::device::Device,
+}
+
+pub struct CudaUnownedCtxs {
+    contexts: Vec<CudaUnownedCtx>,
+}
+
+impl CudaCtxs
+{
+    pub fn create() -> rustacuda::error::CudaResult<CudaCtxs> {
+        if !*GPU_INIT_RESULT {
+            return Err(rustacuda::error::CudaError::NotInitialized);
+        }
+        
+        let mut contexts = vec![];
+        for device in Device::devices()? {
+            let device = device?;
+            let ctx =
+                Context::create_and_push(ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO, device)?;
+            rustacuda::context::ContextStack::pop()?;
+            contexts.push(CudaCtx {
+                context: ctx,
+                device: device,
+            });
+        }
+        
+        Ok(CudaCtxs {
+            contexts: contexts,
+        })
+    }
+}
+
+impl CudaUnownedCtxs
+{
+    pub fn clone(&self) -> CudaUnownedCtxs {
+        CudaUnownedCtxs {
+            contexts: self.contexts.clone(), // TODO: this is probably not the right thing to do!
+        }
+    }
+    pub fn create(ctxs: &CudaCtxs) -> rustacuda::error::CudaResult<CudaUnownedCtxs> {
+        let mut contexts = vec![];
+        for ctx in &ctxs.contexts {
+            contexts.push(CudaUnownedCtx {
+                context: ctx.context.get_unowned(),
+                device: ctx.device.clone(),
+            });
+        }
+        
+        Ok(CudaUnownedCtxs {
+            contexts: contexts,
+        })
+    }
+}
+
+pub struct SingleMultiexpKernelCuda<E>
+where
+    E: Engine,
+{
+    // This should be allocated per device and can be shared across multiple threads
+    name: String,
+    context: CudaUnownedCtx,
+    module: rustacuda::module::Module,
+
+    core_count: usize,
+    n: usize,
+
+    priority: bool,
+    _phantom: std::marker::PhantomData<E::Fr>,
+}
+
+unsafe impl<E> Send for SingleMultiexpKernelCuda<E> where E: Engine {}
+unsafe impl<E> Sync for SingleMultiexpKernelCuda<E> where E: Engine {}
+unsafe impl Send for CudaUnownedCtx {}
+unsafe impl Sync for CudaUnownedCtx {}
+
+impl<E> SingleMultiexpKernelCuda<E>
+where
+    E: Engine,
+{
+    pub fn create(ctx: CudaUnownedCtx, priority: bool) -> GPUResult<SingleMultiexpKernelCuda<E>> {
+        // TODO: how to handle the path??
+        // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp.cu -o multiexp.cubin)
+        let src = CStr::from_bytes_with_nul(
+            b"/home/simon/src/filecoin/proving/baseline_1_13_2021_cuda/bellman-rustacuda/src/gpu/multiexp/multiexp.cubin\0").unwrap();
+
+        let exp_bits = exp_size::<E>() * 8;
+        //let core_count = utils::get_core_count(&d); TODO
+        let core_count = 4352;
+        let mem = ctx.device.total_memory().unwrap() as u64;
+        let max_n = calc_chunk_size::<E>(mem, core_count);
+        let best_n = calc_best_chunk_size(MAX_WINDOW_SIZE, core_count, exp_bits);
+        let n = std::cmp::min(max_n, best_n);
+
+        rustacuda::context::CurrentContext::set_current(&ctx.context).unwrap();
+
+        Ok(SingleMultiexpKernelCuda {
+            name: ctx.device.name().unwrap(),
+            context: ctx,
+            module: rustacuda::module::Module::load_from_file(src).unwrap(), // TODO: error handling
+            core_count,
+            n,
+            priority,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    pub fn multiexp<G>(
+        &mut self,
+        bases: &[G],
+        exps: &[<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr],
+        n: usize,
+    ) -> GPUResult<<G as CurveAffine>::Projective>
+    where
+        G: CurveAffine,
+    {
+        if locks::PriorityLock::should_break(self.priority) {
+            return Err(GPUError::GPUTaken);
+        }
+
+        let exp_bits = exp_size::<E>() * 8;
+        let window_size = calc_window_size(n as usize, exp_bits, self.core_count);
+        let num_windows = ((exp_bits as f64) / (window_size as f64)).ceil() as usize;
+        let num_groups = calc_num_groups(self.core_count, num_windows);
+        let bucket_len = 1 << window_size;
+
+        // Each group will have `num_windows` threads and as there are `num_groups` groups, there will
+        // be `num_groups` * `num_windows` threads in total.
+        // Each thread will use `num_groups` * `num_windows` * `bucket_len` buckets.
+
+        rustacuda::context::CurrentContext::set_current(&self.context.context).unwrap();
+
+        let stream = rustacuda::stream::Stream::new(StreamFlags::NON_BLOCKING, None).unwrap();
+        let module = &self.module;
+
+        let bbases = unsafe {
+                &*(bases as *const [G]
+                    as *const [u8])
+            };
+        let base_bytes = std::mem::size_of::<G>() * n;
+        let mut base_buffer_g;
+        unsafe {
+            base_buffer_g = rustacuda::memory::DeviceBuffer::<u8>::uninitialized(base_bytes).unwrap();
+            base_buffer_g.async_copy_from(bbases, &stream).unwrap();
+        };
+
+        let bexps = unsafe {
+            std::mem::transmute::<
+                    &[<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr],
+                &[u8],
+                >(exps)
+        };
+        let exp_bytes = std::mem::size_of::<<G::Engine as ScalarEngine>::Fr>() * n;
+        let mut exp_buffer_g;
+        unsafe {
+            exp_buffer_g = rustacuda::memory::DeviceBuffer::<u8>::uninitialized(exp_bytes).unwrap();
+            exp_buffer_g.async_copy_from(bexps, &stream).unwrap();
+        }
+
+        // Buckets are device side only
+        let bucket_bytes = 2 * self.core_count * bucket_len *
+            std::mem::size_of::<<G as CurveAffine>::Projective>();
+        let mut bucket_buffer_g;
+        unsafe {
+            bucket_buffer_g =
+                rustacuda::memory::DeviceBuffer::<u8>::uninitialized(bucket_bytes).unwrap();
+        };
+        let result_bytes = 2 * self.core_count * std::mem::size_of::<<G as CurveAffine>::Projective>();
+        let mut result_buffer_g;
+        unsafe {
+            result_buffer_g =
+                rustacuda::memory::DeviceBuffer::<u8>::uninitialized(result_bytes).unwrap();
+        };
+
+        // Make global work size divisible by `LOCAL_WORK_SIZE`
+        let global_work_size = (num_windows * num_groups + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
+
+        unsafe {
+            if TypeId::of::<G>() == TypeId::of::<E::G1Affine>() {
+                launch!(
+                    module.g1_bellman_multiexp<<<global_work_size as u32,
+                                                 LOCAL_WORK_SIZE as u32,
+                                                 0, stream>>>
+                        (base_buffer_g.as_device_ptr(),
+                         bucket_buffer_g.as_device_ptr(),
+                         result_buffer_g.as_device_ptr(),
+                         exp_buffer_g.as_device_ptr(),
+                         n as u32,
+                         num_groups as u32,
+                         num_windows as u32,
+                         window_size as u32
+                        )).unwrap();
+            } else if TypeId::of::<G>() == TypeId::of::<E::G2Affine>() {
+                launch!(
+                    module.g2_bellman_multiexp<<<global_work_size as u32,
+                                                 LOCAL_WORK_SIZE as u32,
+                                                 0, stream>>>
+                        (base_buffer_g.as_device_ptr(),
+                         bucket_buffer_g.as_device_ptr(),
+                         result_buffer_g.as_device_ptr(),
+                         exp_buffer_g.as_device_ptr(),
+                         n as u32,
+                         num_groups as u32,
+                         num_windows as u32,
+                         window_size as u32
+                        )).unwrap();
+            } else {
+                return Err(GPUError::Simple("Only E::G1 and E::G2 are supported!"));
+            }
+        };
+
+        let mut results = vec![<G as CurveAffine>::Projective::zero(); 2 * self.core_count];
+        let bresults = unsafe {
+            &mut *(&mut results as *mut Vec<<G as CurveAffine>::Projective>
+                   as *mut Vec<u8>)
+        };
+        unsafe {
+            result_buffer_g.async_copy_to(bresults, &stream).unwrap();
+        }
+        stream.synchronize().unwrap();
+        
+        // Using the algorithm below, we can calculate the final result by accumulating the results
+        // of those `NUM_GROUPS` * `NUM_WINDOWS` threads.
+        let mut acc = <G as CurveAffine>::Projective::zero();
+        let mut bits = 0;
+        for i in 0..num_windows {
+            let w = std::cmp::min(window_size, exp_bits - bits);
+            for _ in 0..w {
+                acc.double();
+            }
+            for g in 0..num_groups {
+                acc.add_assign(&results[g * num_windows + i]);
+            }
+            bits += w; // Process the next window
+        }
+
+        Ok(acc)
+    }
+}
+
 // A struct that containts several multiexp kernels for different devices
 pub struct MultiexpKernel<E>
 where
     E: Engine,
 {
-    kernels: Vec<SingleMultiexpKernel<E>>,
+    kernels: Vec<SingleMultiexpKernelCuda<E>>,
     _lock: locks::GPULock, // RFC 1857: struct fields are dropped in the same order as they are declared.
 }
 
@@ -220,19 +487,17 @@ impl<E> MultiexpKernel<E>
 where
     E: Engine,
 {
-    pub fn create(priority: bool) -> GPUResult<MultiexpKernel<E>> {
+    pub fn create(ctxs: CudaUnownedCtxs, priority: bool) -> GPUResult<MultiexpKernel<E>> {
         let lock = locks::GPULock::lock();
 
-        let devices = opencl::Device::all();
-
-        let kernels: Vec<_> = devices
+        let kernels: Vec<_> = ctxs.contexts
             .into_iter()
-            .map(|d| (d, SingleMultiexpKernel::<E>::create(d.clone(), priority)))
+            .map(|ctx| (ctx.device.clone(), SingleMultiexpKernelCuda::<E>::create(ctx, priority)))
             .filter_map(|(device, res)| {
                 if let Err(ref e) = res {
                     error!(
                         "Cannot initialize kernel for device '{}'! Error: {}",
-                        device.name(),
+                        device.name().unwrap(),
                         e
                     );
                 }
@@ -252,7 +517,7 @@ where
             info!(
                 "Multiexp: Device {}: {} (Chunk-size: {})",
                 i,
-                k.program.device().name(),
+                k.name,
                 k.n
             );
         }

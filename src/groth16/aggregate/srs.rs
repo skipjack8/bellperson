@@ -12,20 +12,20 @@ use rayon::prelude::*;
 pub struct SRS<E: Engine> {
     /// number of proofs to aggregate
     pub n: usize,
-    /// $\{g^a^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
+    /// $\{g^a^i\}_{i=n+1}^{2n}$ where n is the number of proofs to be aggregated
     /// NOTE in practice we only need the first half of that - it may be worth
     /// doing the logic for that
     pub g_alpha_powers: Vec<E::G1Affine>,
     /// table starts at i=1 since base is offset with commitment keys - it's not g and h
     /// but g^a and h^a
     pub g_alpha_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
-    /// $\{h^a^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
+    /// $\{h^a^i\}_{i=0}^{n}$ where n is the number of proofs to be aggregated
     pub h_alpha_powers: Vec<E::G2Affine>,
     pub h_alpha_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
-    /// $\{g^b^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
+    /// $\{g^b^i\}_{i=n+1}^{2n}$ where n is the number of proofs to be aggregated
     pub g_beta_powers: Vec<E::G1Affine>,
     pub g_beta_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
-    /// $\{h^b^i\}_{i=0}^{2n}$ where n is the number of proofs to be aggregated
+    /// $\{h^b^i\}_{i=0}^{n}$ where n is the number of proofs to be aggregated
     pub h_beta_powers: Vec<E::G2Affine>,
     pub h_beta_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
 }
@@ -40,9 +40,9 @@ pub struct VerifierSRS<E: Engine> {
     pub h_alpha: E::G2,
     pub h_beta: E::G2,
     /// equals to $g^{alpha^{n+1}}$
-    pub g_alpha_n: E::G1,
+    pub g_alpha_n1: E::G1,
     /// equals to $g^{beta^{n+1}}$
-    pub g_beta_n: E::G1,
+    pub g_beta_n1: E::G1,
 }
 
 impl<E: Engine> SRS<E> {
@@ -55,14 +55,12 @@ impl<E: Engine> SRS<E> {
             .h_alpha_powers
             .iter()
             .skip(1) // skip the h
-            .take(self.n)
             .cloned()
             .collect::<Vec<_>>();
         let v2 = self
             .h_beta_powers
             .par_iter()
             .skip(1) // skip the h
-            .take(self.n)
             .cloned()
             .collect::<Vec<_>>();
         assert!(v1.len() == self.n);
@@ -75,39 +73,58 @@ impl<E: Engine> SRS<E> {
         let w1 = self
             .g_alpha_powers
             .par_iter()
-            .skip(self.n + 1)
+            .skip(1)
             .cloned()
             .collect::<Vec<_>>();
         let w2 = self
             .g_beta_powers
             .par_iter()
-            .skip(self.n + 1)
+            .skip(1)
             .cloned()
             .collect::<Vec<_>>();
         assert!(w1.len() == self.n);
         assert!(w2.len() == self.n);
         WKey::<E> { a: w1, b: w2 }
     }
-
-    pub fn get_verifier_key(&self) -> VerifierSRS<E> {
-        VerifierSRS {
-            g: self.g_alpha_powers[0].into_projective(),
-            h: self.h_beta_powers[0].into_projective(),
-            g_alpha: self.g_alpha_powers[1].into_projective(),
-            h_alpha: self.h_alpha_powers[1].into_projective(),
-            g_beta: self.g_beta_powers[1].into_projective(),
-            h_beta: self.h_beta_powers[1].into_projective(),
-            g_alpha_n: self.g_alpha_powers[1 + self.n].into_projective(),
-            g_beta_n: self.g_beta_powers[1 + self.n].into_projective(),
-        }
-    }
 }
 
-pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize) -> SRS<E> {
+pub fn setup_fake_srs<E: Engine, R: rand::RngCore>(
+    rng: &mut R,
+    size: usize,
+) -> (SRS<E>, VerifierSRS<E>) {
     let alpha = E::Fr::random(rng);
     let beta = E::Fr::random(rng);
     let g = E::G1::one();
     let h = E::G2::one();
+    let mut g_alpha = E::G1::one();
+    g_alpha.mul_assign(alpha.into_repr());
+    let mut h_alpha = E::G2::one();
+    h_alpha.mul_assign(alpha.into_repr());
+    let mut g_beta = E::G1::one();
+    g_beta.mul_assign(beta.into_repr());
+    let mut h_beta = E::G2::one();
+    h_beta.mul_assign(beta.into_repr());
+
+    let pow = |s: &E::Fr| -> E::Fr {
+        let mut t = s.clone();
+        for i in 0..size {
+            t.mul_assign(&s)
+        }
+        t
+    };
+    // alpha^n
+    // TODO replace via a call to pow that works..
+    //let alpha_n = alpha.pow(size as u64);
+    let alpha_n = pow(&alpha);
+    // beta^n
+    let beta_n = pow(&beta);
+    //let beta_n = beta.pow(size as u64);
+    // g^alpha^n
+    let mut g_alpha_n = E::G1::one();
+    g_alpha_n.mul_assign(alpha_n.into_repr());
+    // g^beta^n
+    let mut g_beta_n = E::G1::one();
+    g_beta_n.mul_assign(beta_n.into_repr());
 
     let mut g_alpha_powers = Vec::new();
     let mut g_beta_powers = Vec::new();
@@ -118,47 +135,68 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
         let alpha = &alpha;
         let h = &h;
         let beta = &beta;
-
+        let g_alpha_n = &g_alpha_n;
+        let g_beta_n = &g_beta_n;
         let g_alpha_powers = &mut g_alpha_powers;
         s.spawn(move |_| {
-            // +1 because we go to power 2n included and we start at power 0
-            *g_alpha_powers = structured_generators_scalar_power(2 * size + 1, g, alpha);
+            // +1 because we go to power 2n included and we start at power g^a^n
+            *g_alpha_powers = structured_generators_scalar_power(size + 1, g_alpha_n, alpha);
         });
         let g_beta_powers = &mut g_beta_powers;
         s.spawn(move |_| {
-            *g_beta_powers = structured_generators_scalar_power(2 * size + 1, g, beta);
+            *g_beta_powers = structured_generators_scalar_power(size + 1, g_beta_n, beta);
         });
 
         let h_alpha_powers = &mut h_alpha_powers;
         s.spawn(move |_| {
-            *h_alpha_powers = structured_generators_scalar_power(2 * size + 1, h, alpha);
+            *h_alpha_powers = structured_generators_scalar_power(size + 1, h, alpha);
         });
 
         let h_beta_powers = &mut h_beta_powers;
         s.spawn(move |_| {
-            *h_beta_powers = structured_generators_scalar_power(2 * size + 1, h, beta);
+            *h_beta_powers = structured_generators_scalar_power(size + 1, h, beta);
         });
     });
 
-    let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers[1 + size..], WINDOW_SIZE);
+    // we skip the first one since g^a^0 = g which is not part of the commitment
+    // key (i.e. we don't use it in the prover's code).
+    let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers[1..], WINDOW_SIZE);
     let h_beta_powers_table = precompute_fixed_window(&h_beta_powers[1..], WINDOW_SIZE);
-    let g_beta_powers_table = precompute_fixed_window(&g_beta_powers[1 + size..], WINDOW_SIZE);
+    let g_beta_powers_table = precompute_fixed_window(&g_beta_powers[1..], WINDOW_SIZE);
     let h_alpha_powers_table = precompute_fixed_window(&h_alpha_powers[1..], WINDOW_SIZE);
     assert!(h_alpha_powers[0] == E::G2::one().into_affine());
     assert!(h_beta_powers[0] == E::G2::one().into_affine());
-    assert!(g_alpha_powers[0] == E::G1::one().into_affine());
-    assert!(g_beta_powers[0] == E::G1::one().into_affine());
-    SRS {
-        n: size,
-        g_alpha_powers,
-        g_alpha_powers_table,
-        h_beta_powers,
-        h_beta_powers_table,
-        g_beta_powers,
-        g_beta_powers_table,
-        h_alpha_powers,
-        h_alpha_powers_table,
-    }
+    assert!(g_alpha_powers[0] == g_alpha_n.into_affine());
+    assert!(g_beta_powers[0] == g_beta_n.into_affine());
+    // g^alpha^{n+1}
+    let mut g_alpha_n1 = g_alpha_powers[1].clone();
+    // g^beta^{n+1}
+    let mut g_beta_n1 = g_beta_powers[1].clone();
+    let vk = VerifierSRS {
+        g,
+        h,
+        g_alpha,
+        g_beta,
+        h_alpha,
+        h_beta,
+        g_alpha_n1: g_alpha_n1.into_projective(),
+        g_beta_n1: g_beta_n1.into_projective(),
+    };
+
+    (
+        SRS {
+            n: size,
+            g_alpha_powers,
+            g_alpha_powers_table,
+            h_beta_powers,
+            h_beta_powers_table,
+            g_beta_powers,
+            g_beta_powers_table,
+            h_alpha_powers,
+            h_alpha_powers_table,
+        },
+        vk,
+    )
 }
 
 fn structured_generators_scalar_power<G: CurveProjective>(

@@ -4,7 +4,7 @@ use bellperson::bls::{Bls12, Engine, Fr, FrRepr};
 use bellperson::gadgets::num::AllocatedNum;
 use bellperson::groth16::{
     aggregate_proofs, create_random_proof, generate_random_parameters, prepare_verifying_key,
-    setup_inner_product, verify_aggregate_proof, verify_proof, verify_proofs_batch,
+    setup_fake_srs, verify_aggregate_proof, verify_proof, verify_proofs_batch,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use ff::{Field, PrimeField, ScalarEngine};
@@ -184,7 +184,7 @@ fn test_groth16_aggregation_min() {
     println!("Creating parameters...");
 
     // Generate parameters for inner product aggregation
-    let srs = setup_inner_product(&mut rng, NUM_PROOFS_TO_AGGREGATE);
+    let (srs, vk) = setup_fake_srs(&mut rng, NUM_PROOFS_TO_AGGREGATE);
 
     // Create parameters for our circuit
     let params = {
@@ -256,8 +256,7 @@ fn test_groth16_aggregation_min() {
 
     println!("Verifying aggregated proof...");
     let start = Instant::now();
-    let result =
-        verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &statements, &aggregate_proof);
+    let result = verify_aggregate_proof(&vk, &pvk, &statements, &aggregate_proof);
     let verifier_time = start.elapsed().as_millis();
     assert!(result.unwrap());
 
@@ -303,7 +302,7 @@ fn test_groth16_aggregation_mimc() {
     let pvk = prepare_verifying_key(&params.vk);
 
     // Generate parameters for inner product aggregation
-    let srs = setup_inner_product(rng, NUM_PROOFS_TO_AGGREGATE);
+    let (srs, vk) = setup_fake_srs(rng, NUM_PROOFS_TO_AGGREGATE);
 
     println!("Creating proofs...");
 
@@ -350,8 +349,7 @@ fn test_groth16_aggregation_mimc() {
 
     println!("Verifying aggregated proof...");
     let start = Instant::now();
-    let result =
-        verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &images, &aggregate_proof).unwrap();
+    let result = verify_aggregate_proof(&vk, &pvk, &images, &aggregate_proof).unwrap();
     let verifier_time = start.elapsed().as_millis();
     assert!(result);
 

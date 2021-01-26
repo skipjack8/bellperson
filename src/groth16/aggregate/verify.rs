@@ -503,7 +503,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
     let p1 = E::miller_loop(&[(
         &sub!(
             final_wkey.0.into_projective(),
-            &mul!(v_srs.g_alpha_n, wkey_poly_eval)
+            &mul!(v_srs.g_alpha_n1, wkey_poly_eval)
         )
         .into_affine()
         .prepare(),
@@ -523,7 +523,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
     let q1 = E::miller_loop(&[(
         &sub!(
             final_wkey.1.into_projective(),
-            &mul!(v_srs.g_beta_n, wkey_poly_eval)
+            &mul!(v_srs.g_beta_n1, wkey_poly_eval)
         )
         .into_affine()
         .prepare(),

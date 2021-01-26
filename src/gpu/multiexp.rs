@@ -317,9 +317,9 @@ where
     pub fn create(ctx: CudaUnownedCtx, priority: bool) -> GPUResult<SingleMultiexpKernelCuda<E>> {
         // TODO: how to handle the path??
         // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp.cu -o multiexp.cubin)
-        // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp32.cu -o multiexp.cubin)
+        // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp32.cu -o multiexp32.cubin)
         let src = CStr::from_bytes_with_nul(
-            b"/home/simon/src/filecoin/proving/baseline_1_13_2021_cuda/bellman-rustacuda/src/gpu/multiexp/multiexp.cubin\0").unwrap();
+            b"/home/simon/src/filecoin/proving/baseline_1_13_2021_cuda/bellman-rustacuda/src/gpu/multiexp/multiexp32.cubin\0").unwrap();
 
         let exp_bits = exp_size::<E>() * 8;
         //let core_count = utils::get_core_count(&d); TODO

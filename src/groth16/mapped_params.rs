@@ -11,6 +11,7 @@ use std::io;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+use rayon::prelude::*;
 
 use super::{ParameterSource, PreparedVerifyingKey, VerifyingKey};
 

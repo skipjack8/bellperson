@@ -287,6 +287,9 @@ where
     let input_len = input_assignments[0].len();
     let vk = params.get_vk(input_len)?.clone();
     let n = provers[0].a.len();
+    let a_aux_density_total = provers[0].a_aux_density.get_total_density();
+    let b_input_density_total = provers[0].b_input_density.get_total_density();
+    let b_aux_density_total = provers[0].b_aux_density.get_total_density();
 
     // Make sure all circuits have the same input len.
     for prover in &provers {
@@ -313,39 +316,66 @@ where
     let cuda_ctxs = CudaCtxs::create().unwrap();
     let cuda_unowned_ctxs = CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
     let mut fft_kern = Some(LockedFFTKernel::<E>::new(cuda_unowned_ctxs.clone(), log_d, priority));
+    let provers_len = provers.len();
 
-    let a_s = provers
-        .iter_mut()
-        .map(|prover| {
-            let mut a =
-                EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.a, Vec::new()))?;
-            let mut b =
-                EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.b, Vec::new()))?;
-            let mut c =
-                EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.c, Vec::new()))?;
-
-            a.ifft(&worker, &mut fft_kern)?;
-            a.coset_fft(&worker, &mut fft_kern)?;
-            b.ifft(&worker, &mut fft_kern)?;
-            b.coset_fft(&worker, &mut fft_kern)?;
-            c.ifft(&worker, &mut fft_kern)?;
-            c.coset_fft(&worker, &mut fft_kern)?;
-
-            a.mul_assign(&worker, &b);
-            drop(b);
-            a.sub_assign(&worker, &c);
-            drop(c);
-            a.divide_by_z_on_coset(&worker);
-            a.icoset_fft(&worker, &mut fft_kern)?;
-            let mut a = a.into_coeffs();
-            let a_len = a.len() - 1;
-            a.truncate(a_len);
-
-            Ok(Arc::new(
-                a.into_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>(),
-            ))
-        })
-        .collect::<Result<Vec<_>, SynthesisError>>()?;
+    let (a_s, params_result) = rayon::join(
+        || {
+            let a_s = provers
+                .iter_mut()
+                .map(|prover| {
+                    let mut a =
+                        EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.a, Vec::new()))?;
+                    let mut b =
+                        EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.b, Vec::new()))?;
+                    let mut c =
+                        EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.c, Vec::new()))?;
+                    
+                    a.ifft(&worker, &mut fft_kern)?;
+                    a.coset_fft(&worker, &mut fft_kern)?;
+                    b.ifft(&worker, &mut fft_kern)?;
+                    b.coset_fft(&worker, &mut fft_kern)?;
+                    c.ifft(&worker, &mut fft_kern)?;
+                    c.coset_fft(&worker, &mut fft_kern)?;
+                    
+                    a.mul_assign(&worker, &b);
+                    drop(b);
+                    a.sub_assign(&worker, &c);
+                    drop(c);
+                    a.divide_by_z_on_coset(&worker);
+                    a.icoset_fft(&worker, &mut fft_kern)?;
+                    let mut a = a.into_coeffs();
+                    let a_len = a.len() - 1;
+                    a.truncate(a_len);
+                    
+                    // Ok(Arc::new(
+                    //     a.into_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>(),
+                    // ))
+                    Ok(Arc::new(a.into_par_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>()))
+                })
+                .collect::<Result<Vec<_>, SynthesisError>>();
+            a_s
+        },
+        || {
+            // TODO: maybe it's best not to unwrap these, but I'm not sure how to handle errors
+            let params_h = params.get_h(n).unwrap();
+            let params_l = params.get_l(provers_len).unwrap();
+            let (a_inputs_source, a_aux_source) = params.get_a(input_len, a_aux_density_total).unwrap();
+            let (b_g1_inputs_source, b_g1_aux_source) =
+                params.get_b_g1(b_input_density_total, b_aux_density_total).unwrap();
+            let (b_g2_inputs_source, b_g2_aux_source) =
+                params.get_b_g2(b_input_density_total, b_aux_density_total).unwrap();
+            println!("{:?} params done", SystemTime::now());
+            (params_h, params_l,
+                a_inputs_source, a_aux_source,
+                b_g1_inputs_source, b_g1_aux_source,
+                b_g2_inputs_source, b_g2_aux_source)
+        },
+    );
+    let a_s = a_s?;
+    let (params_h, params_l,
+         a_inputs_source, a_aux_source,
+         b_g1_inputs_source, b_g1_aux_source,
+         b_g2_inputs_source, b_g2_aux_source) = params_result;
 
     drop(fft_kern);
 
@@ -356,7 +386,7 @@ where
         .map(|a| {
             let h = multiexp(
                 &worker,
-                params.get_h(a.len())?,
+                params_h.clone(),
                 FullDensity,
                 a,
                 &mut multiexp_kern,
@@ -370,7 +400,7 @@ where
         .map(|aux_assignment| {
             let l = multiexp(
                 &worker,
-                params.get_l(aux_assignment.len())?,
+                params_l.clone(),
                 FullDensity,
                 aux_assignment.clone(),
                 &mut multiexp_kern,
@@ -384,14 +414,9 @@ where
         .zip(input_assignments.iter())
         .zip(aux_assignments.iter())
         .map(|((prover, input_assignment), aux_assignment)| {
-            let a_aux_density_total = prover.a_aux_density.get_total_density();
-
-            let (a_inputs_source, a_aux_source) =
-                params.get_a(input_assignment.len(), a_aux_density_total)?;
-
             let a_inputs = multiexp(
                 &worker,
-                a_inputs_source,
+                a_inputs_source.clone(),
                 FullDensity,
                 input_assignment.clone(),
                 &mut multiexp_kern,
@@ -399,23 +424,18 @@ where
 
             let a_aux = multiexp(
                 &worker,
-                a_aux_source,
+                a_aux_source.clone(),
                 Arc::new(prover.a_aux_density),
                 aux_assignment.clone(),
                 &mut multiexp_kern,
             );
 
             let b_input_density = Arc::new(prover.b_input_density);
-            let b_input_density_total = b_input_density.get_total_density();
             let b_aux_density = Arc::new(prover.b_aux_density);
-            let b_aux_density_total = b_aux_density.get_total_density();
-
-            let (b_g1_inputs_source, b_g1_aux_source) =
-                params.get_b_g1(b_input_density_total, b_aux_density_total)?;
 
             let b_g1_inputs = multiexp(
                 &worker,
-                b_g1_inputs_source,
+                b_g1_inputs_source.clone(),
                 b_input_density.clone(),
                 input_assignment.clone(),
                 &mut multiexp_kern,
@@ -423,25 +443,22 @@ where
 
             let b_g1_aux = multiexp(
                 &worker,
-                b_g1_aux_source,
+                b_g1_aux_source.clone(),
                 b_aux_density.clone(),
                 aux_assignment.clone(),
                 &mut multiexp_kern,
             );
 
-            let (b_g2_inputs_source, b_g2_aux_source) =
-                params.get_b_g2(b_input_density_total, b_aux_density_total)?;
-
             let b_g2_inputs = multiexp(
                 &worker,
-                b_g2_inputs_source,
+                b_g2_inputs_source.clone(),
                 b_input_density,
                 input_assignment.clone(),
                 &mut multiexp_kern,
             );
             let b_g2_aux = multiexp(
                 &worker,
-                b_g2_aux_source,
+                b_g2_aux_source.clone(),
                 b_aux_density,
                 aux_assignment.clone(),
                 &mut multiexp_kern,

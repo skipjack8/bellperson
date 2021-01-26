@@ -9,8 +9,8 @@ use super::{
     commit::{VKey, WKey},
     inner_product,
     poly::DensePolynomial,
-    structured_scalar_power, AggregateProof, GipaMIPP, GipaTIPP, KZGOpening, MIPPProof, TIPPProof,
-    SRS,
+    structured_scalar_power, AggregateProof, GipaMIPP, GipaTIPP, KZGOpening, MIPPProof, PrecompSRS,
+    TIPPProof, SRS,
 };
 use crate::bls::Engine;
 use crate::groth16::{multiscalar::*, Proof};
@@ -26,6 +26,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     if !vkey.correct_len(proofs.len()) || !wkey.correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
     }
+    let comp = ip_srs.precompute();
 
     // We first commit to A B and C - these commitments are what the verifier
     // will use later to verify the TIPP and MIPP proofs - even though the TIPP
@@ -75,9 +76,9 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     // V^{r^{-1}}
     let vkey_r_inv = vkey.scale(&r_inv);
 
-    let tipa_proof_ab = prove_tipp::<E>(&ip_srs, &a_r, &b, &vkey_r_inv, &wkey, &r);
+    let tipa_proof_ab = prove_tipp::<E>(&comp, &a_r, &b, &vkey_r_inv, &wkey, &r);
     let tipa_proof_c = prove_mipp::<E>(
-        &ip_srs, &c, &r_vec,
+        &comp, &c, &r_vec,
         // v - note we dont use the rescaled here since we dont need the
         // trick as in AB - we just need to commit to C normally.
         &vkey,
@@ -103,7 +104,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 /// and B. In the context of Groth16 aggregation, we have that A = A^r and vkey
 /// is scaled by r^{-1}.
 fn prove_tipp<E: Engine>(
-    srs: &SRS<E>,
+    srs: &PrecompSRS<E>,
     a: &[E::G1Affine],
     b: &[E::G2Affine],
     vkey: &VKey<E>,
@@ -546,7 +547,7 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
 /// prove_mipp returns a GIPA and MIPP proof for proving statement Z = C^r
 /// and T = C * v. Section 4 in the paper.
 fn prove_mipp<E: Engine>(
-    srs: &SRS<E>,
+    srs: &PrecompSRS<E>,
     c: &[E::G1Affine],
     r: &[E::Fr],
     vkey: &VKey<E>,

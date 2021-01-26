@@ -12,21 +12,31 @@ use rayon::prelude::*;
 pub struct SRS<E: Engine> {
     /// number of proofs to aggregate
     pub n: usize,
-    /// $\{g^a^i\}_{i=n+1}^{2n}$ where n is the number of proofs to be aggregated
+    /// $\{g^a^i\}_{i=n}^{2n}$ where n is the number of proofs to be aggregated
     /// NOTE in practice we only need the first half of that - it may be worth
     /// doing the logic for that
     pub g_alpha_powers: Vec<E::G1Affine>,
+    /// $\{h^a^i\}_{i=0}^{n}$ where n is the number of proofs to be aggregated
+    pub h_alpha_powers: Vec<E::G2Affine>,
+    /// $\{g^b^i\}_{i=n}^{2n}$ where n is the number of proofs to be aggregated
+    pub g_beta_powers: Vec<E::G1Affine>,
+    /// $\{h^b^i\}_{i=0}^{n}$ where n is the number of proofs to be aggregated
+    pub h_beta_powers: Vec<E::G2Affine>,
+}
+
+/// PrecompSRS contains the precomputed tables from the SRS - call
+/// `srs.precompute()` to get it. It does starts at h^a and h^b and g^{a^{n+1}}
+/// and g^{b^{n+1}} unlike the SRS because that's what is only required for the
+/// prover.
+#[derive(Clone, Debug)]
+pub struct PrecompSRS<E: Engine> {
+    pub n: usize,
+    /// $\{g^a^i\}_{i=n+1}^{2n}$ where n is the number of proofs to be aggregated
     /// table starts at i=1 since base is offset with commitment keys - it's not g and h
     /// but g^a and h^a
     pub g_alpha_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
-    /// $\{h^a^i\}_{i=0}^{n}$ where n is the number of proofs to be aggregated
-    pub h_alpha_powers: Vec<E::G2Affine>,
     pub h_alpha_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
-    /// $\{g^b^i\}_{i=n+1}^{2n}$ where n is the number of proofs to be aggregated
-    pub g_beta_powers: Vec<E::G1Affine>,
     pub g_beta_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
-    /// $\{h^b^i\}_{i=0}^{n}$ where n is the number of proofs to be aggregated
-    pub h_beta_powers: Vec<E::G2Affine>,
     pub h_beta_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
 }
 
@@ -46,6 +56,17 @@ pub struct VerifierSRS<E: Engine> {
 }
 
 impl<E: Engine> SRS<E> {
+    pub fn precompute(&self) -> PrecompSRS<E> {
+        // we skip the first one since g^a^0 = g which is not part of the commitment
+        // key (i.e. we don't use it in the prover's code).
+        PrecompSRS {
+            n: self.n,
+            g_alpha_powers_table: precompute_fixed_window(&self.g_alpha_powers[1..], WINDOW_SIZE),
+            h_beta_powers_table: precompute_fixed_window(&self.h_beta_powers[1..], WINDOW_SIZE),
+            g_beta_powers_table: precompute_fixed_window(&self.g_beta_powers[1..], WINDOW_SIZE),
+            h_alpha_powers_table: precompute_fixed_window(&self.h_alpha_powers[1..], WINDOW_SIZE),
+        }
+    }
     pub fn get_commitment_keys(&self) -> (VKey<E>, WKey<E>) {
         (self.get_vkey(), self.get_wkey())
     }
@@ -158,12 +179,6 @@ pub fn setup_fake_srs<E: Engine, R: rand::RngCore>(
         });
     });
 
-    // we skip the first one since g^a^0 = g which is not part of the commitment
-    // key (i.e. we don't use it in the prover's code).
-    let g_alpha_powers_table = precompute_fixed_window(&g_alpha_powers[1..], WINDOW_SIZE);
-    let h_beta_powers_table = precompute_fixed_window(&h_beta_powers[1..], WINDOW_SIZE);
-    let g_beta_powers_table = precompute_fixed_window(&g_beta_powers[1..], WINDOW_SIZE);
-    let h_alpha_powers_table = precompute_fixed_window(&h_alpha_powers[1..], WINDOW_SIZE);
     assert!(h_alpha_powers[0] == E::G2::one().into_affine());
     assert!(h_beta_powers[0] == E::G2::one().into_affine());
     assert!(g_alpha_powers[0] == g_alpha_n.into_affine());
@@ -187,13 +202,9 @@ pub fn setup_fake_srs<E: Engine, R: rand::RngCore>(
         SRS {
             n: size,
             g_alpha_powers,
-            g_alpha_powers_table,
             h_beta_powers,
-            h_beta_powers_table,
             g_beta_powers,
-            g_beta_powers_table,
             h_alpha_powers,
-            h_alpha_powers_table,
         },
         vk,
     )

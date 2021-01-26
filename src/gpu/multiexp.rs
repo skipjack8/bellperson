@@ -317,6 +317,7 @@ where
     pub fn create(ctx: CudaUnownedCtx, priority: bool) -> GPUResult<SingleMultiexpKernelCuda<E>> {
         // TODO: how to handle the path??
         // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp.cu -o multiexp.cubin)
+        // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp32.cu -o multiexp.cubin)
         let src = CStr::from_bytes_with_nul(
             b"/home/simon/src/filecoin/proving/baseline_1_13_2021_cuda/bellman-rustacuda/src/gpu/multiexp/multiexp.cubin\0").unwrap();
 
@@ -414,7 +415,7 @@ where
         unsafe {
             if TypeId::of::<G>() == TypeId::of::<E::G1Affine>() {
                 launch!(
-                    module.g1_bellman_multiexp<<<global_work_size as u32,
+                    module.G1_bellman_multiexp<<<global_work_size as u32,
                                                  LOCAL_WORK_SIZE as u32,
                                                  0, stream>>>
                         (base_buffer_g.as_device_ptr(),
@@ -428,7 +429,7 @@ where
                         )).unwrap();
             } else if TypeId::of::<G>() == TypeId::of::<E::G2Affine>() {
                 launch!(
-                    module.g2_bellman_multiexp<<<global_work_size as u32,
+                    module.G2_bellman_multiexp<<<global_work_size as u32,
                                                  LOCAL_WORK_SIZE as u32,
                                                  0, stream>>>
                         (base_buffer_g.as_device_ptr(),

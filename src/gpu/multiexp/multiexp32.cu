@@ -596,6 +596,9 @@ DEVICE Fq Fq_add(Fq a, Fq b) {
   return res;
 }
 
+#ifdef NVIDIA  
+#include "fq_mul.cu"
+#else
 // Modular multiplication
 DEVICE Fq Fq_mul(Fq a, Fq b) {
   /* CIOS Montgomery multiplication, inspired from Tolga Acar's thesis:
@@ -629,7 +632,8 @@ DEVICE Fq Fq_mul(Fq a, Fq b) {
 
   return result;
 }
-
+#endif // NVIDIA
+  
 // Squaring is a special case of multiplication which can be done ~1.5x faster.
 // https://stackoverflow.com/a/16388571/1348497
 DEVICE Fq Fq_sqr(Fq a) {

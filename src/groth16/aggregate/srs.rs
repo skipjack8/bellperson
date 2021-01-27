@@ -75,10 +75,10 @@ pub struct VerifierSRS<E: Engine> {
 
 impl<E: Engine> PartialEq for GenericSRS<E> {
     fn eq(&self, other: &Self) -> bool {
-        self.g_alpha_powers.len() == other.g_alpha_powers.len()
-            && self.g_beta_powers.len() == other.g_beta_powers.len()
-            && self.h_alpha_powers.len() == other.g_alpha_powers.len()
-            && self.h_beta_powers.len() == other.h_beta_powers.len()
+        self.g_alpha_powers == other.g_alpha_powers
+            && self.g_beta_powers == other.g_beta_powers
+            && self.h_alpha_powers == other.h_alpha_powers
+            && self.h_beta_powers == other.h_beta_powers
     }
 }
 

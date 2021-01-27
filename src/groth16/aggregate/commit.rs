@@ -29,8 +29,8 @@ impl<G> Key<G>
 where
     G: CurveAffine,
 {
-    /// Returns true if both commitment keys have the same size as
-    /// the argument. It is necessary for the IPP scheme to work that commitment
+    /// Returns true if commitment keys have the exact required length.
+    /// It is necessary for the IPP scheme to work that commitment
     /// key have the exact same number of arguments as the number of proofs to
     /// aggregate.
     pub fn has_correct_len(&self, n: usize) -> bool {

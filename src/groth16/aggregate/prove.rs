@@ -9,8 +9,8 @@ use super::{
     commit::{VKey, WKey},
     inner_product,
     poly::DensePolynomial,
-    structured_scalar_power, AggregateProof, GipaMIPP, GipaTIPP, KZGOpening, MIPPProof, PrecompSRS,
-    TIPPProof, SRS,
+    structured_scalar_power, AggregateProof, GipaMIPP, GipaTIPP, KZGOpening, MIPPProof, ProverSRS,
+    TIPPProof,
 };
 use crate::bls::Engine;
 use crate::groth16::{multiscalar::*, Proof};
@@ -19,14 +19,12 @@ use crate::SynthesisError;
 /// Aggregate `n` zkSnark proofs, where `n` must be a power of two.
 /// It implements the algorithm section 5 of the paper.
 pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
-    ip_srs: &SRS<E>,
+    srs: &ProverSRS<E>,
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError> {
-    let (vkey, wkey) = ip_srs.get_commitment_keys();
-    if !vkey.has_correct_len(proofs.len()) || !wkey.has_correct_len(proofs.len()) {
+    if !srs.has_correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
     }
-    let comp = ip_srs.precompute();
 
     // We first commit to A B and C - these commitments are what the verifier
     // will use later to verify the TIPP and MIPP proofs - even though the TIPP
@@ -35,9 +33,9 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
     let b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
     // A and B are committed together in this scheme
-    let com_ab = commit::pair::<E>(&vkey, &wkey, &a, &b);
+    let com_ab = commit::pair::<E>(&srs.vkey, &srs.wkey, &a, &b);
     let c = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>();
-    let com_c = commit::single_g1::<E>(&vkey, &c);
+    let com_c = commit::single_g1::<E>(&srs.vkey, &c);
 
     // Random linear combination of proofs
     // TODO: extract logic in separate function (might require a macro for
@@ -74,20 +72,20 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .map(|(ai, ri)| mul!(ai.into_projective(), ri.into_repr()).into_affine())
         .collect::<Vec<_>>();
     // V^{r^{-1}}
-    let vkey_r_inv = vkey.scale(&r_inv);
+    let vkey_r_inv = srs.vkey.scale(&r_inv);
 
-    let tipa_proof_ab = prove_tipp::<E>(&comp, &a_r, &b, &vkey_r_inv, &wkey, &r);
+    let tipa_proof_ab = prove_tipp::<E>(&srs, &a_r, &b, &vkey_r_inv, &srs.wkey, &r);
     let tipa_proof_c = prove_mipp::<E>(
-        &comp, &c, &r_vec,
+        &srs, &c, &r_vec,
         // v - note we dont use the rescaled here since we dont need the
         // trick as in AB - we just need to commit to C normally.
-        &vkey,
+        &srs.vkey,
     );
     let ip_ab = inner_product::pairing::<E>(&a_r, &b);
     let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, &r_vec);
 
     // TODO - move assertion to a test - this is a property of the scheme
-    let computed_com_ab = commit::pair::<E>(&vkey_r_inv, &wkey, &a_r, &b);
+    let computed_com_ab = commit::pair::<E>(&vkey_r_inv, &srs.wkey, &a_r, &b);
     assert_eq!(com_ab, computed_com_ab);
 
     Ok(AggregateProof {
@@ -104,7 +102,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 /// and B. In the context of Groth16 aggregation, we have that A = A^r and vkey
 /// is scaled by r^{-1}.
 fn prove_tipp<E: Engine>(
-    srs: &PrecompSRS<E>,
+    srs: &ProverSRS<E>,
     a: &[E::G1Affine],
     b: &[E::G2Affine],
     vkey: &VKey<E>,
@@ -547,7 +545,7 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
 /// prove_mipp returns a GIPA and MIPP proof for proving statement Z = C^r
 /// and T = C * v. Section 4 in the paper.
 fn prove_mipp<E: Engine>(
-    srs: &PrecompSRS<E>,
+    srs: &ProverSRS<E>,
     c: &[E::G1Affine],
     r: &[E::Fr],
     vkey: &VKey<E>,

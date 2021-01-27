@@ -1,3 +1,5 @@
+use std::mem::size_of;
+
 use ff::PrimeField;
 use groupy::{CurveAffine, CurveProjective};
 use rayon::prelude::*;
@@ -44,6 +46,20 @@ pub struct MultiscalarPrecompOwned<G: CurveAffine> {
     window_mask: u64,
     table_entries: usize,
     tables: Vec<Vec<G>>,
+}
+
+impl<G: CurveAffine> PartialEq for MultiscalarPrecompOwned<G> {
+    fn eq(&self, other: &Self) -> bool {
+        self.num_points == other.num_points
+            && self.window_size == other.window_size
+            && self.window_mask == other.window_mask
+            && self.table_entries == other.table_entries
+            && self
+                .tables
+                .par_iter()
+                .zip(other.tables.par_iter())
+                .all(|(a, b)| a == b)
+    }
 }
 
 impl<G: CurveAffine> MultiscalarPrecomp<G> for MultiscalarPrecompOwned<G> {
@@ -145,7 +161,7 @@ pub fn multiscalar<G: CurveAffine>(
     precomp_table: &dyn MultiscalarPrecomp<G>,
     nbits: usize,
 ) -> G::Projective {
-    const BITS_PER_LIMB: usize = std::mem::size_of::<u64>() * 8;
+    const BITS_PER_LIMB: usize = size_of::<u64>() * 8;
     // TODO: support more bit sizes
     if nbits % precomp_table.window_size() != 0 || BITS_PER_LIMB % precomp_table.window_size() != 0
     {
@@ -500,7 +516,7 @@ mod tests {
                 let fast_result = multiscalar::<G1Affine>(
                     &scalars,
                     &table,
-                    std::mem::size_of::<<Fr as PrimeField>::Repr>() * 8,
+                    size_of::<<Fr as PrimeField>::Repr>() * 8,
                 );
 
                 assert_eq!(naive_result, fast_result);
@@ -531,7 +547,7 @@ mod tests {
                 let fast_result = par_multiscalar::<&Getter<G1Affine>, G1Affine>(
                     &ScalarList::Slice(&scalars),
                     &table,
-                    std::mem::size_of::<<Fr as PrimeField>::Repr>() * 8,
+                    size_of::<<Fr as PrimeField>::Repr>() * 8,
                 );
 
                 assert_eq!(naive_result, fast_result);

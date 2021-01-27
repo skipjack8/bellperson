@@ -19,9 +19,12 @@ pub use self::prove::*;
 pub use self::srs::*;
 pub use self::verify::*;
 
+/// Returns the vector used for the linear combination fo the inner pairing product
+/// between A and B for the Groth16 aggregation: A^r * B. It is required as it
+/// is not enough to simply prove the ipp of A*B, we need a random linear
+/// combination of those.
 fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     let mut powers = vec![F::one()];
-    //let mut powers = vec![s.clone()];
     for i in 1..num {
         powers.push(mul!(powers[i - 1], s));
     }

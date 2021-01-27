@@ -128,7 +128,7 @@ pub fn setup_fake_srs<E: Engine, R: rand::RngCore>(
 
     let pow = |s: &E::Fr| -> E::Fr {
         let mut t = s.clone();
-        for i in 0..size {
+        for _ in 0..size {
             t.mul_assign(&s)
         }
         t
@@ -152,7 +152,6 @@ pub fn setup_fake_srs<E: Engine, R: rand::RngCore>(
     let mut h_alpha_powers = Vec::new();
     let mut h_beta_powers = Vec::new();
     rayon::scope(|s| {
-        let g = &g;
         let alpha = &alpha;
         let h = &h;
         let beta = &beta;
@@ -184,9 +183,9 @@ pub fn setup_fake_srs<E: Engine, R: rand::RngCore>(
     assert!(g_alpha_powers[0] == g_alpha_n.into_affine());
     assert!(g_beta_powers[0] == g_beta_n.into_affine());
     // g^alpha^{n+1}
-    let mut g_alpha_n1 = g_alpha_powers[1].clone();
+    let g_alpha_n1 = g_alpha_powers[1].clone();
     // g^beta^{n+1}
-    let mut g_beta_n1 = g_beta_powers[1].clone();
+    let g_beta_n1 = g_beta_powers[1].clone();
     let vk = VerifierSRS {
         g,
         h,

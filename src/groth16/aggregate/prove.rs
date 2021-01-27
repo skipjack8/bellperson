@@ -23,7 +23,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError> {
     let (vkey, wkey) = ip_srs.get_commitment_keys();
-    if !vkey.correct_len(proofs.len()) || !wkey.correct_len(proofs.len()) {
+    if !vkey.has_correct_len(proofs.len()) || !wkey.has_correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
     }
     let comp = ip_srs.precompute();

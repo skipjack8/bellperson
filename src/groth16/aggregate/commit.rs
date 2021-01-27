@@ -15,12 +15,12 @@ pub struct Key<G: CurveAffine> {
     /// Exponent is b
     pub b: Vec<G>,
 }
-/// VKey is a commitment key used by the "single" commitment on G1 values as
+/// Commitment key used by the "single" commitment on G1 values as
 /// well as in the "pair" commtitment.
 /// It contains $\{h^a^i\}_{i=1}^n$ and $\{h^b^i\}_{i=1}^n$
 pub type VKey<E> = Key<<E as Engine>::G2Affine>;
 
-/// WKey is a commitment key used by the "pair" commitment. Note the sequence of
+/// Commitment key used by the "pair" commitment. Note the sequence of
 /// powers starts at $n$ already.
 /// It contains $\{g^{a^{n+i}}\}_{i=1}^n$ and $\{g^{b^{n+i}}\}_{i=1}^n$
 pub type WKey<E> = Key<<E as Engine>::G1Affine>;
@@ -29,11 +29,11 @@ impl<G> Key<G>
 where
     G: CurveAffine,
 {
-    /// correct_len returns true if both commitment keys have the same size as
+    /// Returns true if both commitment keys have the same size as
     /// the argument. It is necessary for the IPP scheme to work that commitment
     /// key have the exact same number of arguments as the number of proofs to
     /// aggregate.
-    pub fn correct_len(&self, n: usize) -> bool {
+    pub fn has_correct_len(&self, n: usize) -> bool {
         self.a.len() == n && self.b.len() == n
     }
 
@@ -101,7 +101,7 @@ where
     /// w1 and w2). When commitment key is of size one, it's a proxy to get the
     /// final values.
     pub fn first(&self) -> (G, G) {
-        assert!(self.a.len() == 1 && self.b.len() == 1);
+        assert!(self.has_correct_len(1));
         (self.a[0].clone(), self.b[0].clone())
     }
 }
@@ -114,9 +114,10 @@ pub type Output<E> = (<E as Engine>::Fqk, <E as Engine>::Fqk);
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})$
 /// Output is $(T,U)$
 pub fn single_g1<E: Engine>(vkey: &VKey<E>, a: &[E::G1Affine]) -> Output<E> {
-    let t = inner_product::pairing::<E>(a, &vkey.a);
-    let u = inner_product::pairing::<E>(a, &vkey.b);
-    return (t, u);
+    rayon::join(
+        || inner_product::pairing::<E>(a, &vkey.a),
+        || inner_product::pairing::<E>(a, &vkey.b),
+    )
 }
 
 /// pair commits to a tuple of G1 vector and G2 vector in the following way:
@@ -148,5 +149,5 @@ pub fn pair<E: Engine>(
     // (A * v)(w * B)
     t1.mul_assign(&t2);
     u1.mul_assign(&u2);
-    return (t1, u1);
+    (t1, u1)
 }

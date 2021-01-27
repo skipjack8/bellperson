@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 use bellperson::bls::{Bls12, Engine, Fr, FrRepr};
 use bellperson::gadgets::num::AllocatedNum;
 use bellperson::groth16::{
-    aggregate_proofs, create_random_proof, generate_random_parameters, prepare_verifying_key,
-    setup_fake_srs, verify_aggregate_proof, verify_proof, verify_proofs_batch,
+    aggregate::{aggregate_proofs, setup_fake_srs, verify_aggregate_proof, GenericSRS},
+    create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof,
+    verify_proofs_batch,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use ff::{Field, PrimeField, ScalarEngine};
@@ -188,8 +189,7 @@ fn test_groth16_srs_io() {
     println!("Creating parameters...");
 
     // Generate parameters for inner product aggregation
-    let srs: bellperson::groth16::GenericSRS<Bls12> =
-        setup_fake_srs(&mut rng, NUM_PROOFS_TO_AGGREGATE);
+    let srs: GenericSRS<Bls12> = setup_fake_srs(&mut rng, NUM_PROOFS_TO_AGGREGATE);
 
     // Write out parameters to a temp file
     let mut cache_file = NamedTempFile::new().expect("failed to create temp cache file");
@@ -203,8 +203,8 @@ fn test_groth16_srs_io() {
         .seek(SeekFrom::Start(0))
         .expect("failed to rewind tmp file");
 
-    let srs2 = bellperson::groth16::GenericSRS::<Bls12>::read(&mut cache_file)
-        .expect("failed to read srs from cache file");
+    let srs2 =
+        GenericSRS::<Bls12>::read(&mut cache_file).expect("failed to read srs from cache file");
 
     // Ensure that the parameters match
     assert_eq!(srs, srs2);
@@ -217,8 +217,7 @@ fn test_groth16_srs_io() {
             .expect("failed to mmap")
     };
 
-    let srs3 = bellperson::groth16::GenericSRS::<Bls12>::read_mmap(&mmap)
-        .expect("failed to read srs from cache file");
+    let srs3 = GenericSRS::<Bls12>::read_mmap(&mmap).expect("failed to read srs from cache file");
 
     // Ensure that the parameters match
     assert_eq!(srs, srs3);

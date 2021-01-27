@@ -106,10 +106,17 @@ impl<E: Engine> ProverSRS<E> {
 }
 
 impl<E: Engine> GenericSRS<E> {
-    /// specializes returns the prover and verifier SRS for a specific number of proofs to
-    /// aggregate. The number of proofs MUST BE a power of two, it panics otherwise.
+    /// specializes returns the prover and verifier SRS for a specific number of
+    /// proofs to aggregate. The number of proofs MUST BE a power of two, it
+    /// panics otherwise. The number of proofs must be inferior to half of the
+    /// size of the generic srs otherwise it panics.
     pub fn specialize(&self, num_proofs: usize) -> (ProverSRS<E>, VerifierSRS<E>) {
         assert!(num_proofs.is_power_of_two());
+        let tn = 2 * num_proofs + 1; // size of the CRS we need
+        assert!(self.g_alpha_powers.len() >= tn);
+        assert!(self.h_alpha_powers.len() >= tn);
+        assert!(self.g_beta_powers.len() >= tn);
+        assert!(self.h_beta_powers.len() >= tn);
         let n = num_proofs;
         // we skip the first one since g^a^0 = g which is not part of the commitment
         // key (i.e. we don't use it in the prover's code) so for g we skip directly to

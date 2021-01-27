@@ -2,6 +2,7 @@ use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use rayon::prelude::*;
+use serde::Serialize;
 use sha2::Sha256;
 
 use super::{
@@ -21,7 +22,14 @@ use crate::SynthesisError;
 pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     ip_srs: &SRS<E>,
     proofs: &[Proof<E>],
-) -> Result<AggregateProof<E>, SynthesisError> {
+) -> Result<AggregateProof<E>, SynthesisError>
+where
+    E::Fqk: Serialize,
+    E::Fr: Serialize,
+    E::G1Affine: Serialize,
+    E::G2Affine: Serialize,
+    E::G1: Serialize,
+{
     let (vkey, wkey) = ip_srs.get_commitment_keys();
     if !vkey.has_correct_len(proofs.len()) || !wkey.has_correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
@@ -52,9 +60,10 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         bincode::serialize_into(&mut hash_input, &com_c.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &com_c.1).expect("vec");
 
-        if let Some(r) = E::Fr::from_random_bytes(&Sha256::digest(&hash_input).as_slice()[..]) {
-            break r;
-        };
+        //if let Some(r) = E::Fr::from_random_bytes(&Sha256::digest(&hash_input).as_slice()[..]) {
+        //   break r;
+        //};
+        break E::Fr::one();
 
         counter_nonce += 1;
     };
@@ -110,7 +119,13 @@ fn prove_tipp<E: Engine>(
     vkey: &VKey<E>,
     wkey: &WKey<E>,
     r_shift: &E::Fr,
-) -> Result<TIPPProof<E>, SynthesisError> {
+) -> Result<TIPPProof<E>, SynthesisError>
+where
+    E::Fr: Serialize,
+    E::G1Affine: Serialize,
+    E::G2Affine: Serialize,
+    E::Fqk: Serialize,
+{
     if !a.len().is_power_of_two() || a.len() != b.len() {
         return Err(SynthesisError::MalformedProofs);
     }
@@ -135,12 +150,12 @@ fn prove_tipp<E: Engine>(
         bincode::serialize_into(&mut hash_input, &proof.final_wkey.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &proof.final_wkey.1).expect("vec");
 
-        if let Some(c) = E::Fr::from_random_bytes(
-            &Sha256::digest(&hash_input).as_slice()
-                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
-        ) {
-            break c;
-        };
+        //if let Some(c) = E::Fr::from_random_bytes(
+        //    &Sha256::digest(&hash_input).as_slice()
+        //        [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        //) {
+        //    break c;
+        //};
         counter_nonce += 1;
     };
 
@@ -180,7 +195,11 @@ fn gipa_tipp<E: Engine>(
     b: &[E::G2Affine],
     vkey: &VKey<E>,
     wkey: &WKey<E>,
-) -> (GipaTIPP<E>, Vec<E::Fr>, Vec<E::Fr>) {
+) -> (GipaTIPP<E>, Vec<E::Fr>, Vec<E::Fr>)
+where
+    E::Fr: Serialize,
+    E::Fqk: Serialize,
+{
     let (mut m_a, mut m_b) = (a.to_vec(), b.to_vec());
     let (mut vkey, mut wkey) = (vkey.clone(), wkey.clone());
     let mut comms = Vec::new();
@@ -307,11 +326,12 @@ fn gipa_tipp<E: Engine>(
 
 /// gipa_mipp proves the relation Z = C^r and V = C * v
 /// Returns vector of recursive commitments and transcripts in reverse order.
-fn gipa_mipp<E: Engine>(
-    c: &[E::G1Affine],
-    r: &[E::Fr],
-    vkey: &VKey<E>,
-) -> (GipaMIPP<E>, Vec<E::Fr>) {
+fn gipa_mipp<E: Engine>(c: &[E::G1Affine], r: &[E::Fr], vkey: &VKey<E>) -> (GipaMIPP<E>, Vec<E::Fr>)
+where
+    E::Fqk: Serialize,
+    E::G1: Serialize,
+    E::Fr: Serialize,
+{
     let (mut m_c, mut m_r) = (c.to_vec(), r.to_vec());
     let mut comms = Vec::new();
     let mut z_vec = Vec::new();
@@ -551,7 +571,13 @@ fn prove_mipp<E: Engine>(
     c: &[E::G1Affine],
     r: &[E::Fr],
     vkey: &VKey<E>,
-) -> Result<MIPPProof<E>, SynthesisError> {
+) -> Result<MIPPProof<E>, SynthesisError>
+where
+    E::Fr: Serialize,
+    E::G2Affine: Serialize,
+    E::Fqk: Serialize,
+    E::G1: Serialize,
+{
     if !c.len().is_power_of_two() || c.len() != r.len() {
         return Err(SynthesisError::MalformedProofs);
     }
@@ -578,12 +604,12 @@ fn prove_mipp<E: Engine>(
         bincode::serialize_into(&mut hash_input, &proof.final_vkey.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &proof.final_vkey.1).expect("vec");
 
-        if let Some(z) = E::Fr::from_random_bytes(
-            &Sha256::digest(&hash_input).as_slice()
-                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
-        ) {
-            break z;
-        };
+        //if let Some(z) = E::Fr::from_random_bytes(
+        //    &Sha256::digest(&hash_input).as_slice()
+        //        [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        //) {
+        //    break z;
+        //};
         counter_nonce += 1;
     };
 

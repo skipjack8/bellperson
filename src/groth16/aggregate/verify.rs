@@ -4,6 +4,7 @@ use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use log::*;
 use rayon::prelude::*;
+use serde::Serialize;
 use sha2::Sha256;
 
 use super::{
@@ -26,7 +27,14 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
     pvk: &PreparedVerifyingKey<E>,
     public_inputs: &[Vec<E::Fr>],
     proof: &AggregateProof<E>,
-) -> Result<bool, SynthesisError> {
+) -> Result<bool, SynthesisError>
+where
+    E::Fqk: Serialize,
+    E::Fr: Serialize,
+    E::G2Affine: Serialize,
+    E::G1Affine: Serialize,
+    E::G1: Serialize,
+{
     info!("verify_aggregate_proof");
 
     // Random linear combination of proofs
@@ -41,12 +49,13 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         bincode::serialize_into(&mut hash_input, &proof.com_c.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &proof.com_c.1).expect("vec");
 
-        if let Some(r) = E::Fr::from_random_bytes(
-            &Sha256::digest(&hash_input).as_slice()
-                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
-        ) {
-            break r;
-        };
+        //if let Some(r) = E::Fr::from_random_bytes(
+        //    &Sha256::digest(&hash_input).as_slice()
+        //        [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        //) {
+        //    break r;
+        //};
+        break E::Fr::one();
         counter_nonce += 1;
     };
 
@@ -207,7 +216,13 @@ fn verify_tipp<E: Engine>(
     z: &E::Fqk,
     proof: &TIPPProof<E>,
     r_shift: &E::Fr,
-) -> PairingTuple<E> {
+) -> PairingTuple<E>
+where
+    E::Fr: Serialize,
+    E::G2Affine: Serialize,
+    E::G1Affine: Serialize,
+    E::Fqk: Serialize,
+{
     info!("verify with srs shift");
     let now = Instant::now();
     // (T,U), Z, and all challenges
@@ -233,12 +248,13 @@ fn verify_tipp<E: Engine>(
         bincode::serialize_into(&mut hash_input, &fwkey.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &fwkey.1).expect("vec");
 
-        if let Some(c) = E::Fr::from_random_bytes(
-            &Sha256::digest(&hash_input).as_slice()
-                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
-        ) {
-            break c;
-        };
+        //if let Some(c) = E::Fr::from_random_bytes(
+        //    &Sha256::digest(&hash_input).as_slice()
+        //        [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        //) {
+        //    break c;
+        //};
+        break E::Fr::one();
         counter_nonce += 1;
     };
 
@@ -314,7 +330,11 @@ fn gipa_verify_tipp<E: Engine>(
     comm_ab: &commit::Output<E>,
     z: &E::Fqk,
     proof: &GipaTIPP<E>,
-) -> (commit::Output<E>, E::Fqk, Vec<E::Fr>, Vec<E::Fr>) {
+) -> (commit::Output<E>, E::Fqk, Vec<E::Fr>, Vec<E::Fr>)
+where
+    E::Fr: Serialize,
+    E::Fqk: Serialize,
+{
     info!("gipa verify TIPP");
 
     let now = Instant::now();
@@ -546,7 +566,13 @@ fn verify_mipp<E: Engine>(
     com_c: &commit::Output<E>, // original (T,U) = CM(v1,v2,C) - is rescaled in gipa verify
     agg_c: &E::G1,             // original Z = C^r - is rescaled in gipa verify
     proof: &MIPPProof<E>,
-) -> PairingTuple<E> {
+) -> PairingTuple<E>
+where
+    E::Fr: Serialize,
+    E::G2Affine: Serialize,
+    E::G1: Serialize,
+    E::Fqk: Serialize,
+{
     info!("verify with structured scalar message");
     let now = Instant::now();
     let (com_tu, com_z, mut challenges, mut challenges_inv) =
@@ -572,12 +598,13 @@ fn verify_mipp<E: Engine>(
         bincode::serialize_into(&mut hash_input, &final_vkey.0).expect("vec");
         bincode::serialize_into(&mut hash_input, &final_vkey.1).expect("vec");
 
-        if let Some(c) = E::Fr::from_random_bytes(
-            &Sha256::digest(&hash_input).as_slice()
-                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
-        ) {
-            break c;
-        };
+        //if let Some(c) = E::Fr::from_random_bytes(
+        //    &Sha256::digest(&hash_input).as_slice()
+        //        [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
+        //) {
+        //    break c;
+        //};
+        break E::Fr::one();
         counter_nonce += 1;
     };
 
@@ -653,7 +680,12 @@ fn gipa_verify_mipp<E: Engine>(
     com_c: &commit::Output<E>,
     z: &E::G1,
     proof: &GipaMIPP<E>,
-) -> (commit::Output<E>, E::G1, Vec<E::Fr>, Vec<E::Fr>) {
+) -> (commit::Output<E>, E::G1, Vec<E::Fr>, Vec<E::Fr>)
+where
+    E::Fr: Serialize,
+    E::Fqk: Serialize,
+    E::G1: Serialize,
+{
     info!("gipa ssm verify recursive challenge challenges");
     let mut challenges = Vec::new();
     let mut challenges_inv = Vec::new();

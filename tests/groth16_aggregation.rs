@@ -176,6 +176,56 @@ impl<E: Engine> Circuit<E> for TestCircuit<E> {
 }
 
 #[test]
+fn test_groth16_srs_io() {
+    use memmap::MmapOptions;
+    use std::fs::File;
+    use std::io::{Seek, SeekFrom, Write};
+    use tempfile::NamedTempFile;
+
+    const NUM_PROOFS_TO_AGGREGATE: usize = 1024;
+    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+
+    println!("Creating parameters...");
+
+    // Generate parameters for inner product aggregation
+    let srs: bellperson::groth16::GenericSRS<Bls12> =
+        setup_fake_srs(&mut rng, NUM_PROOFS_TO_AGGREGATE);
+
+    // Write out parameters to a temp file
+    let mut cache_file = NamedTempFile::new().expect("failed to create temp cache file");
+    srs.write(&mut cache_file).expect("failed to write out srs");
+    cache_file.flush().expect("failed to flush srs write");
+
+    // Read back parameters from the temp file
+    cache_file
+        .seek(SeekFrom::Start(0))
+        .expect("failed to rewind tmp file");
+
+    let srs2 = bellperson::groth16::GenericSRS::<Bls12>::read(&mut cache_file)
+        .expect("failed to read srs from cache file");
+
+    // Ensure that the parameters match
+    assert_eq!(srs, srs2);
+
+    let cache_path = cache_file.into_temp_path();
+    let mapped_file = File::open(&cache_path).expect("failed to open file");
+    let mmap = unsafe {
+        MmapOptions::new()
+            .map(&mapped_file)
+            .expect("failed to mmap")
+    };
+
+    let srs3 = bellperson::groth16::GenericSRS::<Bls12>::read_mmap(&mmap)
+        .expect("failed to read srs from cache file");
+
+    // Ensure that the parameters match
+    assert_eq!(srs, srs3);
+
+    // Remove temp file
+    cache_path.close().expect("failed to close temp path");
+}
+
+#[test]
 fn test_groth16_aggregation_min() {
     const NUM_PUBLIC_INPUTS: usize = 50; //1000;
     const NUM_PROOFS_TO_AGGREGATE: usize = 8; //1024;
@@ -184,7 +234,8 @@ fn test_groth16_aggregation_min() {
     println!("Creating parameters...");
 
     // Generate parameters for inner product aggregation
-    let (srs, vk) = setup_fake_srs(&mut rng, NUM_PROOFS_TO_AGGREGATE);
+    let generic = setup_fake_srs(&mut rng, NUM_PROOFS_TO_AGGREGATE);
+    let (pk, vk) = generic.specialize(NUM_PROOFS_TO_AGGREGATE);
 
     // Create parameters for our circuit
     let params = {
@@ -251,7 +302,7 @@ fn test_groth16_aggregation_min() {
     let start = Instant::now();
     println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
     let aggregate_proof =
-        aggregate_proofs::<Bls12>(&srs, &proofs).expect("failed to aggregate proofs");
+        aggregate_proofs::<Bls12>(&pk, &proofs).expect("failed to aggregate proofs");
     let prover_time = start.elapsed().as_millis();
 
     println!("Verifying aggregated proof...");
@@ -302,7 +353,9 @@ fn test_groth16_aggregation_mimc() {
     let pvk = prepare_verifying_key(&params.vk);
 
     // Generate parameters for inner product aggregation
-    let (srs, vk) = setup_fake_srs(rng, NUM_PROOFS_TO_AGGREGATE);
+    // first generic SRS then specialized to the correct size
+    let generic = setup_fake_srs(rng, NUM_PROOFS_TO_AGGREGATE);
+    let (pk, vk) = generic.specialize(NUM_PROOFS_TO_AGGREGATE);
 
     println!("Creating proofs...");
 
@@ -344,7 +397,7 @@ fn test_groth16_aggregation_mimc() {
     let start = Instant::now();
     println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
     let aggregate_proof =
-        aggregate_proofs::<Bls12>(&srs, &proofs).expect("failed to aggregate proofs");
+        aggregate_proofs::<Bls12>(&pk, &proofs).expect("failed to aggregate proofs");
     let prover_time = start.elapsed().as_millis();
 
     println!("Verifying aggregated proof...");

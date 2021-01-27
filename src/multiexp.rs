@@ -299,25 +299,27 @@ where
     G::Engine: crate::bls::Engine,
     S: SourceBuilder<G>,
 {
-    if let Some(ref mut kern) = kern {
-        if let Ok(p) = kern.with(|k: &mut gpu::MultiexpKernel<G::Engine>| {
-            let mut exps = vec![exponents[0]; exponents.len()];
-            let mut n = 0;
-            for (&e, d) in exponents.iter().zip(density_map.as_ref().iter()) {
-                if d {
-                    exps[n] = e;
-                    n += 1;
+    if exponents.len() > 10000 {
+        if let Some(ref mut kern) = kern {
+            if let Ok(p) = kern.with(|k: &mut gpu::MultiexpKernel<G::Engine>| {
+                let mut exps = vec![exponents[0]; exponents.len()];
+                let mut n = 0;
+                for (&e, d) in exponents.iter().zip(density_map.as_ref().iter()) {
+                    if d {
+                        exps[n] = e;
+                        n += 1;
+                    }
                 }
-            }
-
+                
             let (bss, skip) = bases.clone().get();
-            k.multiexp(pool, bss, Arc::new(exps.clone()), skip, n)
-        }) {
-            return Waiter::done(Ok(p));
+                k.multiexp(pool, bss, Arc::new(exps.clone()), skip, n)
+            }) {
+                return Waiter::done(Ok(p));
+            }
+            // TODO: For testing only
+            println!("GPU error!!");
+            panic!();
         }
-        // TODO: For testing only
-        println!("GPU error!!");
-        panic!();
     }
 
     let c = if exponents.len() < 32 {
@@ -333,15 +335,16 @@ where
     }
 
     let result = pool.compute(move || multiexp_inner(bases, density_map, exponents, c));
-    #[cfg(feature = "gpu")]
-    {
-        // Do not give the control back to the caller till the
-        // multiexp is done. We may want to reacquire the GPU again
-        // between the multiexps.
-        let result = result.wait();
-        Waiter::done(result)
-    }
-    #[cfg(not(feature = "gpu"))]
+
+    // #[cfg(feature = "gpu")]
+    // {
+    //     // Do not give the control back to the caller till the
+    //     // multiexp is done. We may want to reacquire the GPU again
+    //     // between the multiexps.
+    //     let result = result.wait();
+    //     Waiter::done(result)
+    // }
+    // #[cfg(not(feature = "gpu"))]
     result
 }
 

@@ -3,10 +3,12 @@ use crate::bls::Engine;
 use crate::groth16::aggregate::commit::*;
 use crate::groth16::multiscalar::{precompute_fixed_window, MultiscalarPrecompOwned, WINDOW_SIZE};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use memmap::Mmap;
 use rayon::prelude::*;
+use sha2::Sha256;
 use std::io::{self, Read, Write};
 use std::mem::size_of;
 
@@ -175,6 +177,13 @@ impl<E: Engine> GenericSRS<E> {
         write_vec(writer, &self.h_alpha_powers)?;
         write_vec(writer, &self.h_beta_powers)?;
         Ok(())
+    }
+
+    /// Returns the hash over all powers of this generic srs.
+    pub fn hash(&self) -> Vec<u8> {
+        let mut v = Vec::new();
+        self.write(&mut v).expect("failed to compute hash");
+        Sha256::digest(&v).to_vec()
     }
 
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {

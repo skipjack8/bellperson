@@ -1,3 +1,24 @@
+macro_rules! oracle {
+    // https://fromherotozero.dev/blog/introduction-to-rust-macros/
+    ( $( $x:expr), * ) => { {
+        let mut counter_nonce: usize = 0;
+        let r = loop {
+            counter_nonce += 1;
+            let mut hash_input = Vec::new();
+            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
+            $(
+                bincode::serialize_into(&mut hash_input, $x).expect("vec");
+            )*
+            let d = &Sha256::digest(&hash_input);
+            if let Some(c) = E::Fr::from_random_bytes(&d) {
+                if let Some(_) = c.inverse() {
+                    break c;
+                }
+            }
+        };
+        r
+    }};
+}
 macro_rules! par {
     ($(let $name:ident = $f:expr),+) => {
         $(

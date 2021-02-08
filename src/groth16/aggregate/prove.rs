@@ -40,22 +40,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     // Random linear combination of proofs
     // TODO: extract logic in separate function (might require a macro for
     // handling varargs)
-    let mut counter_nonce: usize = 0;
-    let r = loop {
-        let mut hash_input = Vec::new();
-        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        // TODO use serde to avoid specifying fields by hand
-        bincode::serialize_into(&mut hash_input, &com_ab.0).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_ab.1).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_c.0).expect("vec");
-        bincode::serialize_into(&mut hash_input, &com_c.1).expect("vec");
-
-        if let Some(r) = E::Fr::from_random_bytes(&Sha256::digest(&hash_input).as_slice()[..]) {
-            break r;
-        };
-
-        counter_nonce += 1;
-    };
+    let r = oracle!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1);
 
     // r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
@@ -123,24 +108,13 @@ fn prove_tipp<E: Engine>(
     let r_inverse = r_shift.inverse().unwrap();
 
     // KZG challenge point
-    let mut counter_nonce: usize = 0;
-    let z = loop {
-        let mut hash_input = Vec::new();
-        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        bincode::serialize_into(&mut hash_input, &challenges.first().unwrap()).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.final_vkey.0).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.final_vkey.1).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.final_wkey.0).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.final_wkey.1).expect("vec");
-
-        if let Some(c) = E::Fr::from_random_bytes(
-            &Sha256::digest(&hash_input).as_slice()
-                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
-        ) {
-            break c;
-        };
-        counter_nonce += 1;
-    };
+    let z = oracle!(
+        &challenges.first().unwrap(),
+        &proof.final_vkey.0,
+        &proof.final_vkey.1,
+        &proof.final_wkey.0,
+        &proof.final_wkey.1
+    );
 
     // Complete KZG proofs
     par! {
@@ -217,33 +191,14 @@ fn gipa_tipp<E: Engine>(
         let (t_r, u_r) = c_r;
 
         // Fiat-Shamir challenge
-        // TODO extract logic in separate function and use the same as in
-        // verification
-        let mut counter_nonce: usize = 0;
         let default_transcript = E::Fr::zero();
         let transcript = challenges.last().unwrap_or(&default_transcript);
 
-        let (c, c_inv) = 'challenge: loop {
-            let mut hash_input = Vec::new();
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-            bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-            bincode::serialize_into(&mut hash_input, &t_l).expect("vec");
-            bincode::serialize_into(&mut hash_input, &u_l).expect("vec");
-            bincode::serialize_into(&mut hash_input, &t_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &u_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &z_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &z_l).expect("vec");
-
-            let d = Sha256::digest(&hash_input);
-            let c = fr_from_u128::<E::Fr>(d.as_slice());
-            if let Some(c_inv) = c.inverse() {
-                // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                break 'challenge (c_inv, c);
-            }
-
-            counter_nonce += 1;
-        };
+        let c_inv = oracle!(&transcript, &t_l, &u_l, &t_r, &u_r, &z_r, &z_l);
+        // Optimization for multiexponentiation to rescale G2 elements with
+        // 128-bit challenge Swap 'c' and 'c_inv' since can't control bit size
+        // of c_inv
+        let c = c_inv.inverse().unwrap();
 
         // Set up values for next step of recursion
         // A[:n'] + A[n':] ^ x
@@ -348,32 +303,11 @@ fn gipa_mipp<E: Engine>(
         );
 
         // Fiat-Shamir challenge
-        // TODO move that to separate function
-        let mut counter_nonce: usize = 0;
         let default_transcript = E::Fr::zero();
         let transcript = challenges.last().unwrap_or(&default_transcript);
 
-        let (x, x_inv) = 'challenge: loop {
-            let mut hash_input = Vec::new();
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-            bincode::serialize_into(&mut hash_input, &transcript).expect("vec");
-            bincode::serialize_into(&mut hash_input, &tu_r.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &tu_r.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &tu_l.0).expect("vec");
-            bincode::serialize_into(&mut hash_input, &tu_l.1).expect("vec");
-            bincode::serialize_into(&mut hash_input, &z_r).expect("vec");
-            bincode::serialize_into(&mut hash_input, &z_l).expect("vec");
-
-            let d = Sha256::digest(&hash_input);
-            let x = fr_from_u128::<E::Fr>(d.as_slice());
-            if let Some(x_inv) = x.inverse() {
-                // Optimization for multiexponentiation to rescale G2 elements with 128-bit challenge
-                // Swap 'c' and 'c_inv' since can't control bit size of c_inv
-                break 'challenge (x_inv, x);
-            }
-
-            counter_nonce += 1;
-        };
+        let x_inv = oracle!(&transcript, &tu_r.0, &tu_r.1, &tu_l.0, &tu_l.1, &z_r, &z_l);
+        let x = x_inv.inverse().unwrap();
 
         // Set up values for next step of recursion
         c_right
@@ -566,24 +500,11 @@ fn prove_mipp<E: Engine>(
         .collect::<Vec<_>>();
 
     // KZG challenge point
-    // TODO move to separate function (or macro)
-    let mut counter_nonce: usize = 0;
-    let z = loop {
-        let mut hash_input = Vec::new();
-        hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
-        // we take the last challenge generated
-        bincode::serialize_into(&mut hash_input, &challenges.first().unwrap()).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.final_vkey.0).expect("vec");
-        bincode::serialize_into(&mut hash_input, &proof.final_vkey.1).expect("vec");
-
-        if let Some(z) = E::Fr::from_random_bytes(
-            &Sha256::digest(&hash_input).as_slice()
-                [..std::mem::size_of::<<E::Fr as PrimeField>::Repr>()],
-        ) {
-            break z;
-        };
-        counter_nonce += 1;
-    };
+    let z = oracle!(
+        &challenges.first().unwrap(),
+        &proof.final_vkey.0,
+        &proof.final_vkey.1
+    );
 
     // Complete KZG proof
     let vkey_opening = prove_commitment_key_kzg_opening(
@@ -599,18 +520,4 @@ fn prove_mipp<E: Engine>(
         gipa: proof,
         vkey_opening: vkey_opening?,
     })
-}
-
-pub(super) fn fr_from_u128<F: PrimeField>(bytes: &[u8]) -> F {
-    use std::convert::TryInto;
-
-    let other = u128::from_be_bytes(bytes[..16].try_into().unwrap());
-    let upper = (other >> 64) as u64;
-    let lower = ((other << 64) >> 64) as u64;
-
-    let mut repr = F::Repr::default();
-    repr.as_mut()[0] = lower;
-    repr.as_mut()[1] = upper;
-
-    F::from_repr(repr).unwrap()
 }

@@ -585,6 +585,7 @@ fn gipa_verify_mipp<E: Engine>(
     let mut challenges = Vec::new();
     let mut challenges_inv = Vec::new();
 
+    let now = Instant::now();
     for ((tu_l, tu_r), (z_l, z_r)) in proof.comms.iter().zip(proof.z_vec.iter()) {
         // Fiat-Shamir challenge
         let default_transcript = E::Fr::zero();

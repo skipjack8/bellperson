@@ -313,51 +313,75 @@ fn gipa_verify_tipp<E: Engine>(
 
     // we first multiply each entry of the Z U and L vectors by the respective
     // challenges independently - step 3.4.1 (b) of paper.
-    let prep: Vec<(_, _, _, _, _, _)> = proof
+
+    enum Op<'a, E: Engine> {
+        T(&'a E::Fqk, <E::Fr as PrimeField>::Repr),
+        U(&'a E::Fqk, <E::Fr as PrimeField>::Repr),
+        Z(&'a E::Fqk, <E::Fr as PrimeField>::Repr),
+    }
+
+    let (tx, ux, zx) = proof
         .comms
         .par_iter()
         .zip(proof.z_vec.par_iter())
         .zip(challenges.par_iter())
         .zip(challenges_inv.par_iter())
-        .map(|((((c_l, c_r), (z_l, z_r)), c), c_inv)| {
+        .flat_map(|((((c_l, c_r), (z_l, z_r)), c), c_inv)| {
             let (t_l, u_l) = c_l;
             let (t_r, u_r) = c_r;
             let c_repr = c.into_repr();
             let c_inv_repr = c_inv.into_repr();
-            (
-                t_l.pow(c_repr),
-                t_r.pow(c_inv_repr),
-                u_l.pow(c_repr),
-                u_r.pow(c_inv_repr),
-                z_l.pow(c_repr),
-                z_r.pow(c_inv_repr),
-            )
+
+            vec![
+                Op::T::<E>(t_l, c_repr),
+                Op::T(t_r, c_inv_repr),
+                Op::U(u_l, c_repr),
+                Op::U(u_r, c_inv_repr),
+                Op::Z(z_l, c_repr),
+                Op::Z(z_r, c_inv_repr),
+            ]
         })
-        .collect();
+        .fold(
+            || (E::Fqk::one(), E::Fqk::one(), E::Fqk::one()),
+            |(mut t, mut u, mut z), op: Op<E>| {
+                match op {
+                    Op::T(tx, c) => {
+                        let tx: E::Fqk = tx.pow(c);
+                        t.mul_assign(&tx);
+                    }
+                    Op::U(ux, c) => {
+                        let ux: E::Fqk = ux.pow(c);
+                        u.mul_assign(&ux);
+                    }
+                    Op::Z(zx, c) => {
+                        let zx: E::Fqk = zx.pow(c);
+                        z.mul_assign(&zx);
+                    }
+                }
+
+                (t, u, z)
+            },
+        )
+        .reduce(
+            || (E::Fqk::one(), E::Fqk::one(), E::Fqk::one()),
+            |(mut t, mut u, mut z), (tx, ux, zx)| {
+                t.mul_assign(&tx);
+                u.mul_assign(&ux);
+                z.mul_assign(&zx);
+
+                (t, u, z)
+            },
+        );
+
+    t.mul_assign(&tx);
+    u.mul_assign(&ux);
+    z.mul_assign(&zx);
+
     println!(
-        "TIPP verify: gipa prep took {}ms",
+        "TIPP verify: gipa prep and accumulate took {}ms",
         now.elapsed().as_millis()
     );
 
-    let now = Instant::now();
-
-    for (t_l_c, t_r_cinv, u_l_c, u_l_cinv, z_l_c, z_l_cinv) in prep.iter() {
-        // T = t_l^x . T . t_r^{x^-1}
-        t.mul_assign(t_l_c);
-        t.mul_assign(t_r_cinv);
-
-        // U = u_l^x . U . u_r^{x-1}
-        u.mul_assign(u_l_c);
-        u.mul_assign(u_l_cinv);
-
-        // Z = z_l^x . Z . z_r^{x^-1}
-        z.mul_assign(z_l_c);
-        z.mul_assign(z_l_cinv);
-    }
-    println!(
-        "TIPP verify: gipa accumulate step took {}ms",
-        now.elapsed().as_millis()
-    );
     ((t, u), z, challenges, challenges_inv)
 }
 

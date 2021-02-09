@@ -198,7 +198,10 @@ fn verify_tipp<E: Engine>(
     // (T,U), Z, and all challenges
     let (final_ab, final_z, mut challenges, mut challenges_inv) =
         gipa_verify_tipp(comm_ab, z, &proof.gipa);
-    println!("TIPP: gipa verify tipp {}ms", now.elapsed().as_millis());
+    println!(
+        "TIPP verify: gipa verify tipp {}ms",
+        now.elapsed().as_millis()
+    );
 
     // we reverse the order so the KZG polynomial have them in the expected
     // order to construct them in logn time.
@@ -248,7 +251,7 @@ fn verify_tipp<E: Engine>(
     };
 
     println!(
-        "TIPP parallel checks before merge: {}ms",
+        "TIPP verify: parallel checks before merge: {}ms",
         now.elapsed().as_millis(),
     );
 
@@ -260,7 +263,7 @@ fn verify_tipp<E: Engine>(
     acc.merge(&check_ab12);
     acc.merge(&check_ab21);
     acc.merge(&check_ab22);
-    println!("TIPP final merge : {}ms", now.elapsed().as_millis());
+    println!("TIPP verify: final merge {}ms", now.elapsed().as_millis());
     acc
 }
 
@@ -352,7 +355,7 @@ fn gipa_verify_tipp<E: Engine>(
         z.mul_assign(z_l_cinv);
     }
     println!(
-        "TIPP verify: gipa recursive took {}ms",
+        "TIPP verify: gipa accumulate step took {}ms",
         now.elapsed().as_millis()
     );
     ((t, u), z, challenges, challenges_inv)
@@ -548,12 +551,11 @@ fn verify_mipp<E: Engine>(
         let check_u = make_tuple(&final_c,&final_vkey.1,&u)
     };
 
-    /*let miller_out = inner_product::pairing_miller_affine::<E>(&left, &right);*/
-    //let pair = PairingTuple::from_pair(miller_out, out);
     println!(
         "MIPP verify: parallel checks kZG + T & U took {}ms",
         now.elapsed().as_millis(),
     );
+    let now = Instant::now();
 
     let b = final_z == com_z;
     // only check that doesn't require pairing so we can give a tuple that will
@@ -593,6 +595,10 @@ fn gipa_verify_mipp<E: Engine>(
         challenges_inv.push(c_inv);
     }
 
+    println!(
+        "MIPP verify: gipa challenge gen took {}ms",
+        now.elapsed().as_millis()
+    );
     let (mut comm_t, mut comm_u) = com_c.clone();
     let mut z = z.clone();
 
@@ -636,6 +642,7 @@ fn gipa_verify_mipp<E: Engine>(
         prep.len()
     );
 
+    let now = Instant::now();
     for (t_l_c, u_l_c, t_r_cinv, u_r_cinv, z_l_c, z_c_cinv) in prep.iter() {
         // TODO parallelize ?
         comm_t.mul_assign(t_l_c);
@@ -645,6 +652,10 @@ fn gipa_verify_mipp<E: Engine>(
         z.add_assign(z_l_c);
         z.add_assign(z_c_cinv);
     }
+    println!(
+        "MIPP verify: gipa accumulation step took {}ms",
+        now.elapsed().as_millis()
+    );
 
     ((comm_t, comm_u), z, challenges, challenges_inv)
 }

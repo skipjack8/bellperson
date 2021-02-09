@@ -358,7 +358,6 @@ fn gipa_verify_tipp<E: Engine>(
                         z.mul_assign(&zx);
                     }
                 }
-
                 (t, u, z)
             },
         )
@@ -368,7 +367,6 @@ fn gipa_verify_tipp<E: Engine>(
                 t.mul_assign(&tx);
                 u.mul_assign(&ux);
                 z.mul_assign(&zx);
-
                 (t, u, z)
             },
         );

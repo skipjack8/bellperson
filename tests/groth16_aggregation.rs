@@ -1,15 +1,15 @@
-use std::time::{Duration, Instant};
-
 use bellperson::bls::{Bls12, Engine, Fr, FrRepr};
 use bellperson::gadgets::num::AllocatedNum;
 use bellperson::groth16::{
     aggregate::{aggregate_proofs, setup_fake_srs, verify_aggregate_proof, GenericSRS},
     create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof,
-    verify_proofs_batch,
+    verify_proofs_batch, Parameters, Proof,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use ff::{Field, PrimeField, ScalarEngine};
-use rand::{thread_rng, SeedableRng};
+use rand::{thread_rng, RngCore, SeedableRng};
+use serde::Serialize;
+use std::time::{Duration, Instant};
 
 const MIMC_ROUNDS: usize = 322;
 
@@ -224,6 +224,102 @@ fn test_groth16_srs_io() {
 
     // Remove temp file
     cache_path.close().expect("failed to close temp path");
+}
+
+#[test]
+fn test_groth16_bench() {
+    let nb_proofs = vec![8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
+    let max = nb_proofs.last().unwrap().clone();
+    let public_inputs = 350; // roughly what a prove commit needs
+    let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+    // CRS for aggregation
+    let generic = setup_fake_srs(&mut rng, max);
+    // Create parameters for our circuit
+    let params = {
+        let c = TestCircuit::<Bls12> {
+            public_inputs: vec![Default::default(); public_inputs],
+            public_product: Default::default(),
+            witness_input: Default::default(),
+        };
+        generate_random_parameters(c, &mut rng).unwrap()
+    };
+    // verification key for indivdual verification of proof
+    let pvk = prepare_verifying_key(&params.vk);
+
+    let (proofs, statements): (Vec<Proof<Bls12>>, Vec<Vec<Fr>>) = (0..max)
+        .map(|_| generate_proof(public_inputs, &params, &mut rng))
+        .unzip();
+
+    // structure to write to CSV file
+    #[derive(Debug, Serialize)]
+    struct Result {
+        nproofs: u32,
+        aggregate_create_ms: u32,
+        aggregate_verify_ms: u32,
+        batch_verify_ms: u32,
+    }
+    let mut writer = csv::Writer::from_path("aggregation.csv").expect("unable to open csv writer");
+
+    println!("Generating {} Groth16 proofs...", max);
+
+    for i in nb_proofs {
+        println!("Proofs {}", i);
+        let (pk, vk) = generic.specialize(i);
+        // Aggregate proofs using inner product proofs
+        let start = Instant::now();
+        println!("\t-Aggregation...");
+        let aggregate_proof =
+            aggregate_proofs::<Bls12>(&pk, &proofs[..i]).expect("failed to aggregate proofs");
+        let prover_time = start.elapsed().as_millis();
+        println!("\t-Aggregate Verification ...");
+        let start = Instant::now();
+        let result = verify_aggregate_proof(&vk, &pvk, &statements[..i], &aggregate_proof);
+        assert!(result.unwrap());
+        let verifier_time = start.elapsed().as_millis();
+
+        println!("\t-Batch verification...");
+        let start = Instant::now();
+        let proofs: Vec<_> = proofs.iter().take(i).collect();
+        assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements[..i]).unwrap());
+        let batch_verifier_time = start.elapsed().as_millis();
+        writer
+            .serialize(Result {
+                nproofs: i as u32,
+                aggregate_create_ms: prover_time as u32,
+                aggregate_verify_ms: verifier_time as u32,
+                batch_verify_ms: batch_verifier_time as u32,
+            })
+            .expect("unable to write result to csv");
+    }
+    writer.flush().expect("failed to flush");
+}
+
+fn generate_proof<R: SeedableRng + RngCore>(
+    publics: usize,
+    p: &Parameters<Bls12>,
+    mut rng: &mut R,
+) -> (Proof<Bls12>, Vec<Fr>) {
+    // Generate random inputs to product together
+    let mut public_inputs = Vec::new();
+    let mut statement = Vec::new();
+    let mut prod = Fr::one();
+    for _i in 0..publics {
+        let x = Fr::from_str("4").unwrap();
+        public_inputs.push(Some(x));
+        statement.push(x);
+        prod.mul_assign(&x);
+    }
+    let w = Fr::from_repr(FrRepr::from(3)).unwrap();
+    let mut product: Fr = w.clone();
+    product.mul_assign(&prod);
+    statement.push(product.clone());
+
+    let c = TestCircuit {
+        public_inputs,
+        public_product: Some(product),
+        witness_input: Some(w),
+    };
+    (create_random_proof(c, p, &mut rng).unwrap(), statement)
 }
 
 #[test]

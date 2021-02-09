@@ -388,53 +388,56 @@ pub fn verify_kzg_opening_g2<E: Engine>(
     let vpoly_eval_z =
         polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
 
-    // verify first part of opening - v1
-    // e(g, v1 h^{-af_v(z)})
-    let p1 = E::miller_loop(&[(
-        &v_srs.g.into_affine().prepare(),
-        // in additive notation: final_vkey = uH,
-        // uH - f_v(z)H = (u - f_v)H --> v1h^{-af_v(z)}
-        &sub!(
-            final_vkey.0.into_projective(),
-            &mul!(v_srs.h_alpha, vpoly_eval_z)
-        )
-        .into_affine()
-        .prepare(),
-    )]);
-    // e(g^{a - z}, opening_1) ==> (aG) - (zG)
-    let p2 = E::miller_loop(&[(
-        &sub!(v_srs.g_alpha, &mul!(v_srs.g, kzg_challenge.clone()))
+    par! {
+        // verify first part of opening - v1
+        // e(g, v1 h^{-af_v(z)})
+        let p1 = E::miller_loop(&[(
+            &v_srs.g.into_affine().prepare(),
+            // in additive notation: final_vkey = uH,
+            // uH - f_v(z)H = (u - f_v)H --> v1h^{-af_v(z)}
+            &sub!(
+                final_vkey.0.into_projective(),
+                &mul!(v_srs.h_alpha, vpoly_eval_z)
+            )
             .into_affine()
             .prepare(),
-        &vkey_opening.0.prepare(),
-    )]);
+        )]),
+        // e(g^{a - z}, opening_1) ==> (aG) - (zG)
+        let p2 = E::miller_loop(&[(
+            &sub!(v_srs.g_alpha, &mul!(v_srs.g, kzg_challenge.clone()))
+                .into_affine()
+                .prepare(),
+            &vkey_opening.0.prepare(),
+        )]),
+
+        // verify second part of opening - v2 - similar but changing secret exponent
+        // e(g, v2 h^{-bf_v(z)})
+        let q1 = E::miller_loop(&[(
+            &v_srs.g.into_affine().prepare(),
+            // in additive notation: final_vkey = uH,
+            // uH - f_v(z)H = (u - f_v)H --> v1h^{-f_v(z)}
+            &sub!(
+                final_vkey.1.into_projective(),
+                &mul!(v_srs.h_beta, vpoly_eval_z)
+            )
+            .into_affine()
+            .prepare(),
+        )]),
+        // e(g^{b - z}, opening_1)
+        let q2 = E::miller_loop(&[(
+            &sub!(v_srs.g_beta, &mul!(v_srs.g, kzg_challenge.clone()))
+                .into_affine()
+                .prepare(),
+            &vkey_opening.1.prepare(),
+        )])
+    };
+
     // inverse so p1^-1 * p2 == 1
     let ip1 = p1.inverse().unwrap();
-
-    // verify second part of opening - v2 - similar but changing secret exponent
-    // e(g, v2 h^{-bf_v(z)})
-    let q1 = E::miller_loop(&[(
-        &v_srs.g.into_affine().prepare(),
-        // in additive notation: final_vkey = uH,
-        // uH - f_v(z)H = (u - f_v)H --> v1h^{-f_v(z)}
-        &sub!(
-            final_vkey.1.into_projective(),
-            &mul!(v_srs.h_beta, vpoly_eval_z)
-        )
-        .into_affine()
-        .prepare(),
-    )]);
-    // e(g^{b - z}, opening_1)
-    let q2 = E::miller_loop(&[(
-        &sub!(v_srs.g_beta, &mul!(v_srs.g, kzg_challenge.clone()))
-            .into_affine()
-            .prepare(),
-        &vkey_opening.1.prepare(),
-    )]);
-
     let iq1 = q1.inverse().unwrap();
     // this pair should be one when multiplied
-    PairingTuple::from_miller(mul!(mul!(iq1, &q2), &mul!(ip1, &p2)))
+    let (l, r) = rayon::join(|| mul!(iq1, &q2), || mul!(ip1, &p2));
+    PairingTuple::from_miller(mul!(l, &r))
 }
 
 /// Similar to verify_kzg_opening_g2 but for g1.
@@ -449,48 +452,50 @@ pub fn verify_kzg_opening_g1<E: Engine>(
     let wkey_poly_eval =
         polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
 
-    // first check on w1
-    // let K = g^{a^{n+1}}
-    // e(w1 K^{-f_w(z)},h)
-    let p1 = E::miller_loop(&[(
-        &sub!(
-            final_wkey.0.into_projective(),
-            &mul!(v_srs.g_alpha_n1, wkey_poly_eval)
-        )
-        .into_affine()
-        .prepare(),
-        &v_srs.h.into_affine().prepare(),
-    )]);
-    // e(opening, h^{a - z})
-    let p2 = E::miller_loop(&[(
-        &wkey_opening.0.prepare(),
-        &sub!(v_srs.h_alpha, &mul!(v_srs.h, *kzg_challenge))
+    par! {
+        // first check on w1
+        // let K = g^{a^{n+1}}
+        // e(w1 K^{-f_w(z)},h)
+        let p1 = E::miller_loop(&[(
+            &sub!(
+                final_wkey.0.into_projective(),
+                &mul!(v_srs.g_alpha_n1, wkey_poly_eval)
+            )
             .into_affine()
             .prepare(),
-    )]);
+            &v_srs.h.into_affine().prepare(),
+        )]),
+        // e(opening, h^{a - z})
+        let p2 = E::miller_loop(&[(
+            &wkey_opening.0.prepare(),
+            &sub!(v_srs.h_alpha, &mul!(v_srs.h, *kzg_challenge))
+                .into_affine()
+                .prepare(),
+        )]),
+        // then do second check
+        // let K = g^{b^{n+1}}
+        // e(w2 K^{-f_w(z)},h)
+        let q1 = E::miller_loop(&[(
+            &sub!(
+                final_wkey.1.into_projective(),
+                &mul!(v_srs.g_beta_n1, wkey_poly_eval)
+            )
+            .into_affine()
+            .prepare(),
+            &v_srs.h.into_affine().prepare(),
+        )]),
+        // e(opening, h^{b - z})
+        let q2 = E::miller_loop(&[(
+            &wkey_opening.1.prepare(),
+            &sub!(v_srs.h_beta, &mul!(v_srs.h, *kzg_challenge))
+                .into_affine()
+                .prepare(),
+        )])
+    };
     let ip1 = p1.inverse().unwrap();
-    // then do second check
-    // let K = g^{b^{n+1}}
-    // e(w2 K^{-f_w(z)},h)
-    let q1 = E::miller_loop(&[(
-        &sub!(
-            final_wkey.1.into_projective(),
-            &mul!(v_srs.g_beta_n1, wkey_poly_eval)
-        )
-        .into_affine()
-        .prepare(),
-        &v_srs.h.into_affine().prepare(),
-    )]);
-    // e(opening, h^{b - z})
-    let q2 = E::miller_loop(&[(
-        &wkey_opening.1.prepare(),
-        &sub!(v_srs.h_beta, &mul!(v_srs.h, *kzg_challenge))
-            .into_affine()
-            .prepare(),
-    )]);
     let iq1 = q1.inverse().unwrap();
-
-    PairingTuple::from_miller(mul!(mul!(iq1, &q2), &mul!(ip1, &p2)))
+    let (l, r) = rayon::join(|| mul!(iq1, &q2), || mul!(ip1, &p2));
+    PairingTuple::from_miller(mul!(l, &r))
 }
 
 fn verify_mipp<E: Engine>(
@@ -649,11 +654,11 @@ fn gipa_verify_mipp<E: Engine>(
     );
 
     for (t_l_c, u_l_c, t_r_cinv, u_r_cinv, z_l_c, z_c_cinv) in prep.iter() {
+        // TODO parallelize ?
         comm_t.mul_assign(t_l_c);
         comm_t.mul_assign(t_r_cinv);
         comm_u.mul_assign(u_l_c);
         comm_u.mul_assign(u_r_cinv);
-
         z.add_assign(z_l_c);
         z.add_assign(z_c_cinv);
     }

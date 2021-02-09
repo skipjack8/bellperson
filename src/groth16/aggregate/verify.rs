@@ -216,66 +216,52 @@ fn verify_tipp<E: Engine>(
         &fwkey.1
     );
 
+    let (t, u) = final_ab;
     let now = Instant::now();
-    // Section 3.4. step 5 check the opening proof for v
-    let mut vtuple = verify_kzg_opening_g2(
-        v_srs,
-        &fvkey,
-        &proof.vkey_opening,
-        &challenges_inv,
-        &r_shift.inverse().unwrap(),
-        &c,
-    );
-    // Section 3.4 step 6 check the opening proof for w
-    let wtuple = verify_kzg_opening_g1(
-        v_srs,
-        &fwkey,
-        &proof.wkey_opening,
-        &challenges,
-        &E::Fr::one(),
-        &c,
-    );
+    par! {
+        // Section 3.4. step 5 check the opening proof for v
+        let vtuple = verify_kzg_opening_g2(
+            v_srs,
+            &fvkey,
+            &proof.vkey_opening,
+            &challenges_inv,
+            &r_shift.inverse().unwrap(),
+            &c,
+        ),
+        // Section 3.4 step 6 check the opening proof for w
+        let wtuple = verify_kzg_opening_g1(
+            v_srs,
+            &fwkey,
+            &proof.wkey_opening,
+            &challenges,
+            &E::Fr::one(),
+            &c,
+        ),
+        // Section 3.4 step 2
+        // final_z = e(A,B)
+        let check_z = make_tuple(&proof.gipa.final_a, &proof.gipa.final_b, &final_z),
+        //  final_aB.0 = T = e(A,v1)e(w1,B)
+        let check_ab11 = make_tuple(&proof.gipa.final_a, &fvkey.0, &E::Fqk::one()),
+        let check_ab12 = make_tuple(&fwkey.0, &proof.gipa.final_b, &t),
+        let check_ab21 = make_tuple(&proof.gipa.final_a, &fvkey.1, &E::Fqk::one()),
+        let check_ab22 = make_tuple(&fwkey.1, &proof.gipa.final_b, &u)
+    };
+
     println!(
-        "TIPP verify KZG: {}ms VERIFIED ?",
+        "TIPP parallel checks before merge: {}ms",
         now.elapsed().as_millis(),
     );
-    let now = Instant::now();
-
-    // Section 3.4 step 2
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    let mut out = E::Fqk::one();
-    let (t, u) = final_ab;
-    // final_z = e(A,B)
-    left.push(proof.gipa.final_a.clone());
-    right.push(proof.gipa.final_b.clone());
-    out.mul_assign(&final_z);
-    //  final_aB.0 = T = e(A,v1)e(w1,B)
-    left.push(proof.gipa.final_a.clone());
-    right.push(fvkey.0.clone());
-    left.push(fwkey.0.clone());
-    right.push(proof.gipa.final_b.clone());
-    out.mul_assign(&t);
-    // final_aB.1 = U = e(A,v2)e(w2,B)
-    left.push(proof.gipa.final_a.clone());
-    right.push(fvkey.1.clone());
-    left.push(fwkey.1.clone());
-    right.push(proof.gipa.final_b.clone());
-    out.mul_assign(&u);
-
-    // TODO check if doing one big miller loop is faster than doing the
-    // three in parallels and combine
-    let check = PairingTuple::<E>::from_pair(
-        inner_product::pairing_miller_affine::<E>(&left, &right),
-        out,
-    );
-    println!("TIPP inner product check: {}ms", now.elapsed().as_millis(),);
 
     let now = Instant::now();
-    vtuple.merge(&wtuple);
-    vtuple.merge(&check);
-    println!("TIPP merge : {}ms", now.elapsed().as_millis());
-    vtuple
+    let mut acc = vtuple;
+    acc.merge(&wtuple);
+    acc.merge(&check_z);
+    acc.merge(&check_ab11);
+    acc.merge(&check_ab12);
+    acc.merge(&check_ab21);
+    acc.merge(&check_ab22);
+    println!("TIPP final merge : {}ms", now.elapsed().as_millis());
+    acc
 }
 
 /// gipa_verify_tipp recurse on the proof and statement and produces the final
@@ -387,12 +373,16 @@ pub fn verify_kzg_opening_g2<E: Engine>(
     // f_v(z)
     let vpoly_eval_z =
         polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
-
+    // -g such that when we test a pairing equation we only need to check if
+    // it's equal 1 at the end:
+    // e(a,b) = e(c,d) <=> e(a,b)e(-c,d) = 1
+    let mut ng = v_srs.g.clone();
+    ng.negate();
     par! {
         // verify first part of opening - v1
         // e(g, v1 h^{-af_v(z)})
         let p1 = E::miller_loop(&[(
-            &v_srs.g.into_affine().prepare(),
+            &ng.into_affine().prepare(),
             // in additive notation: final_vkey = uH,
             // uH - f_v(z)H = (u - f_v)H --> v1h^{-af_v(z)}
             &sub!(
@@ -413,7 +403,7 @@ pub fn verify_kzg_opening_g2<E: Engine>(
         // verify second part of opening - v2 - similar but changing secret exponent
         // e(g, v2 h^{-bf_v(z)})
         let q1 = E::miller_loop(&[(
-            &v_srs.g.into_affine().prepare(),
+            &ng.into_affine().prepare(),
             // in additive notation: final_vkey = uH,
             // uH - f_v(z)H = (u - f_v)H --> v1h^{-f_v(z)}
             &sub!(
@@ -432,11 +422,8 @@ pub fn verify_kzg_opening_g2<E: Engine>(
         )])
     };
 
-    // inverse so p1^-1 * p2 == 1
-    let ip1 = p1.inverse().unwrap();
-    let iq1 = q1.inverse().unwrap();
     // this pair should be one when multiplied
-    let (l, r) = rayon::join(|| mul!(iq1, &q2), || mul!(ip1, &p2));
+    let (l, r) = rayon::join(|| mul!(q1, &q2), || mul!(p1, &p2));
     PairingTuple::from_miller(mul!(l, &r))
 }
 
@@ -452,6 +439,12 @@ pub fn verify_kzg_opening_g1<E: Engine>(
     let wkey_poly_eval =
         polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
 
+    // -h such that when we test a pairing equation we only need to check if
+    // it's equal 1 at the end:
+    // e(a,b) = e(c,d) <=> e(a,b)e(c,-d) = 1
+    let mut nh = v_srs.h.clone();
+    nh.negate();
+
     par! {
         // first check on w1
         // let K = g^{a^{n+1}}
@@ -463,7 +456,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
             )
             .into_affine()
             .prepare(),
-            &v_srs.h.into_affine().prepare(),
+            &nh.into_affine().prepare(),
         )]),
         // e(opening, h^{a - z})
         let p2 = E::miller_loop(&[(
@@ -482,7 +475,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
             )
             .into_affine()
             .prepare(),
-            &v_srs.h.into_affine().prepare(),
+            &nh.into_affine().prepare(),
         )]),
         // e(opening, h^{b - z})
         let q2 = E::miller_loop(&[(
@@ -492,9 +485,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
                 .prepare(),
         )])
     };
-    let ip1 = p1.inverse().unwrap();
-    let iq1 = q1.inverse().unwrap();
-    let (l, r) = rayon::join(|| mul!(iq1, &q2), || mul!(ip1, &p2));
+    let (l, r) = rayon::join(|| mul!(q1, &q2), || mul!(p1, &p2));
     PairingTuple::from_miller(mul!(l, &r))
 }
 
@@ -527,7 +518,6 @@ fn verify_mipp<E: Engine>(
         "MIPP verify: mipp verification challenge took {}ms",
         now.elapsed().as_millis()
     );
-    let now = Instant::now();
 
     // final rescaled T U Z
     let (t, u) = com_tu;
@@ -535,58 +525,51 @@ fn verify_mipp<E: Engine>(
     // final c from proof
     let final_c = proof.gipa.final_c.clone();
     let final_r = proof.gipa.final_r.clone();
+    let now = Instant::now();
 
-    // Verify base inner product commitment
-    // Z ==  c ^ r
-    let final_z = inner_product::multiexponentiation::<E::G1Affine>(&[final_c], &[final_r]);
+    par! {
+        // Verify base inner product commitment
+        // Z ==  c ^ r
+        let final_z = inner_product::multiexponentiation::<E::G1Affine>(&[final_c], &[final_r]),
+        // Check commitment key corectness
+        let vtuple = verify_kzg_opening_g2(
+            v_srs,
+            &final_vkey,
+            &proof.vkey_opening,
+            &challenges_inv,
+            &E::Fr::one(),
+            &c,
+        ),
+
+        // Check commiment correctness 4.2.2
+        // T = e(C,v1)
+        let check_t = make_tuple(&final_c,&final_vkey.0,&t),
+        // U = e(A,v2)
+        let check_u = make_tuple(&final_c,&final_vkey.1,&u)
+    };
+
+    /*let miller_out = inner_product::pairing_miller_affine::<E>(&left, &right);*/
+    //let pair = PairingTuple::from_pair(miller_out, out);
+    println!(
+        "MIPP verify: parallel checks kZG + T & U took {}ms",
+        now.elapsed().as_millis(),
+    );
+
     let b = final_z == com_z;
-    println!("MIPP: check Z took {}ms", now.elapsed().as_millis(),);
     // only check that doesn't require pairing so we can give a tuple that will
     // render the equation wrong in case it's false
     if !b {
         return PairingTuple::new_invalid();
     }
 
-    let now = Instant::now();
-    // Check commitment key corectness
-    let mut vtuple = verify_kzg_opening_g2(
-        v_srs,
-        &final_vkey,
-        &proof.vkey_opening,
-        &challenges_inv,
-        &E::Fr::one(),
-        &c,
-    );
-    println!("MIPP: check KZG took {}ms", now.elapsed().as_millis(),);
-    let now = Instant::now();
-
-    // Check commiment correctness 4.2.2
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    let mut out = E::Fqk::one();
-    // T = e(C,v1)
-    left.push(final_c.clone());
-    right.push(final_vkey.0);
-    out.mul_assign(&t);
-    // U = e(A,v2)
-    left.push(final_c.clone());
-    right.push(final_vkey.1);
-    out.mul_assign(&u);
-
-    let miller_out = inner_product::pairing_miller_affine::<E>(&left, &right);
-    let pair = PairingTuple::from_pair(miller_out, out);
-    println!(
-        "MIPP verify: check  inner product T & U took {}ms",
-        now.elapsed().as_millis(),
-    );
-
-    let now = Instant::now();
-    vtuple.merge(&pair);
+    let mut acc = vtuple;
+    acc.merge(&check_t);
+    acc.merge(&check_u);
     println!(
         "MIPP verify: final merge took {}ms",
         now.elapsed().as_millis(),
     );
-    vtuple
+    acc
 }
 
 /// gipa_verify_mipp returns the final reconstructed Z T U values, as described
@@ -664,4 +647,11 @@ fn gipa_verify_mipp<E: Engine>(
     }
 
     ((comm_t, comm_u), z, challenges, challenges_inv)
+}
+
+fn make_tuple<E: Engine>(left: &E::G1Affine, right: &E::G2Affine, out: &E::Fqk) -> PairingTuple<E> {
+    PairingTuple::<E>::from_pair(
+        inner_product::pairing_miller_affine::<E>(&[left.clone()], &[right.clone()]),
+        out.clone(),
+    )
 }

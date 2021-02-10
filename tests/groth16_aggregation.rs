@@ -226,6 +226,17 @@ fn test_groth16_srs_io() {
     cache_path.close().expect("failed to close temp path");
 }
 
+// structure to write to CSV file
+#[derive(Debug, Serialize)]
+struct Record {
+    nproofs: u32,
+    aggregate_create_ms: u32,
+    aggregate_verify_ms: u32,
+    batch_verify_ms: u32,
+    aggregate_size_bytes: u32,
+    batch_size_bytes: u32,
+}
+
 #[test]
 fn test_groth16_bench() {
     let nb_proofs = vec![8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
@@ -250,18 +261,13 @@ fn test_groth16_bench() {
         .map(|_| generate_proof(public_inputs, &params, &mut rng))
         .unzip();
 
-    // structure to write to CSV file
-    #[derive(Debug, Serialize)]
-    struct Result {
-        nproofs: u32,
-        aggregate_create_ms: u32,
-        aggregate_verify_ms: u32,
-        batch_verify_ms: u32,
-    }
     let mut writer = csv::Writer::from_path("aggregation.csv").expect("unable to open csv writer");
 
     println!("Generating {} Groth16 proofs...", max);
 
+    let mut buf = Vec::new();
+    proofs[0].write(&mut buf).expect("buffer");
+    let proof_size = buf.len();
     for i in nb_proofs {
         println!("Proofs {}", i);
         let (pk, vk) = generic.specialize(i);
@@ -282,12 +288,16 @@ fn test_groth16_bench() {
         let proofs: Vec<_> = proofs.iter().take(i).collect();
         assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements[..i]).unwrap());
         let batch_verifier_time = start.elapsed().as_millis();
+
+        let agg_size = bincode::serialize(&aggregate_proof).unwrap().len();
         writer
-            .serialize(Result {
+            .serialize(Record {
                 nproofs: i as u32,
                 aggregate_create_ms: prover_time as u32,
                 aggregate_verify_ms: verifier_time as u32,
+                aggregate_size_bytes: agg_size as u32,
                 batch_verify_ms: batch_verifier_time as u32,
+                batch_size_bytes: (proof_size * i) as u32,
             })
             .expect("unable to write result to csv");
     }

@@ -8,8 +8,16 @@ use serde::{Deserialize, Serialize};
 pub struct AggregateProof<E: Engine> {
     /// commitment to A and B using the pair commitment scheme needed to verify
     /// TIPP relation.
+    #[serde(bound(
+        serialize = "E::Fqk: Serialize, E::Fqk: Serialize",
+        deserialize = "E::Fqk: Deserialize<'de>, E::Fqk: Deserialize<'de>",
+    ))]
     pub com_ab: commit::Output<E>,
     /// commit to C separate since we use it only in MIPP
+    #[serde(bound(
+        serialize = "E::Fqk: Serialize, E::Fqk: Serialize",
+        deserialize = "E::Fqk: Deserialize<'de>, E::Fqk: Deserialize<'de>",
+    ))]
     pub com_c: commit::Output<E>,
     /// $A^r * B = Z$ is the left value on the aggregated Groth16 equation
     pub ip_ab: E::Fqk,

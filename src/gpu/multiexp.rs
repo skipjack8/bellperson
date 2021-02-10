@@ -3,11 +3,13 @@ use super::locks;
 use super::sources;
 use super::utils;
 use crate::bls::Engine;
-use crate::multicore::Worker;
+use crate::multicore::{Waiter, Worker};
 use crate::multiexp::{multiexp as cpu_multiexp, FullDensity};
+use crate::SynthesisError;
 use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
 use log::{error, info};
+use rayon::prelude::*;
 use rust_gpu_tools::*;
 use std::any::TypeId;
 use std::sync::Arc;
@@ -262,14 +264,17 @@ where
         })
     }
 
-    pub fn multiexp<G>(
+    fn multiexp_inner<G>(
         &mut self,
         pool: &Worker,
         bases: Arc<Vec<G>>,
         exps: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
         skip: usize,
         n: usize,
-    ) -> GPUResult<<G as CurveAffine>::Projective>
+    ) -> (
+        GPUResult<<G as CurveAffine>::Projective>,
+        Waiter<Result<<G as CurveAffine>::Projective, SynthesisError>>,
+    )
     where
         G: CurveAffine,
         <G as groupy::CurveAffine>::Engine: crate::bls::Engine,
@@ -287,44 +292,64 @@ where
 
         let chunk_size = ((n as f64) / (num_devices as f64)).ceil() as usize;
 
-        crate::multicore::THREAD_POOL.install(|| {
-            use rayon::prelude::*;
+        let mut acc = <G as CurveAffine>::Projective::zero();
 
-            let mut acc = <G as CurveAffine>::Projective::zero();
-
-            let results = if n > 0 {
+        let results =
+            if n > 0 {
                 bases
-                    .par_chunks(chunk_size)
-                    .zip(exps.par_chunks(chunk_size))
-                    .zip(self.kernels.par_iter_mut())
-                    .map(|((bases, exps), kern)| -> Result<<G as CurveAffine>::Projective, GPUError> {
-                        let mut acc = <G as CurveAffine>::Projective::zero();
-                        for (bases, exps) in bases.chunks(kern.n).zip(exps.chunks(kern.n)) {
-                            let result = kern.multiexp(bases, exps, bases.len())?;
-                            acc.add_assign(&result);
-                        }
+                .par_chunks(chunk_size)
+                .zip(exps.par_chunks(chunk_size))
+                .zip(self.kernels.par_iter_mut())
+                .map(|((bases, exps), kern)| -> Result<<G as CurveAffine>::Projective, GPUError> {
+                    let mut acc = <G as CurveAffine>::Projective::zero();
+                    for (bases, exps) in bases.chunks(kern.n).zip(exps.chunks(kern.n)) {
+                        let result = kern.multiexp(bases, exps, bases.len())?;
+                        acc.add_assign(&result);
+                    }
 
-                        Ok(acc)
-                    })
-                    .collect::<Vec<_>>()
+                    Ok(acc)
+                })
+                .collect::<Vec<_>>()
             } else {
                 Vec::new()
             };
 
-            let cpu_acc = cpu_multiexp(
-                &pool,
-                (Arc::new(cpu_bases.to_vec()), 0),
-                FullDensity,
-                Arc::new(cpu_exps.to_vec()),
-                &mut None,
-            );
+        let cpu_acc = cpu_multiexp(
+            &pool,
+            (Arc::new(cpu_bases.to_vec()), 0),
+            FullDensity,
+            Arc::new(cpu_exps.to_vec()),
+            &mut None,
+        );
 
-            for r in results {
-                acc.add_assign(&r?);
-            }
+        for r in results {
+            acc.add_assign(&r.unwrap());
+        }
 
-            acc.add_assign(&cpu_acc.wait().unwrap());
-            Ok(acc)
-        })
+        (Ok(acc), cpu_acc)
+    }
+
+    pub fn multiexp<G>(
+        &mut self,
+        pool: &Worker,
+        bases: Arc<Vec<G>>,
+        exps: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
+        skip: usize,
+        n: usize,
+    ) -> GPUResult<<G as CurveAffine>::Projective>
+    where
+        G: CurveAffine,
+        <G as groupy::CurveAffine>::Engine: crate::bls::Engine,
+    {
+        // NOTE: This is called in the context of the THREAD_POOL
+        // already.  It's not clear there's any benefit (or harm) to
+        // doing this again.
+        let (acc, cpu_acc) = crate::multicore::THREAD_POOL
+            .install(|| self.multiexp_inner(pool, bases, exps, skip, n));
+
+        let mut unwrapped_acc = acc?;
+        unwrapped_acc.add_assign(&cpu_acc.wait().unwrap());
+
+        Ok(unwrapped_acc)
     }
 }

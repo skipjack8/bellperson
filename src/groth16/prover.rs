@@ -411,7 +411,7 @@ where
     }
 
     #[cfg(feature = "gpu")]
-    let prio_lock = if priority {
+    let _prio_lock = if priority {
         Some(PriorityLock::lock())
     } else {
         None

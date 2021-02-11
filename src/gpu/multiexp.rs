@@ -294,7 +294,7 @@ where
 
         let mut acc = <G as CurveAffine>::Projective::zero();
 
-        let results =
+        let results = crate::multicore::THREAD_POOL.install(|| {
             if n > 0 {
                 bases
                 .par_chunks(chunk_size)
@@ -312,7 +312,8 @@ where
                 .collect::<Vec<_>>()
             } else {
                 Vec::new()
-            };
+            }
+        });
 
         let cpu_acc = cpu_multiexp(
             &pool,

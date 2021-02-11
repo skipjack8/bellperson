@@ -7,8 +7,8 @@
 
 use crossbeam_channel::{bounded, Receiver};
 use lazy_static::lazy_static;
-use std::env;
 use log::error;
+use std::env;
 
 lazy_static! {
     static ref NUM_CPUS: usize = if let Ok(num) = env::var("BELLMAN_NUM_CPUS") {

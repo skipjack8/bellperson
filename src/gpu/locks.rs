@@ -14,7 +14,7 @@ fn tmp_path(filename: &str) -> PathBuf {
 /// `GPULock` prevents two kernel objects to be instantiated simultaneously.
 #[derive(Debug)]
 pub struct GPULock {
-    f: File
+    f: File,
 }
 
 impl GPULock {
@@ -23,7 +23,7 @@ impl GPULock {
         let f = File::create(tmp_path(GPU_LOCK_NAME)).unwrap();
         f.lock_exclusive().unwrap();
         debug!("GPU lock acquired! {:?}", f);
-        GPULock{f}
+        GPULock { f }
     }
 }
 impl Drop for GPULock {

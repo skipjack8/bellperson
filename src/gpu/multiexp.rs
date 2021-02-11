@@ -341,8 +341,7 @@ where
         G: CurveAffine,
         <G as groupy::CurveAffine>::Engine: crate::bls::Engine,
     {
-        let (acc, cpu_acc) = crate::multicore::THREAD_POOL
-            .install(|| self.multiexp_inner(pool, bases, exps, skip, n));
+        let (acc, cpu_acc) = self.multiexp_inner(pool, bases, exps, skip, n);
 
         let mut unwrapped_acc = acc?;
         unwrapped_acc.add_assign(&cpu_acc.wait().unwrap());

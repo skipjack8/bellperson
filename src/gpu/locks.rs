@@ -70,7 +70,7 @@ impl PriorityLock {
 }
 impl Drop for PriorityLock {
     fn drop(&mut self) {
-        self.0.unlock();
+        self.0.unlock().unwrap();
         debug!("Priority lock released!");
     }
 }

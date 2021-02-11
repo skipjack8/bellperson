@@ -341,9 +341,6 @@ where
         G: CurveAffine,
         <G as groupy::CurveAffine>::Engine: crate::bls::Engine,
     {
-        // NOTE: This is called in the context of the THREAD_POOL
-        // already.  It's not clear there's any benefit (or harm) to
-        // doing this again.
         let (acc, cpu_acc) = crate::multicore::THREAD_POOL
             .install(|| self.multiexp_inner(pool, bases, exps, skip, n));
 

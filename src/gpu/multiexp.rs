@@ -4,7 +4,7 @@ use super::sources;
 use super::utils;
 use crate::bls::Engine;
 use crate::multicore::{Waiter, Worker};
-use crate::multiexp::{multiexp as cpu_multiexp, FullDensity};
+use crate::multiexp::{multiexp_inline as cpu_multiexp, FullDensity};
 use crate::SynthesisError;
 use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
@@ -273,7 +273,7 @@ where
         n: usize,
     ) -> (
         GPUResult<<G as CurveAffine>::Projective>,
-        Waiter<Result<<G as CurveAffine>::Projective, SynthesisError>>,
+        Result<<G as CurveAffine>::Projective, SynthesisError>,
     )
     where
         G: CurveAffine,
@@ -341,14 +341,12 @@ where
         G: CurveAffine,
         <G as groupy::CurveAffine>::Engine: crate::bls::Engine,
     {
-        // NOTE: This is called in the context of the THREAD_POOL
-        // already.  It's not clear there's any benefit (or harm) to
-        // doing this again.
-        let (acc, cpu_acc) = crate::multicore::THREAD_POOL
-            .install(|| self.multiexp_inner(pool, bases, exps, skip, n));
-
+        // NOTE: This is called in the context of the THREAD_POOL.
+        let (acc, cpu_acc) = self.multiexp_inner(pool, bases, exps, skip, n);
         let mut unwrapped_acc = acc?;
-        unwrapped_acc.add_assign(&cpu_acc.wait().unwrap());
+        let unwrapped_cpu_acc = cpu_acc.unwrap();
+
+        unwrapped_acc.add_assign(&unwrapped_cpu_acc);
 
         Ok(unwrapped_acc)
     }

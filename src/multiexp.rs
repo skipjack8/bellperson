@@ -282,6 +282,59 @@ where
         })
 }
 
+/// Perform multi-exponentiation in a blocking manner. The caller is
+/// responsible for ensuring the query size is the same as the number
+/// of exponents.
+///
+/// This method should only be called inside of the existing
+/// THREAD_POOL context.
+pub fn multiexp_inline<Q, D, G, S>(
+    pool: &Worker,
+    bases: S,
+    density_map: D,
+    exponents: Arc<Vec<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>>,
+    kern: &mut Option<gpu::LockedMultiexpKernel<G::Engine>>,
+) -> Result<<G as CurveAffine>::Projective, SynthesisError>
+where
+    for<'a> &'a Q: QueryDensity,
+    D: Send + Sync + 'static + Clone + AsRef<Q>,
+    G: CurveAffine,
+    G::Engine: crate::bls::Engine,
+    S: SourceBuilder<G>,
+{
+    if let Some(ref mut kern) = kern {
+        if let Ok(p) = kern.with(|k: &mut gpu::MultiexpKernel<G::Engine>| {
+            let mut exps = vec![exponents[0]; exponents.len()];
+            let mut n = 0;
+            for (&e, d) in exponents.iter().zip(density_map.as_ref().iter()) {
+                if d {
+                    exps[n] = e;
+                    n += 1;
+                }
+            }
+
+            let (bss, skip) = bases.clone().get();
+            k.multiexp(pool, bss, Arc::new(exps.clone()), skip, n)
+        }) {
+            return Ok(p);
+        }
+    }
+
+    let c = if exponents.len() < 32 {
+        3u32
+    } else {
+        (f64::from(exponents.len() as u32)).ln().ceil() as u32
+    };
+
+    if let Some(query_size) = density_map.as_ref().get_query_size() {
+        // If the density map has a known query size, it should not be
+        // inconsistent with the number of exponents.
+        assert!(query_size == exponents.len());
+    }
+
+    multiexp_inner(bases, density_map, exponents, c)
+}
+
 /// Perform multi-exponentiation. The caller is responsible for ensuring the
 /// query size is the same as the number of exponents.
 pub fn multiexp<Q, D, G, S>(

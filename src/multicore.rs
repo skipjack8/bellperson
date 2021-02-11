@@ -8,6 +8,7 @@
 use crossbeam_channel::{bounded, Receiver};
 use lazy_static::lazy_static;
 use std::env;
+use log::error;
 
 lazy_static! {
     static ref NUM_CPUS: usize = if let Ok(num) = env::var("BELLMAN_NUM_CPUS") {
@@ -77,6 +78,10 @@ pub struct Waiter<T> {
 impl<T> Waiter<T> {
     /// Wait for the result.
     pub fn wait(&self) -> T {
+        if THREAD_POOL.current_thread_index().is_some() {
+            // Calling `wait()` from within the worker thread pool can lead to dead logs
+            error!("The wait call should never be done inside the worker thread pool");
+        }
         self.receiver.recv().unwrap()
     }
 

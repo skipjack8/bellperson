@@ -13,19 +13,23 @@ fn tmp_path(filename: &str) -> PathBuf {
 
 /// `GPULock` prevents two kernel objects to be instantiated simultaneously.
 #[derive(Debug)]
-pub struct GPULock(File);
+pub struct GPULock {
+    f: File
+}
+
 impl GPULock {
     pub fn lock() -> GPULock {
         debug!("Acquiring GPU lock...");
         let f = File::create(tmp_path(GPU_LOCK_NAME)).unwrap();
         f.lock_exclusive().unwrap();
-        debug!("GPU lock acquired!");
-        GPULock(f)
+        debug!("GPU lock acquired! {:?}", f);
+        GPULock{f}
     }
 }
 impl Drop for GPULock {
     fn drop(&mut self) {
-        debug!("GPU lock released!");
+        debug!("GPU lock releasing! {:?}", self.f);
+        self.f.unlock().unwrap();
     }
 }
 

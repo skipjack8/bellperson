@@ -7,7 +7,9 @@ use bellperson::groth16::{
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use ff::{Field, PrimeField, ScalarEngine};
+use itertools::Itertools;
 use rand::{thread_rng, RngCore, SeedableRng};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
@@ -233,6 +235,7 @@ struct Record {
     aggregate_create_ms: u32,
     aggregate_verify_ms: u32,
     batch_verify_ms: u32,
+    batch_all_ms: u32,
     aggregate_size_bytes: u32,
     batch_size_bytes: u32,
 }
@@ -283,11 +286,33 @@ fn test_groth16_bench() {
         assert!(result.unwrap());
         let verifier_time = start.elapsed().as_millis();
 
-        println!("\t-Batch verification...");
+        println!("\t-Batch per 10 packets verification...");
+        let batches: Vec<_> = proofs
+            .iter()
+            .cloned()
+            .take(i)
+            .zip(statements.iter().cloned().take(i))
+            .chunks(10)
+            .into_iter()
+            .map(|s| s.collect())
+            .collect::<Vec<Vec<(Proof<Bls12>, Vec<Fr>)>>>();
+        let start = Instant::now();
+        batches.par_iter().for_each(|batch| {
+            let batch_proofs = batch.iter().by_ref().map(|(p, _)| p).collect::<Vec<_>>();
+            let batch_statements = batch
+                .iter()
+                .map(|(_, state)| state.clone())
+                .collect::<Vec<_>>();
+            let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+            assert!(verify_proofs_batch(&pvk, &mut rng, &batch_proofs, &batch_statements).unwrap())
+        });
+        let batch_verifier_time = start.elapsed().as_millis();
+
+        println!("\t-Batch all-in verification...");
         let start = Instant::now();
         let proofs: Vec<_> = proofs.iter().take(i).collect();
         assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements[..i]).unwrap());
-        let batch_verifier_time = start.elapsed().as_millis();
+        let batch_all_time = start.elapsed().as_millis();
 
         let agg_size = bincode::serialize(&aggregate_proof).unwrap().len();
         writer
@@ -298,6 +323,7 @@ fn test_groth16_bench() {
                 aggregate_size_bytes: agg_size as u32,
                 batch_verify_ms: batch_verifier_time as u32,
                 batch_size_bytes: (proof_size * i) as u32,
+                batch_all_ms: batch_all_time as u32,
             })
             .expect("unable to write result to csv");
     }

@@ -328,24 +328,7 @@ where
         assert!(query_size == exponents.len());
     }
 
-    let result = pool.compute(move || multiexp_inner(bases, density_map, exponents, c));
-
-    // NOTE: This logic below is broken: We are already in the context
-    // of the pool and have already requested a spawn to complete the
-    // above work.  In the case of GPU, issuing a wait() inside of the
-    // same pool makes a race condition possible.
-
-    //#[cfg(feature = "gpu")]
-    //let result = result.wait();
-    //{
-    // Do not give the control back to the caller till the
-    // multiexp is done. We may want to reacquire the GPU again
-    // between the multiexps.
-    //let result = result.wait();
-    //Waiter::done(result)
-    //}
-    //#[cfg(not(feature = "gpu"))]
-    result
+    pool.compute(move || multiexp_inner(bases, density_map, exponents, c))
 }
 
 #[cfg(any(feature = "pairing", feature = "blst"))]

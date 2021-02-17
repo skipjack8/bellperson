@@ -1,23 +1,24 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::bls::Engine;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
+use log::info;
+#[cfg(feature = "gpu")]
+use log::trace;
 use rand_core::RngCore;
 use rayon::prelude::*;
 
 use super::{ParameterSource, Proof};
+use crate::bls::Engine;
 use crate::domain::{EvaluationDomain, Scalar};
 use crate::gpu::{LockedFFTKernel, LockedMultiexpKernel};
 use crate::multicore::{Worker, RAYON_THREAD_POOL};
 use crate::multiexp::{multiexp, DensityTracker, FullDensity};
+use crate::par;
 use crate::{
     Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable, BELLMAN_VERSION,
 };
-use log::info;
-#[cfg(feature = "gpu")]
-use log::trace;
 
 #[cfg(feature = "gpu")]
 use crate::gpu::PriorityLock;
@@ -277,8 +278,28 @@ where
 
     // Preparing things for the proofs is done a lot in parallel with the help of Rayon. Make
     // sure that those things run on the correct thread pool.
-    let (start, mut provers) =
-        RAYON_THREAD_POOL.install(|| create_proof_batch_priority_inner(circuits))?;
+    let mut provers = RAYON_THREAD_POOL.install(|| {
+        circuits
+            .into_par_iter()
+            .map(|circuit| -> Result<_, SynthesisError> {
+                let mut prover = ProvingAssignment::new();
+
+                prover.alloc_input(|| "", || Ok(E::Fr::one()))?;
+
+                circuit.synthesize(&mut prover)?;
+
+                for i in 0..prover.input_assignment.len() {
+                    prover.enforce(|| "", |lc| lc + Variable(Index::Input(i)), |lc| lc, |lc| lc);
+                }
+
+                Ok(prover)
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+
+    // Start fft/multiexp prover timer
+    let start = Instant::now();
+    info!("starting proof timer");
 
     // The rest of the proving also has parallelism, but not on the outer loops, but within e.g. the
     // multiexp calculations. This is what the `Worker` is used for. It is important that calling
@@ -323,7 +344,7 @@ where
 
     #[cfg(feature = "gpu")]
     let prio_lock = if priority {
-        trace!("acquiring priority lock");
+        log::trace!("acquiring priority lock");
         Some(PriorityLock::lock())
     } else {
         None
@@ -333,9 +354,13 @@ where
 
     info!("a_s");
     let provers_len = provers.len();
-    let (a_s, params_all) = rayon::join(
-        || {
-            provers
+
+    let params = &params;
+    let worker = &worker;
+    let provers_ref = &mut provers;
+    par! {
+        let a_s = {
+            provers_ref
                 .iter_mut()
                 .map(|prover| {
                     let mut a = EvaluationDomain::from_coeffs(std::mem::replace(
@@ -380,99 +405,89 @@ where
 
                     Ok(Arc::new(
                         a.into_iter()
-                            .take(a_len)
-                            .map(|s| s.0.into_repr())
-                            .collect::<Vec<_>>(),
+                         .take(a_len)
+                         .map(|s| s.0.into_repr())
+                         .collect::<Vec<_>>(),
                     ))
                 })
                 .collect::<Result<Vec<_>, SynthesisError>>()
         },
-        || -> Result<_, SynthesisError> {
-            let params_h = params.get_h(n)?;
-            let params_l = params.get_l(provers_len)?;
-            let (a_inputs_source, a_aux_source) = params.get_a(input_len, a_aux_density_total)?;
-            let (b_g1_inputs_source, b_g1_aux_source) =
-                params.get_b_g1(b_input_density_total, b_aux_density_total)?;
-            let (b_g2_inputs_source, b_g2_aux_source) =
-                params.get_b_g2(b_input_density_total, b_aux_density_total)?;
-
-            Ok((
-                params_h,
-                params_l,
-                a_inputs_source,
-                a_aux_source,
-                b_g1_inputs_source,
-                b_g1_aux_source,
-                b_g2_inputs_source,
-                b_g2_aux_source,
-            ))
+        let params_h = {
+            params.get_h(n)
         },
-    );
-    let a_s = a_s?;
-    let (
-        params_h,
-        params_l,
-        a_inputs_source,
-        a_aux_source,
-        b_g1_inputs_source,
-        b_g1_aux_source,
-        b_g2_inputs_source,
-        b_g2_aux_source,
-    ) = params_all?;
+        let params_l = {
+            params.get_l(provers_len)
+        },
+        let a_source = {
+            params.get_a(input_len, a_aux_density_total)
+        },
+        let b_g1_source = {
+            params.get_b_g1(b_input_density_total, b_aux_density_total)
+        },
+        let b_g2_source = {
+            params.get_b_g2(b_input_density_total, b_aux_density_total)
+        }
+    };
 
-    drop(fft_kern);
+    let a_s = a_s?;
+    let params_h = params_h?;
+    let params_l = params_l?;
+    let (a_inputs_source, a_aux_source) = a_source?;
+    let (b_g1_inputs_source, b_g1_aux_source) = b_g1_source?;
+    let (b_g2_inputs_source, b_g2_aux_source) = b_g2_source?;
+
     info!("fft done");
     let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
 
-    let (h_s, (input_assignments, aux_assignments)) = rayon::join(
-        || {
+    let params_h_ref = &params_h;
+    let worker = &worker;
+    let mkern = &mut multiexp_kern;
+    let provers_ref = &provers;
+    par! {
+        let h_s = {
             info!("h_s");
             a_s.into_iter()
                 .map(|a| {
                     let h = multiexp(
-                        &worker,
-                        params_h.clone(),
+                        worker,
+                        params_h_ref.clone(),
                         FullDensity,
                         a,
-                        &mut multiexp_kern,
+                        mkern,
                     );
                     Ok(h)
                 })
                 .collect::<Result<Vec<_>, SynthesisError>>()
         },
-        || {
+        let input_assignments = {
             info!("input_assignments");
-            let input_assignments = provers
-                .par_iter_mut()
+            provers_ref
+                .par_iter()
                 .map(|prover| {
-                    let input_assignment =
-                        std::mem::replace(&mut prover.input_assignment, Vec::new());
                     Arc::new(
-                        input_assignment
-                            .into_iter()
+                        prover.input_assignment
+                            .iter()
                             .map(|s| s.into_repr())
                             .collect::<Vec<_>>(),
                     )
                 })
-                .collect::<Vec<_>>();
-
-            info!("aux_assignments");
-            let aux_assignments = provers
-                .par_iter_mut()
-                .map(|prover| {
-                    let aux_assignment = std::mem::replace(&mut prover.aux_assignment, Vec::new());
-                    Arc::new(
-                        aux_assignment
-                            .into_iter()
-                            .map(|s| s.into_repr())
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            (input_assignments, aux_assignments)
+                .collect::<Vec<_>>()
         },
-    );
+        let aux_assignments = {
+            info!("aux_assignments");
+            provers_ref
+                .par_iter()
+                .map(|prover| {
+                    Arc::new(
+                        prover.aux_assignment
+                            .iter()
+                            .map(|s| s.into_repr())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        }
+    };
     let h_s = h_s?;
     drop(params_h);
 
@@ -636,7 +651,7 @@ where
 
     #[cfg(feature = "gpu")]
     {
-        trace!("dropping priority lock");
+        log::trace!("dropping priority lock");
         drop(prio_lock);
     }
 
@@ -644,38 +659,6 @@ where
     info!("prover time: {:?}", proof_time);
 
     Ok(proofs)
-}
-
-#[allow(clippy::type_complexity)]
-fn create_proof_batch_priority_inner<E, C>(
-    circuits: Vec<C>,
-) -> Result<(Instant, std::vec::Vec<ProvingAssignment<E>>), SynthesisError>
-where
-    E: Engine,
-    C: Circuit<E> + Send,
-{
-    let provers = circuits
-        .into_par_iter()
-        .map(|circuit| -> Result<_, SynthesisError> {
-            let mut prover = ProvingAssignment::new();
-
-            prover.alloc_input(|| "", || Ok(E::Fr::one()))?;
-
-            circuit.synthesize(&mut prover)?;
-
-            for i in 0..prover.input_assignment.len() {
-                prover.enforce(|| "", |lc| lc + Variable(Index::Input(i)), |lc| lc, |lc| lc);
-            }
-
-            Ok(prover)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Start fft/multiexp prover timer
-    let start = Instant::now();
-    info!("starting proof timer");
-
-    Ok((start, provers))
 }
 
 #[cfg(test)]

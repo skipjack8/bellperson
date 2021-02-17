@@ -333,7 +333,7 @@ where
 
     info!("a_s");
     let provers_len = provers.len();
-    let (a_s, params_h_l) = rayon::join(
+    let (a_s, params_all) = rayon::join(
         || {
             provers
                 .iter_mut()
@@ -351,14 +351,19 @@ where
                         Vec::new(),
                     ))?;
 
+                    info!("a: ifft");
                     a.ifft(&worker, &mut fft_kern)?;
                     a.coset_fft(&worker, &mut fft_kern)?;
 
+                    info!("b: ifft");
                     b.ifft(&worker, &mut fft_kern)?;
                     b.coset_fft(&worker, &mut fft_kern)?;
 
+                    info!("c: ifft");
                     c.ifft(&worker, &mut fft_kern)?;
                     c.coset_fft(&worker, &mut fft_kern)?;
+
+                    info!("fft collect");
 
                     a.mul_assign(&worker, &b);
                     a.sub_assign(&worker, &c);
@@ -366,6 +371,7 @@ where
                     drop(b);
                     drop(c);
 
+                    info!("coset");
                     a.divide_by_z_on_coset(&worker);
                     a.icoset_fft(&worker, &mut fft_kern)?;
 
@@ -384,53 +390,55 @@ where
         || -> Result<_, SynthesisError> {
             let params_h = params.get_h(n)?;
             let params_l = params.get_l(provers_len)?;
+            let (a_inputs_source, a_aux_source) = params.get_a(input_len, a_aux_density_total)?;
+            let (b_g1_inputs_source, b_g1_aux_source) =
+                params.get_b_g1(b_input_density_total, b_aux_density_total)?;
+            let (b_g2_inputs_source, b_g2_aux_source) =
+                params.get_b_g2(b_input_density_total, b_aux_density_total)?;
 
-            Ok((params_h, params_l))
+            Ok((
+                params_h,
+                params_l,
+                a_inputs_source,
+                a_aux_source,
+                b_g1_inputs_source,
+                b_g1_aux_source,
+                b_g2_inputs_source,
+                b_g2_aux_source,
+            ))
         },
     );
     let a_s = a_s?;
-    let (params_h, params_l) = params_h_l?;
+    let (
+        params_h,
+        params_l,
+        a_inputs_source,
+        a_aux_source,
+        b_g1_inputs_source,
+        b_g1_aux_source,
+        b_g2_inputs_source,
+        b_g2_aux_source,
+    ) = params_all?;
 
     drop(fft_kern);
     info!("fft done");
     let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
 
-    let ((h_s, params_other), (input_assignments, aux_assignments)) = rayon::join(
+    let (h_s, (input_assignments, aux_assignments)) = rayon::join(
         || {
-            rayon::join(
-                || {
-                    info!("h_s");
-                    a_s.into_iter()
-                        .map(|a| {
-                            let h = multiexp(
-                                &worker,
-                                params_h.clone(),
-                                FullDensity,
-                                a,
-                                &mut multiexp_kern,
-                            );
-                            Ok(h)
-                        })
-                        .collect::<Result<Vec<_>, SynthesisError>>()
-                },
-                || -> Result<_, SynthesisError> {
-                    let (a_inputs_source, a_aux_source) =
-                        params.get_a(input_len, a_aux_density_total)?;
-                    let (b_g1_inputs_source, b_g1_aux_source) =
-                        params.get_b_g1(b_input_density_total, b_aux_density_total)?;
-                    let (b_g2_inputs_source, b_g2_aux_source) =
-                        params.get_b_g2(b_input_density_total, b_aux_density_total)?;
-
-                    Ok((
-                        a_inputs_source,
-                        a_aux_source,
-                        b_g1_inputs_source,
-                        b_g1_aux_source,
-                        b_g2_inputs_source,
-                        b_g2_aux_source,
-                    ))
-                },
-            )
+            info!("h_s");
+            a_s.into_iter()
+                .map(|a| {
+                    let h = multiexp(
+                        &worker,
+                        params_h.clone(),
+                        FullDensity,
+                        a,
+                        &mut multiexp_kern,
+                    );
+                    Ok(h)
+                })
+                .collect::<Result<Vec<_>, SynthesisError>>()
         },
         || {
             info!("input_assignments");
@@ -466,15 +474,6 @@ where
         },
     );
     let h_s = h_s?;
-    let (
-        a_inputs_source,
-        a_aux_source,
-        b_g1_inputs_source,
-        b_g1_aux_source,
-        b_g2_inputs_source,
-        b_g2_aux_source,
-    ) = params_other?;
-
     drop(params_h);
 
     info!("l_s");
@@ -568,37 +567,47 @@ where
     drop(b_g2_aux_source);
     drop(multiexp_kern);
 
+    info!("proofs prep");
+    let gs = r_s
+        .par_iter()
+        .zip(s_s.par_iter())
+        .map(|(r, s)| {
+            if vk.delta_g1.is_zero() || vk.delta_g2.is_zero() {
+                // If this element is zero, someone is trying to perform a
+                // subversion-CRS attack.
+                return Err(SynthesisError::UnexpectedIdentity);
+            }
+
+            let mut g_a = vk.delta_g1.mul(*r);
+            g_a.add_assign_mixed(&vk.alpha_g1);
+            let mut g_b = vk.delta_g2.mul(*s);
+            g_b.add_assign_mixed(&vk.beta_g2);
+            let mut g_c;
+            {
+                let mut rs = *r;
+                rs.mul_assign(&s);
+
+                g_c = vk.delta_g1.mul(rs);
+                g_c.add_assign(&vk.alpha_g1.mul(*s));
+                g_c.add_assign(&vk.beta_g1.mul(*r));
+            }
+            Ok((g_a, g_b, g_c))
+        })
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+
     info!("proofs");
-    let proofs = h_s
+    let proofs = gs
         .into_par_iter()
+        .zip(h_s.into_par_iter())
         .zip(l_s.into_par_iter())
-        .zip(inputs.into_par_iter())
         .zip(r_s.into_par_iter())
         .zip(s_s.into_par_iter())
+        .zip(inputs.into_par_iter())
         .map(
             |(
-                (((h, l), (a_inputs, a_aux, b_g1_inputs, b_g1_aux, b_g2_inputs, b_g2_aux)), r),
-                s,
+                (((((mut g_a, mut g_b, mut g_c), h), l), r), s),
+                (a_inputs, a_aux, b_g1_inputs, b_g1_aux, b_g2_inputs, b_g2_aux),
             )| {
-                if vk.delta_g1.is_zero() || vk.delta_g2.is_zero() {
-                    // If this element is zero, someone is trying to perform a
-                    // subversion-CRS attack.
-                    return Err(SynthesisError::UnexpectedIdentity);
-                }
-
-                let mut g_a = vk.delta_g1.mul(r);
-                g_a.add_assign_mixed(&vk.alpha_g1);
-                let mut g_b = vk.delta_g2.mul(s);
-                g_b.add_assign_mixed(&vk.beta_g2);
-                let mut g_c;
-                {
-                    let mut rs = r;
-                    rs.mul_assign(&s);
-
-                    g_c = vk.delta_g1.mul(rs);
-                    g_c.add_assign(&vk.alpha_g1.mul(s));
-                    g_c.add_assign(&vk.beta_g1.mul(r));
-                }
                 let mut a_answer = a_inputs.wait()?;
                 a_answer.add_assign(&a_aux.wait()?);
                 g_a.add_assign(&a_answer);

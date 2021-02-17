@@ -13,13 +13,14 @@ use super::{ParameterSource, Proof};
 use crate::bls::Engine;
 use crate::domain::{EvaluationDomain, Scalar};
 use crate::gpu::{LockedFFTKernel, LockedMultiexpKernel};
-use crate::multicore::{Waiter, Worker, RAYON_THREAD_POOL};
+use crate::multicore::{Worker, RAYON_THREAD_POOL};
 use crate::multiexp::{multiexp, DensityTracker, FullDensity};
 use crate::par;
 use crate::{
     Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable, BELLMAN_VERSION,
 };
 
+#[cfg(feature = "gpu")]
 use crate::gpu::PriorityLock;
 
 fn eval<E: Engine>(
@@ -273,56 +274,9 @@ where
     E: Engine,
     C: Circuit<E> + Send,
 {
-    let (gs, h_s, l_s, r_s, s_s, inputs, start, mut prio_lock) = THREAD_POOL.install(|| {
+    let proofs = RAYON_THREAD_POOL.install(|| {
         create_proof_batch_priority_inner::<E, C, P>(circuits, params, r_s, s_s, priority)
     })?;
-
-    info!("proofs");
-    let proofs = gs
-        .into_iter()
-        .zip(h_s.into_iter())
-        .zip(l_s.into_iter())
-        .zip(r_s.into_iter())
-        .zip(s_s.into_iter())
-        .zip(inputs.into_iter())
-        .map(
-            |(
-                (((((mut g_a, mut g_b, mut g_c), h), l), r), s),
-                (a_inputs, a_aux, b_g1_inputs, b_g1_aux, b_g2_inputs, b_g2_aux),
-            )| {
-                let mut a_answer = a_inputs.wait()?;
-                a_answer.add_assign(&a_aux.wait()?);
-                g_a.add_assign(&a_answer);
-                a_answer.mul_assign(s);
-                g_c.add_assign(&a_answer);
-
-                let mut b1_answer = b_g1_inputs.wait()?;
-                b1_answer.add_assign(&b_g1_aux.wait()?);
-                let mut b2_answer = b_g2_inputs.wait()?;
-                b2_answer.add_assign(&b_g2_aux.wait()?);
-
-                g_b.add_assign(&b2_answer);
-                b1_answer.mul_assign(r);
-                g_c.add_assign(&b1_answer);
-                g_c.add_assign(&h.wait()?);
-                g_c.add_assign(&l.wait()?);
-
-                Ok(Proof {
-                    a: g_a.into_affine(),
-                    b: g_b.into_affine(),
-                    c: g_c.into_affine(),
-                })
-            },
-        )
-        .collect::<Result<Vec<_>, SynthesisError>>()?;
-
-    if let Some(prio_lock) = prio_lock.take() {
-        log::trace!("dropping priority lock");
-        drop(prio_lock);
-    }
-
-    let proof_time = start.elapsed();
-    info!("prover time: {:?}", proof_time);
 
     Ok(proofs)
 }
@@ -333,26 +287,7 @@ fn create_proof_batch_priority_inner<E, C, P: ParameterSource<E>>(
     r_s: Vec<E::Fr>,
     s_s: Vec<E::Fr>,
     priority: bool,
-) -> Result<
-    (
-        Vec<(E::G1, E::G2, E::G1)>,
-        Vec<Waiter<Result<E::G1, SynthesisError>>>,
-        Vec<Waiter<Result<E::G1, SynthesisError>>>,
-        Vec<E::Fr>,
-        Vec<E::Fr>,
-        Vec<(
-            Waiter<Result<E::G1, SynthesisError>>,
-            Waiter<Result<E::G1, SynthesisError>>,
-            Waiter<Result<E::G1, SynthesisError>>,
-            Waiter<Result<E::G1, SynthesisError>>,
-            Waiter<Result<E::G2, SynthesisError>>,
-            Waiter<Result<E::G2, SynthesisError>>,
-        )>,
-        Instant,
-        Option<PriorityLock>,
-    ),
-    SynthesisError,
->
+) -> Result<Vec<Proof<E>>, SynthesisError>
 where
     E: Engine,
     C: Circuit<E> + Send,
@@ -431,17 +366,14 @@ where
         None
     };
 
-    #[cfg(not(feature = "gpu"))]
-    let prio_lock = None;
-
     let mut fft_kern = Some(LockedFFTKernel::<E>::new(log_d, priority));
 
     info!("a_s");
     let provers_len = provers.len();
-
+    let provers_ref = &mut provers;
     let params = &params;
     let worker = &worker;
-    let provers_ref = &mut provers;
+
     par! {
         let a_s = {
             provers_ref
@@ -523,8 +455,6 @@ where
     info!("fft done");
     let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
 
-    let params_h_ref = &params_h;
-    let worker = &worker;
     let mkern = &mut multiexp_kern;
     let provers_ref = &provers;
     par! {
@@ -533,8 +463,7 @@ where
             a_s.into_iter()
                 .map(|a| {
                     let h = multiexp(
-                        worker,
-                        params_h_ref.clone(),
+                        params_h.clone(),
                         FullDensity,
                         a,
                         mkern,
@@ -573,14 +502,12 @@ where
         }
     };
     let h_s = h_s?;
-    drop(params_h);
 
     info!("l_s");
     let l_s = aux_assignments
         .iter()
         .map(|aux_assignment| {
             let l = multiexp(
-                &worker,
                 params_l.clone(),
                 FullDensity,
                 aux_assignment.clone(),
@@ -598,7 +525,6 @@ where
         .zip(aux_assignments.iter())
         .map(|((prover, input_assignment), aux_assignment)| {
             let a_inputs = multiexp(
-                &worker,
                 a_inputs_source.clone(),
                 FullDensity,
                 input_assignment.clone(),
@@ -606,7 +532,6 @@ where
             );
 
             let a_aux = multiexp(
-                &worker,
                 a_aux_source.clone(),
                 Arc::new(prover.a_aux_density),
                 aux_assignment.clone(),
@@ -617,7 +542,6 @@ where
             let b_aux_density = Arc::new(prover.b_aux_density);
 
             let b_g1_inputs = multiexp(
-                &worker,
                 b_g1_inputs_source.clone(),
                 b_input_density.clone(),
                 input_assignment.clone(),
@@ -625,7 +549,6 @@ where
             );
 
             let b_g1_aux = multiexp(
-                &worker,
                 b_g1_aux_source.clone(),
                 b_aux_density.clone(),
                 aux_assignment.clone(),
@@ -633,14 +556,12 @@ where
             );
 
             let b_g2_inputs = multiexp(
-                &worker,
                 b_g2_inputs_source.clone(),
                 b_input_density,
                 input_assignment.clone(),
                 &mut multiexp_kern,
             );
             let b_g2_aux = multiexp(
-                &worker,
                 b_g2_aux_source.clone(),
                 b_aux_density,
                 aux_assignment.clone(),
@@ -694,7 +615,55 @@ where
         })
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
-    Ok((gs, h_s, l_s, r_s, s_s, inputs, start, prio_lock))
+    info!("proofs");
+    let proofs = gs
+        .into_iter()
+        .zip(h_s.into_iter())
+        .zip(l_s.into_iter())
+        .zip(r_s.into_iter())
+        .zip(s_s.into_iter())
+        .zip(inputs.into_iter())
+        .map(
+            |(
+                (((((mut g_a, mut g_b, mut g_c), h), l), r), s),
+                (a_inputs, a_aux, b_g1_inputs, b_g1_aux, b_g2_inputs, b_g2_aux),
+            )| {
+                let mut a_answer = a_inputs?;
+                a_answer.add_assign(&a_aux?);
+                g_a.add_assign(&a_answer);
+                a_answer.mul_assign(s);
+                g_c.add_assign(&a_answer);
+
+                let mut b1_answer = b_g1_inputs?;
+                b1_answer.add_assign(&b_g1_aux?);
+                let mut b2_answer = b_g2_inputs?;
+                b2_answer.add_assign(&b_g2_aux?);
+
+                g_b.add_assign(&b2_answer);
+                b1_answer.mul_assign(r);
+                g_c.add_assign(&b1_answer);
+                g_c.add_assign(&h?);
+                g_c.add_assign(&l?);
+
+                Ok(Proof {
+                    a: g_a.into_affine(),
+                    b: g_b.into_affine(),
+                    c: g_c.into_affine(),
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+
+    #[cfg(feature = "gpu")]
+    {
+        log::trace!("dropping priority lock");
+        drop(prio_lock);
+    }
+
+    let proof_time = start.elapsed();
+    info!("prover time: {:?}", proof_time);
+
+    Ok(proofs)
 }
 
 #[cfg(test)]

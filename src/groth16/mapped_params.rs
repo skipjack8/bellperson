@@ -6,7 +6,6 @@ use rayon::prelude::*;
 use crate::SynthesisError;
 
 use memmap::Mmap;
-use rayon::prelude::*;
 
 use std::fs::File;
 use std::io;

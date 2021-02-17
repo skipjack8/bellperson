@@ -20,10 +20,8 @@ lazy_static! {
         .unwrap_or_else(num_cpus::get);
     pub static ref THREAD_POOL: Pool = Pool::new(*NUM_CPUS);
     pub static ref VERIFIER_POOL: Pool = Pool::new(NUM_CPUS.max(MAX_VERIFIER_THREADS));
-    pub static ref RAYON_THREAD_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-        .num_threads(*NUM_CPUS)
-        .build()
-        .expect("failed to build rayon threadpool");
+    pub static ref RAYON_THREAD_POOL: rayon::ThreadPool =
+        rayon::ThreadPoolBuilder::new().build().unwrap();
 }
 
 #[derive(Clone, Default)]
@@ -36,21 +34,6 @@ impl Worker {
 
     pub fn log_num_cpus(&self) -> u32 {
         log2_floor(*NUM_CPUS)
-    }
-
-    pub fn compute<F, R>(&self, f: F) -> Waiter<R>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        let (sender, receiver) = bounded(1);
-
-        THREAD_POOL.spawn(move || {
-            let res = f();
-            sender.send(res).unwrap();
-        });
-
-        Waiter { receiver }
     }
 
     pub fn scope<'a, F, R>(&self, elements: usize, f: F) -> R

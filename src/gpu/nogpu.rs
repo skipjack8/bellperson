@@ -80,3 +80,6 @@ macro_rules! locked_kernel {
 
 locked_kernel!(LockedFFTKernel);
 locked_kernel!(LockedMultiexpKernel);
+
+#[derive(Debug)]
+pub struct PriorityLock;

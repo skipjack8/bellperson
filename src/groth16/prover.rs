@@ -13,14 +13,13 @@ use super::{ParameterSource, Proof};
 use crate::bls::Engine;
 use crate::domain::{EvaluationDomain, Scalar};
 use crate::gpu::{LockedFFTKernel, LockedMultiexpKernel};
-use crate::multicore::{Worker, RAYON_THREAD_POOL};
+use crate::multicore::{Waiter, Worker, RAYON_THREAD_POOL};
 use crate::multiexp::{multiexp, DensityTracker, FullDensity};
 use crate::par;
 use crate::{
     Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable, BELLMAN_VERSION,
 };
 
-#[cfg(feature = "gpu")]
 use crate::gpu::PriorityLock;
 
 fn eval<E: Engine>(
@@ -274,28 +273,110 @@ where
     E: Engine,
     C: Circuit<E> + Send,
 {
+    let (gs, h_s, l_s, r_s, s_s, inputs, start, mut prio_lock) = THREAD_POOL.install(|| {
+        create_proof_batch_priority_inner::<E, C, P>(circuits, params, r_s, s_s, priority)
+    })?;
+
+    info!("proofs");
+    let proofs = gs
+        .into_par_iter()
+        .zip(h_s.into_par_iter())
+        .zip(l_s.into_par_iter())
+        .zip(r_s.into_par_iter())
+        .zip(s_s.into_par_iter())
+        .zip(inputs.into_par_iter())
+        .map(
+            |(
+                (((((mut g_a, mut g_b, mut g_c), h), l), r), s),
+                (a_inputs, a_aux, b_g1_inputs, b_g1_aux, b_g2_inputs, b_g2_aux),
+            )| {
+                let mut a_answer = a_inputs.wait()?;
+                a_answer.add_assign(&a_aux.wait()?);
+                g_a.add_assign(&a_answer);
+                a_answer.mul_assign(s);
+                g_c.add_assign(&a_answer);
+
+                let mut b1_answer = b_g1_inputs.wait()?;
+                b1_answer.add_assign(&b_g1_aux.wait()?);
+                let mut b2_answer = b_g2_inputs.wait()?;
+                b2_answer.add_assign(&b_g2_aux.wait()?);
+
+                g_b.add_assign(&b2_answer);
+                b1_answer.mul_assign(r);
+                g_c.add_assign(&b1_answer);
+                g_c.add_assign(&h.wait()?);
+                g_c.add_assign(&l.wait()?);
+
+                Ok(Proof {
+                    a: g_a.into_affine(),
+                    b: g_b.into_affine(),
+                    c: g_c.into_affine(),
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, SynthesisError>>()?;
+
+    if let Some(prio_lock) = prio_lock.take() {
+        log::trace!("dropping priority lock");
+        drop(prio_lock);
+    }
+
+    let proof_time = start.elapsed();
+    info!("prover time: {:?}", proof_time);
+
+    Ok(proofs)
+}
+
+fn create_proof_batch_priority_inner<E, C, P: ParameterSource<E>>(
+    circuits: Vec<C>,
+    params: P,
+    r_s: Vec<E::Fr>,
+    s_s: Vec<E::Fr>,
+    priority: bool,
+) -> Result<
+    (
+        Vec<(E::G1, E::G2, E::G1)>,
+        Vec<Waiter<Result<E::G1, SynthesisError>>>,
+        Vec<Waiter<Result<E::G1, SynthesisError>>>,
+        Vec<E::Fr>,
+        Vec<E::Fr>,
+        Vec<(
+            Waiter<Result<E::G1, SynthesisError>>,
+            Waiter<Result<E::G1, SynthesisError>>,
+            Waiter<Result<E::G1, SynthesisError>>,
+            Waiter<Result<E::G1, SynthesisError>>,
+            Waiter<Result<E::G2, SynthesisError>>,
+            Waiter<Result<E::G2, SynthesisError>>,
+        )>,
+        Instant,
+        Option<PriorityLock>,
+    ),
+    SynthesisError,
+>
+where
+    E: Engine,
+    C: Circuit<E> + Send,
+{
     info!("Bellperson {} is being used!", BELLMAN_VERSION);
 
     // Preparing things for the proofs is done a lot in parallel with the help of Rayon. Make
     // sure that those things run on the correct thread pool.
-    let mut provers = RAYON_THREAD_POOL.install(|| {
-        circuits
-            .into_par_iter()
-            .map(|circuit| -> Result<_, SynthesisError> {
-                let mut prover = ProvingAssignment::new();
+    let mut provers = circuits
+        .into_par_iter()
+        .map(|circuit| -> Result<_, SynthesisError> {
+            let mut prover = ProvingAssignment::new();
 
-                prover.alloc_input(|| "", || Ok(E::Fr::one()))?;
+            prover.alloc_input(|| "", || Ok(E::Fr::one()))?;
 
-                circuit.synthesize(&mut prover)?;
+            circuit.synthesize(&mut prover)?;
 
-                for i in 0..prover.input_assignment.len() {
-                    prover.enforce(|| "", |lc| lc + Variable(Index::Input(i)), |lc| lc, |lc| lc);
-                }
+            for i in 0..prover.input_assignment.len() {
+                prover.enforce(|| "", |lc| lc + Variable(Index::Input(i)), |lc| lc, |lc| lc);
+            }
 
-                Ok(prover)
-            })
-            .collect::<Result<Vec<_>, _>>()
-    })?;
+            Ok(prover)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Start fft/multiexp prover timer
     let start = Instant::now();
@@ -349,6 +430,9 @@ where
     } else {
         None
     };
+
+    #[cfg(not(feature = "gpu"))]
+    let prio_lock = None;
 
     let mut fft_kern = Some(LockedFFTKernel::<E>::new(log_d, priority));
 
@@ -610,55 +694,7 @@ where
         })
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
-    info!("proofs");
-    let proofs = gs
-        .into_par_iter()
-        .zip(h_s.into_par_iter())
-        .zip(l_s.into_par_iter())
-        .zip(r_s.into_par_iter())
-        .zip(s_s.into_par_iter())
-        .zip(inputs.into_par_iter())
-        .map(
-            |(
-                (((((mut g_a, mut g_b, mut g_c), h), l), r), s),
-                (a_inputs, a_aux, b_g1_inputs, b_g1_aux, b_g2_inputs, b_g2_aux),
-            )| {
-                let mut a_answer = a_inputs.wait()?;
-                a_answer.add_assign(&a_aux.wait()?);
-                g_a.add_assign(&a_answer);
-                a_answer.mul_assign(s);
-                g_c.add_assign(&a_answer);
-
-                let mut b1_answer = b_g1_inputs.wait()?;
-                b1_answer.add_assign(&b_g1_aux.wait()?);
-                let mut b2_answer = b_g2_inputs.wait()?;
-                b2_answer.add_assign(&b_g2_aux.wait()?);
-
-                g_b.add_assign(&b2_answer);
-                b1_answer.mul_assign(r);
-                g_c.add_assign(&b1_answer);
-                g_c.add_assign(&h.wait()?);
-                g_c.add_assign(&l.wait()?);
-
-                Ok(Proof {
-                    a: g_a.into_affine(),
-                    b: g_b.into_affine(),
-                    c: g_c.into_affine(),
-                })
-            },
-        )
-        .collect::<Result<Vec<_>, SynthesisError>>()?;
-
-    #[cfg(feature = "gpu")]
-    {
-        log::trace!("dropping priority lock");
-        drop(prio_lock);
-    }
-
-    let proof_time = start.elapsed();
-    info!("prover time: {:?}", proof_time);
-
-    Ok(proofs)
+    Ok((gs, h_s, l_s, r_s, s_s, inputs, start, prio_lock))
 }
 
 #[cfg(test)]

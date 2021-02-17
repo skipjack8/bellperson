@@ -433,24 +433,12 @@ where
         },
         let params_l = {
             params.get_l(provers_len)
-        },
-        let a_source = {
-            params.get_a(input_len, a_aux_density_total)
-        },
-        let b_g1_source = {
-            params.get_b_g1(b_input_density_total, b_aux_density_total)
-        },
-        let b_g2_source = {
-            params.get_b_g2(b_input_density_total, b_aux_density_total)
         }
     };
 
     let a_s = a_s?;
     let params_h = params_h?;
     let params_l = params_l?;
-    let (a_inputs_source, a_aux_source) = a_source?;
-    let (b_g1_inputs_source, b_g1_aux_source) = b_g1_source?;
-    let (b_g2_inputs_source, b_g2_aux_source) = b_g2_source?;
 
     info!("fft done");
     let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(log_d, priority));
@@ -504,19 +492,36 @@ where
     let h_s = h_s?;
 
     info!("l_s");
-    let l_s = aux_assignments
-        .iter()
-        .map(|aux_assignment| {
-            let l = multiexp(
-                params_l.clone(),
-                FullDensity,
-                aux_assignment.clone(),
-                &mut multiexp_kern,
-            );
-            Ok(l)
-        })
-        .collect::<Result<Vec<_>, SynthesisError>>()?;
-    drop(params_l);
+    let aux_assignments = &aux_assignments;
+    let mkern = &mut multiexp_kern;
+    par! {
+        let l_s = aux_assignments
+            .iter()
+            .map(|aux_assignment| {
+                let l = multiexp(
+                    params_l.clone(),
+                    FullDensity,
+                    aux_assignment.clone(),
+                    mkern,
+                );
+                Ok(l)
+            })
+            .collect::<Result<Vec<_>, SynthesisError>>(),
+        let a_source = {
+            params.get_a(input_len, a_aux_density_total)
+        },
+        let b_g1_source = {
+            params.get_b_g1(b_input_density_total, b_aux_density_total)
+        },
+        let b_g2_source = {
+            params.get_b_g2(b_input_density_total, b_aux_density_total)
+        }
+    };
+
+    let l_s = l_s?;
+    let (a_inputs_source, a_aux_source) = a_source?;
+    let (b_g1_inputs_source, b_g1_aux_source) = b_g1_source?;
+    let (b_g2_inputs_source, b_g2_aux_source) = b_g2_source?;
 
     info!("inputs");
     let inputs = provers

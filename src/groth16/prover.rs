@@ -279,12 +279,12 @@ where
 
     info!("proofs");
     let proofs = gs
-        .into_par_iter()
-        .zip(h_s.into_par_iter())
-        .zip(l_s.into_par_iter())
-        .zip(r_s.into_par_iter())
-        .zip(s_s.into_par_iter())
-        .zip(inputs.into_par_iter())
+        .into_iter()
+        .zip(h_s.into_iter())
+        .zip(l_s.into_iter())
+        .zip(r_s.into_iter())
+        .zip(s_s.into_iter())
+        .zip(inputs.into_iter())
         .map(
             |(
                 (((((mut g_a, mut g_b, mut g_c), h), l), r), s),

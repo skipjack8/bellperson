@@ -10,6 +10,7 @@ use rayon::prelude::*;
 
 use super::SynthesisError;
 use crate::gpu;
+use crate::multicore::THREAD_POOL;
 
 /// An object that builds a source of bases.
 pub trait SourceBuilder<G: CurveAffine>: Send + Sync + 'static + Clone {
@@ -328,7 +329,7 @@ where
         assert!(query_size == exponents.len());
     }
 
-    multiexp_inner(bases, density_map, exponents, c)
+    THREAD_POOL.install(|| multiexp_inner(bases, density_map, exponents, c))
 }
 
 #[cfg(any(feature = "pairing", feature = "blst"))]

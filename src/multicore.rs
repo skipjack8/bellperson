@@ -50,25 +50,6 @@ impl Worker {
     }
 }
 
-pub struct Waiter<T> {
-    receiver: Receiver<T>,
-}
-
-impl<T> Waiter<T> {
-    /// Wait for the result.
-    pub fn wait(&self) -> T {
-        self.receiver.recv().unwrap()
-    }
-
-    /// One off sending.
-    pub fn done(val: T) -> Self {
-        let (sender, receiver) = bounded(1);
-        sender.send(val).unwrap();
-
-        Waiter { receiver }
-    }
-}
-
 fn log2_floor(num: usize) -> u32 {
     assert!(num > 0);
 

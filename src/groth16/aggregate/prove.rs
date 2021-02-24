@@ -7,10 +7,9 @@ use sha2::Sha256;
 use super::{
     commit,
     commit::{VKey, WKey},
-    inner_product,
+    compress, inner_product,
     poly::DensePolynomial,
-    structured_scalar_power, AggregateProof, GipaMIPP, GipaTIPP, KZGOpening, MIPPProof, ProverSRS,
-    TIPPProof,
+    structured_scalar_power, AggregateProof, GipaProof, KZGOpening, ProverSRS, TippMippProof,
 };
 use crate::bls::Engine;
 use crate::groth16::{multiscalar::*, Proof};
@@ -29,7 +28,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     // We first commit to A B and C - these commitments are what the verifier
     // will use later to verify the TIPP and MIPP proofs - even though the TIPP
     // and MIPP proofs doesn't use them directly.
-    // TODO parallelize that
     let a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
     let b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
     // A and B are committed together in this scheme
@@ -38,10 +36,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let com_c = commit::single_g1::<E>(&srs.vkey, &c);
 
     // Random linear combination of proofs
-    // TODO: extract logic in separate function (might require a macro for
-    // handling varargs)
     let r = oracle!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1);
-
     // r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
     // r^-1, r^-2, r^-3
@@ -50,27 +45,21 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .map(|ri| ri.inverse().unwrap())
         .collect::<Vec<_>>();
 
-    // A^{r}
-    let a_r = a
+    // B^{r}
+    let b_r = b
         .par_iter()
         .zip(r_vec.par_iter())
-        .map(|(ai, ri)| mul!(ai.into_projective(), ri.into_repr()).into_affine())
+        .map(|(bi, ri)| mul!(bi.into_projective(), ri.into_repr()).into_affine())
         .collect::<Vec<_>>();
-    // V^{r^{-1}}
-    let vkey_r_inv = srs.vkey.scale(&r_inv);
+    // w^{r^{-1}}
+    let wkey_r_inv = srs.wkey.scale(&r_inv);
 
-    let tipa_proof_ab = prove_tipp::<E>(&srs, &a_r, &b, &vkey_r_inv, &srs.wkey, &r);
-    let tipa_proof_c = prove_mipp::<E>(
-        &srs, &c, &r_vec,
-        // v - note we dont use the rescaled here since we dont need the
-        // trick as in AB - we just need to commit to C normally.
-        &srs.vkey,
-    );
-    let ip_ab = inner_product::pairing::<E>(&a_r, &b);
+    let proof = prove_tipp_mipp::<E>(&srs, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
+    let ip_ab = inner_product::pairing::<E>(&a, &b_r);
     let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, &r_vec);
 
     // TODO - move assertion to a test - this is a property of the scheme
-    let computed_com_ab = commit::pair::<E>(&vkey_r_inv, &srs.wkey, &a_r, &b);
+    let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r);
     assert_eq!(com_ab, computed_com_ab);
 
     Ok(AggregateProof {
@@ -78,27 +67,29 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         com_c,
         ip_ab,
         agg_c,
-        proof_ab: tipa_proof_ab?,
-        proof_c: tipa_proof_c?,
+        tmipp: proof,
     })
 }
 
 /// Proves a TIPP relation between A and B. Commitment keys must be of size of A
 /// and B. In the context of Groth16 aggregation, we have that A = A^r and vkey
 /// is scaled by r^{-1}.
-fn prove_tipp<E: Engine>(
+fn prove_tipp_mipp<E: Engine>(
     srs: &ProverSRS<E>,
     a: &[E::G1Affine],
     b: &[E::G2Affine],
-    vkey: &VKey<E>,
-    wkey: &WKey<E>,
-    r_shift: &E::Fr,
-) -> Result<TIPPProof<E>, SynthesisError> {
+    c: &[E::G1Affine],
+    wkey: &WKey<E>, // scaled key w^r-1
+    r_vec: &[E::Fr],
+) -> Result<TippMippProof<E>, SynthesisError> {
     if !a.len().is_power_of_two() || a.len() != b.len() {
         return Err(SynthesisError::MalformedProofs);
     }
+    let r_shift = r_vec[1].clone();
     // Run GIPA
-    let (proof, mut challenges, mut challenges_inv) = gipa_tipp::<E>(a, b, vkey, wkey);
+    let (proof, mut challenges, mut challenges_inv) =
+        gipa_tipp_mipp::<E>(a, b, c, &srs.vkey, &wkey, r_vec);
+
     // Prove final commitment keys are wellformed
     // we reverse the transcript so the polynomial in kzg opening is constructed
     // correctly - the formula indicates x_{l-j}. Also for deriving KZG
@@ -123,7 +114,7 @@ fn prove_tipp<E: Engine>(
             &srs.h_beta_powers_table,
             srs.n,
             &challenges_inv,
-            &r_inverse,
+            &<E::Fr>::one(),
             &z,
         ),
         let wkey_opening = prove_commitment_key_kzg_opening(
@@ -131,12 +122,12 @@ fn prove_tipp<E: Engine>(
             &srs.g_beta_powers_table,
             srs.n,
             &challenges,
-            &<E::Fr>::one(),
+            &r_inverse,
             &z,
         )
     };
 
-    Ok(TIPPProof {
+    Ok(TippMippProof {
         gipa: proof,
         vkey_opening: vkey_opening?,
         wkey_opening: wkey_opening?,
@@ -147,16 +138,21 @@ fn prove_tipp<E: Engine>(
 /// proof containing all intermdiate committed values, as well as the
 /// challenges generated necessary to do the polynomial commitment proof later
 /// in TIPP.
-fn gipa_tipp<E: Engine>(
+fn gipa_tipp_mipp<E: Engine>(
     a: &[E::G1Affine],
     b: &[E::G2Affine],
+    c: &[E::G1Affine],
     vkey: &VKey<E>,
-    wkey: &WKey<E>,
-) -> (GipaTIPP<E>, Vec<E::Fr>, Vec<E::Fr>) {
+    wkey: &WKey<E>, // scaled key w^r^-1
+    r: &[E::Fr],
+) -> (GipaProof<E>, Vec<E::Fr>, Vec<E::Fr>) {
     let (mut m_a, mut m_b) = (a.to_vec(), b.to_vec());
+    let (mut m_c, mut m_r) = (c.to_vec(), r.to_vec());
     let (mut vkey, mut wkey) = (vkey.clone(), wkey.clone());
-    let mut comms = Vec::new();
-    let mut z_vec = Vec::new();
+    let mut comms_ab = Vec::new();
+    let mut comms_c = Vec::new();
+    let mut z_ab = Vec::new();
+    let mut z_c = Vec::new();
     let mut challenges: Vec<E::Fr> = Vec::new();
     let mut challenges_inv: Vec<E::Fr> = Vec::new();
 
@@ -165,36 +161,67 @@ fn gipa_tipp<E: Engine>(
         // Recurse with problem of half size
         let split = m_a.len() / 2;
 
+        // TIPP ///
         let (a_left, a_right) = m_a.split_at_mut(split);
         let (b_left, b_right) = m_b.split_at_mut(split);
+        // MIPP ///
+        // c[:n']   c[n':]
+        let (c_left, c_right) = m_c.split_at_mut(split);
+        // r[:n']   r[:n']
+        let (r_left, r_right) = m_r.split_at_mut(split);
+
         // TODO: make that mutable split to avoid copying - may require to
         // not use struct...  for the moment i prefer readability
         let (vk_left, vk_right) = vkey.split(split);
         let (wk_left, wk_right) = wkey.split(split);
 
+        // since we do this in parallel we take reference first so it can be
+        // moved within the macro's rayon scope.
+        let (rvk_left, rvk_right) = (&vk_left, &vk_right);
+        let (rwk_left, rwk_right) = (&wk_left, &wk_right);
+        let (ra_left, ra_right) = (&a_left, &a_right);
+        let (rb_left, rb_right) = (&b_left, &b_right);
+        let (rc_left, rc_right) = (&c_left, &c_right);
+        let (rr_left, rr_right) = (&r_left, &r_right);
         // See section 3.3 for paper version with equivalent names
-        let ((c_l, c_r), (z_l, z_r)) = rayon::join(
-            || {
-                rayon::join(
-                    || commit::pair::<E>(&vk_left, &wk_right, &a_right, &b_left),
-                    || commit::pair::<E>(&vk_right, &wk_left, &a_left, &b_right),
-                )
-            },
-            || {
-                rayon::join(
-                    || inner_product::pairing::<E>(&a_right, &b_left),
-                    || inner_product::pairing::<E>(&a_left, &b_right),
-                )
-            },
-        );
-        let (t_l, u_l) = c_l;
-        let (t_r, u_r) = c_r;
+        par! {
+            // TIPP part
+            let tab_l = commit::pair::<E>(&rvk_left, &rwk_right, &ra_right, &rb_left),
+            let tab_r = commit::pair::<E>(&rvk_right, &rwk_left, &ra_left, &rb_right),
+            let zab_l = inner_product::pairing::<E>(&ra_right, &rb_left),
+            let zab_r = inner_product::pairing::<E>(&ra_left, &rb_right),
+
+            // MIPP part
+            // z_l = c[n':] ^ r[:n']
+            let zc_l = inner_product::multiexponentiation::<E::G1Affine>(rc_right, rr_left),
+            // Z_r = c[:n'] ^ r[n':]
+            let zc_r = inner_product::multiexponentiation::<E::G1Affine>(rc_left, rr_right),
+            // u_l = c[n':] * v[:n']
+            let tuc_l = commit::single_g1::<E>(&rvk_left, rc_right),
+            // u_r = c[:n'] * v[n':]
+            let tuc_r = commit::single_g1::<E>(&rvk_right, rc_left)
+        };
 
         // Fiat-Shamir challenge
         let default_transcript = E::Fr::zero();
         let transcript = challenges.last().unwrap_or(&default_transcript);
 
-        let c_inv = oracle!(&transcript, &t_l, &u_l, &t_r, &u_r, &z_r, &z_l);
+        // combine both TIPP and MIPP transcript
+        let c_inv = oracle!(
+            &transcript,
+            &tab_l.0,
+            &tab_l.1,
+            &tab_r.0,
+            &tab_r.1,
+            &zab_l,
+            &zab_r,
+            &zc_l,
+            &zc_r,
+            &tuc_l.0,
+            &tuc_l.1,
+            &tuc_r.0,
+            &tuc_r.1
+        );
         // Optimization for multiexponentiation to rescale G2 elements with
         // 128-bit challenge Swap 'c' and 'c_inv' since can't control bit size
         // of c_inv
@@ -202,160 +229,58 @@ fn gipa_tipp<E: Engine>(
 
         // Set up values for next step of recursion
         // A[:n'] + A[n':] ^ x
-        a_left
-            .par_iter_mut()
-            .zip(a_right.par_iter())
-            .for_each(|(a_l, a_r)| {
-                let mut x: E::G1 = mul!(a_r.into_projective(), c);
-                x.add_assign_mixed(&a_l);
-                *a_l = x.into_affine();
-            });
-
-        let len = a_left.len();
-        m_a.resize(len, E::G1Affine::zero()); // shrink to new size
-
+        compress(&mut m_a, split, &c);
         // B[:n'] + B[n':] ^ x^-1
-        b_left
-            .par_iter_mut()
-            .zip(b_right.par_iter())
-            .for_each(|(b_l, b_r)| {
-                let mut x: E::G2 = mul!(b_r.into_projective(), c_inv);
-                x.add_assign_mixed(&b_l);
-                *b_l = x.into_affine();
-            });
+        compress(&mut m_b, split, &c_inv);
 
-        let len = b_right.len();
-        m_b.resize(len, E::G2Affine::zero()); // shrink to new size
+        // c[:n'] + c[n':]^x
+        compress(&mut m_c, split, &c);
+        r_left
+            .par_iter_mut()
+            .zip(r_right.par_iter_mut())
+            .for_each(|(r_l, r_r)| {
+                // r[:n'] + r[n':]^x^-1
+                r_r.mul_assign(&c_inv);
+                r_l.add_assign(r_r);
+            });
+        let len = r_left.len();
+        m_r.resize(len, E::Fr::zero()); // shrink to new size
 
         // v_left + v_right^x^-1
         vkey = VKey::<E>::compress(&vk_left, &vk_right, &c_inv);
         // w_left + w_right^x
         wkey = WKey::<E>::compress(&wk_left, &wk_right, &c);
 
-        comms.push((c_l, c_r));
-        z_vec.push((z_l, z_r));
+        comms_ab.push((tab_l, tab_r));
+        comms_c.push((tuc_l, tuc_r));
+        z_ab.push((zab_l, zab_r));
+        z_c.push((zc_l, zc_r));
         challenges.push(c);
         challenges_inv.push(c_inv);
     }
 
     assert!(m_a.len() == 1 && m_b.len() == 1);
+    assert!(m_c.len() == 1 && m_r.len() == 1);
     assert!(vkey.a.len() == 1 && vkey.b.len() == 1);
     assert!(wkey.a.len() == 1 && wkey.b.len() == 1);
 
-    let (final_a, final_b) = (m_a[0], m_b[0]);
+    let (final_a, final_b, final_c, final_r) = (m_a[0], m_b[0], m_c[0], m_r[0]);
     let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
     (
-        GipaTIPP {
-            comms: comms,
-            z_vec: z_vec,
-            final_a: final_a,
-            final_b: final_b,
-            final_vkey: final_vkey,
-            final_wkey: final_wkey,
+        GipaProof {
+            comms_ab,
+            comms_c,
+            z_ab,
+            z_c,
+            final_a,
+            final_b,
+            final_c,
+            final_r,
+            final_vkey,
+            final_wkey,
         },
         challenges,
         challenges_inv,
-    )
-}
-
-/// gipa_mipp proves the relation Z = C^r and V = C * v
-/// Returns vector of recursive commitments and transcripts in reverse order.
-fn gipa_mipp<E: Engine>(
-    c: &[E::G1Affine],
-    r: &[E::Fr],
-    vkey: &VKey<E>,
-) -> (GipaMIPP<E>, Vec<E::Fr>) {
-    let (mut m_c, mut m_r) = (c.to_vec(), r.to_vec());
-    let mut comms = Vec::new();
-    let mut z_vec = Vec::new();
-    let mut challenges = Vec::new();
-    let mut vkey = vkey.clone();
-
-    while m_c.len() > 1 {
-        // recursive step
-        // Recurse with problem of half size
-        let split = m_c.len() / 2;
-
-        // c[:n']   c[n':]
-        let (c_left, c_right) = m_c.split_at_mut(split);
-        // r[:n']   r[:n']
-        let (r_left, r_right) = m_r.split_at_mut(split);
-        // v[:n']   v[n':]
-        let (vk_left, vk_right) = vkey.split(split);
-
-        let ((z_r, z_l), (tu_r, tu_l)) = rayon::join(
-            || {
-                rayon::join(
-                    // Z_r = c[:n'] ^ r[n':]
-                    || inner_product::multiexponentiation::<E::G1Affine>(c_left, r_right),
-                    // z_l = c[n':] ^ r[:n']
-                    || inner_product::multiexponentiation::<E::G1Affine>(c_right, r_left),
-                )
-            },
-            || {
-                rayon::join(
-                    // u_r = c[:n'] * v[n':]
-                    || commit::single_g1::<E>(&vk_right, c_left),
-                    // u_l = c[n':] * v[:n']
-                    || commit::single_g1::<E>(&vk_left, c_right),
-                )
-            },
-        );
-
-        // Fiat-Shamir challenge
-        let default_transcript = E::Fr::zero();
-        let transcript = challenges.last().unwrap_or(&default_transcript);
-
-        let x_inv = oracle!(&transcript, &tu_r.0, &tu_r.1, &tu_l.0, &tu_l.1, &z_r, &z_l);
-        let x = x_inv.inverse().unwrap();
-
-        // Set up values for next step of recursion
-        c_right
-            .par_iter()
-            .zip(c_left.par_iter_mut())
-            .for_each(|(c_r, c_l)| {
-                // c[:n'] + c[n':]^x
-                let mut ci: E::G1 = mul!(c_r.into_projective(), x);
-                ci.add_assign_mixed(&c_l);
-                *c_l = ci.into_affine();
-            });
-
-        let len = c_left.len();
-        m_c.resize(len, E::G1Affine::zero()); // shrink to new size
-
-        r_left
-            .par_iter_mut()
-            .zip(r_right.par_iter_mut())
-            .for_each(|(r_l, r_r)| {
-                // r[:n'] + r[n':]^x^-1
-                r_r.mul_assign(&x_inv);
-                r_l.add_assign(r_r);
-            });
-
-        let len = r_left.len();
-        m_r.resize(len, E::Fr::zero()); // shrink to new size
-
-        // v[:n'] + v[n':]^{x^{-1}}
-        vkey = VKey::<E>::compress(&vk_left, &vk_right, &x_inv);
-
-        comms.push((tu_l, tu_r));
-        z_vec.push((z_l, z_r));
-        challenges.push(x);
-    }
-
-    // final c and r
-    let (final_c, final_r) = (m_c[0], m_r[0]);
-    // final v
-    let final_vkey = vkey.first();
-    (
-        GipaMIPP {
-            comms: comms,
-            z_vec: z_vec,
-            final_c: final_c,
-            final_r: final_r,
-            final_vkey: final_vkey,
-        },
-        challenges,
     )
 }
 
@@ -474,50 +399,4 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
         power_2_r.mul_assign(&power_2_r.clone());
     }
     coefficients
-}
-
-/// prove_mipp returns a GIPA and MIPP proof for proving statement Z = C^r
-/// and T = C * v. Section 4 in the paper.
-fn prove_mipp<E: Engine>(
-    srs: &ProverSRS<E>,
-    c: &[E::G1Affine],
-    r: &[E::Fr],
-    vkey: &VKey<E>,
-) -> Result<MIPPProof<E>, SynthesisError> {
-    if !c.len().is_power_of_two() || c.len() != r.len() {
-        return Err(SynthesisError::MalformedProofs);
-    }
-    // Run GIPA
-    let (proof, mut challenges) = gipa_mipp::<E>(c, r, vkey);
-
-    // Prove final commitment key is wellformed
-    // we reverse the transcript so challenges are in the right order (inverse
-    // from creation) for the KZG opening proof
-    challenges.reverse();
-    let challenges_inv = challenges
-        .iter()
-        .map(|x| x.inverse().unwrap())
-        .collect::<Vec<_>>();
-
-    // KZG challenge point
-    let z = oracle!(
-        &challenges.first().unwrap(),
-        &proof.final_vkey.0,
-        &proof.final_vkey.1
-    );
-
-    // Complete KZG proof
-    let vkey_opening = prove_commitment_key_kzg_opening(
-        &srs.h_alpha_powers_table,
-        &srs.h_beta_powers_table,
-        srs.n,
-        &challenges_inv,
-        &E::Fr::one(),
-        &z,
-    );
-
-    Ok(MIPPProof {
-        gipa: proof,
-        vkey_opening: vkey_opening?,
-    })
 }

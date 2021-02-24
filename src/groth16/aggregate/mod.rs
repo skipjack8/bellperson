@@ -1,4 +1,6 @@
-use ff::Field;
+use ff::{Field, PrimeField};
+use groupy::{CurveAffine, CurveProjective};
+use rayon::prelude::*;
 
 #[macro_use]
 mod macros;
@@ -29,4 +31,17 @@ fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
         powers.push(mul!(powers[i - 1], s));
     }
     powers
+}
+
+fn compress<C: CurveAffine>(vec: &mut Vec<C>, split: usize, scaler: &C::Scalar) {
+    let (left, right) = vec.split_at_mut(split);
+    left.par_iter_mut()
+        .zip(right.par_iter())
+        .for_each(|(a_l, a_r)| {
+            let mut x = mul!(a_r.into_projective(), scaler.into_repr());
+            x.add_assign_mixed(&a_l);
+            *a_l = x.into_affine();
+        });
+    let len = left.len();
+    vec.resize(len, C::zero());
 }

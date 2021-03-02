@@ -11,6 +11,7 @@ use itertools::Itertools;
 use rand::{thread_rng, RngCore, SeedableRng};
 use rayon::prelude::*;
 use serde::Serialize;
+use std::default::Default;
 use std::time::{Duration, Instant};
 
 const MIMC_ROUNDS: usize = 322;
@@ -229,19 +230,44 @@ fn test_groth16_srs_io() {
 }
 
 // structure to write to CSV file
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 struct Record {
-    nproofs: u32,
-    aggregate_create_ms: u32,
-    aggregate_verify_ms: u32,
-    batch_verify_ms: u32,
-    batch_all_ms: u32,
-    aggregate_size_bytes: u32,
-    batch_size_bytes: u32,
+    nproofs: u32,              // number of proofs that have been verified
+    aggregate_create_ms: u32,  // time to create the aggregated proof
+    aggregate_verify_ms: u32,  // time to verify the aggregate proof
+    batch_verify_ms: u32,      // time to verify all proofs via batching of 10
+    batch_all_ms: u32,         // time ot verify all proofs via batching at once
+    aggregate_size_bytes: u32, // size of the aggregated proof
+    batch_size_bytes: u32,     // size of the batch of proof
+}
+
+impl Record {
+    pub fn average(records: &[Record]) -> Record {
+        let mut agg: Record = records.iter().fold(Default::default(), |mut acc, r| {
+            acc.nproofs += r.nproofs;
+            acc.aggregate_create_ms += r.aggregate_create_ms;
+            acc.aggregate_verify_ms += r.aggregate_verify_ms;
+            acc.batch_verify_ms += r.batch_verify_ms;
+            acc.batch_all_ms += r.batch_all_ms;
+            acc.aggregate_size_bytes += r.aggregate_size_bytes;
+            acc.batch_size_bytes += r.batch_size_bytes;
+            acc
+        });
+        let n = records.len() as u32;
+        agg.nproofs /= n;
+        agg.aggregate_create_ms /= n;
+        agg.aggregate_verify_ms /= n;
+        agg.batch_verify_ms /= n;
+        agg.batch_all_ms /= n;
+        agg.aggregate_size_bytes /= n;
+        agg.batch_size_bytes /= n;
+        agg
+    }
 }
 
 #[test]
 fn test_groth16_bench() {
+    let n_average = 3; // number of times we do the benchmarking to average out results
     let nb_proofs = vec![8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
     let max = nb_proofs.last().unwrap().clone();
     let public_inputs = 350; // roughly what a prove commit needs
@@ -272,51 +298,53 @@ fn test_groth16_bench() {
     proofs[0].write(&mut buf).expect("buffer");
     let proof_size = buf.len();
     for i in nb_proofs {
-        println!("Proofs {}", i);
-        let (pk, vk) = generic.specialize(i);
-        // Aggregate proofs using inner product proofs
-        let start = Instant::now();
-        println!("\t-Aggregation...");
-        let aggregate_proof =
-            aggregate_proofs::<Bls12>(&pk, &proofs[..i]).expect("failed to aggregate proofs");
-        let prover_time = start.elapsed().as_millis();
-        println!("\t-Aggregate Verification ...");
-        let start = Instant::now();
-        let result = verify_aggregate_proof(&vk, &pvk, &statements[..i], &aggregate_proof);
-        assert!(result.unwrap());
-        let verifier_time = start.elapsed().as_millis();
+        let mut records = Vec::new();
+        for _ in 0..n_average {
+            println!("Proofs {}", i);
+            let (pk, vk) = generic.specialize(i);
+            // Aggregate proofs using inner product proofs
+            let start = Instant::now();
+            println!("\t-Aggregation...");
+            let aggregate_proof =
+                aggregate_proofs::<Bls12>(&pk, &proofs[..i]).expect("failed to aggregate proofs");
+            let prover_time = start.elapsed().as_millis();
+            println!("\t-Aggregate Verification ...");
+            let start = Instant::now();
+            let result = verify_aggregate_proof(&vk, &pvk, &statements[..i], &aggregate_proof);
+            assert!(result.unwrap());
+            let verifier_time = start.elapsed().as_millis();
 
-        println!("\t-Batch per 10 packets verification...");
-        let batches: Vec<_> = proofs
-            .iter()
-            .cloned()
-            .take(i)
-            .zip(statements.iter().cloned().take(i))
-            .chunks(10)
-            .into_iter()
-            .map(|s| s.collect())
-            .collect::<Vec<Vec<(Proof<Bls12>, Vec<Fr>)>>>();
-        let start = Instant::now();
-        batches.par_iter().for_each(|batch| {
-            let batch_proofs = batch.iter().by_ref().map(|(p, _)| p).collect::<Vec<_>>();
-            let batch_statements = batch
+            println!("\t-Batch per 10 packets verification...");
+            let batches: Vec<_> = proofs
                 .iter()
-                .map(|(_, state)| state.clone())
-                .collect::<Vec<_>>();
-            let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
-            assert!(verify_proofs_batch(&pvk, &mut rng, &batch_proofs, &batch_statements).unwrap())
-        });
-        let batch_verifier_time = start.elapsed().as_millis();
+                .cloned()
+                .take(i)
+                .zip(statements.iter().cloned().take(i))
+                .chunks(10)
+                .into_iter()
+                .map(|s| s.collect())
+                .collect::<Vec<Vec<(Proof<Bls12>, Vec<Fr>)>>>();
+            let start = Instant::now();
+            batches.par_iter().for_each(|batch| {
+                let batch_proofs = batch.iter().by_ref().map(|(p, _)| p).collect::<Vec<_>>();
+                let batch_statements = batch
+                    .iter()
+                    .map(|(_, state)| state.clone())
+                    .collect::<Vec<_>>();
+                let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+                assert!(
+                    verify_proofs_batch(&pvk, &mut rng, &batch_proofs, &batch_statements).unwrap()
+                )
+            });
+            let batch_verifier_time = start.elapsed().as_millis();
 
-        println!("\t-Batch all-in verification...");
-        let start = Instant::now();
-        let proofs: Vec<_> = proofs.iter().take(i).collect();
-        assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements[..i]).unwrap());
-        let batch_all_time = start.elapsed().as_millis();
-
-        let agg_size = bincode::serialize(&aggregate_proof).unwrap().len();
-        writer
-            .serialize(Record {
+            println!("\t-Batch all-in verification...");
+            let start = Instant::now();
+            let proofs: Vec<_> = proofs.iter().take(i).collect();
+            assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements[..i]).unwrap());
+            let batch_all_time = start.elapsed().as_millis();
+            let agg_size = bincode::serialize(&aggregate_proof).unwrap().len();
+            records.push(Record {
                 nproofs: i as u32,
                 aggregate_create_ms: prover_time as u32,
                 aggregate_verify_ms: verifier_time as u32,
@@ -324,7 +352,11 @@ fn test_groth16_bench() {
                 batch_verify_ms: batch_verifier_time as u32,
                 batch_size_bytes: (proof_size * i) as u32,
                 batch_all_ms: batch_all_time as u32,
-            })
+            });
+        }
+        let average = Record::average(&records);
+        writer
+            .serialize(average)
             .expect("unable to write result to csv");
     }
     writer.flush().expect("failed to flush");

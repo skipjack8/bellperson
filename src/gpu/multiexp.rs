@@ -59,7 +59,7 @@ where
     n: usize,
 
     priority: bool,
-    _phantom: std::marker::PhantomData<E::Fr>,
+    _phantom: std::marker::PhantomData<E>,
 }
 
 fn calc_num_groups(core_count: usize, num_windows: usize) -> usize {
@@ -303,9 +303,6 @@ where
 }
 
 unsafe impl<E> Send for SingleMultiexpKernelCuda<E> where E: Engine {}
-unsafe impl<E> Sync for SingleMultiexpKernelCuda<E> where E: Engine {}
-unsafe impl Send for CudaUnownedCtx {}
-unsafe impl Sync for CudaUnownedCtx {}
 
 impl<E> SingleMultiexpKernelCuda<E>
 where
@@ -318,17 +315,17 @@ where
         let src = CStr::from_bytes_with_nul(b"./src/gpu/multiexp/multiexp32.ptx\0").unwrap();
 
         let exp_bits = exp_size::<E>() * 8;
-        let name = ctx.device.name().unwrap();
+        let name = ctx.device.name()?;
         let core_count = utils::get_core_count_by_name(&name);
 
         info!("Running on {} with {} cores", &name, core_count);
 
-        let mem = ctx.device.total_memory().unwrap() as u64;
+        let mem = ctx.device.total_memory()? as u64;
         let max_n = calc_chunk_size::<E>(mem, core_count);
         let best_n = calc_best_chunk_size(MAX_WINDOW_SIZE, core_count, exp_bits);
         let n = std::cmp::min(max_n, best_n);
 
-        rustacuda::context::CurrentContext::set_current(&ctx.context).unwrap();
+        rustacuda::context::CurrentContext::set_current(&ctx.context)?;
 
         Ok(SingleMultiexpKernelCuda {
             name,
@@ -364,55 +361,27 @@ where
         // be `num_groups` * `num_windows` threads in total.
         // Each thread will use `num_groups` * `num_windows` * `bucket_len` buckets.
 
-        rustacuda::context::CurrentContext::set_current(&self.context.context).unwrap();
+        rustacuda::context::CurrentContext::set_current(&self.context.context)?;
 
-        let stream = rustacuda::stream::Stream::new(StreamFlags::NON_BLOCKING, None).unwrap();
+        let stream = rustacuda::stream::Stream::new(StreamFlags::NON_BLOCKING, None)?;
         let module = &self.module;
 
         assert_eq!(n, bases.len(), "n and bases missmatch");
 
-        let base_bytes = std::mem::size_of::<G>() * n;
-        let bbases: &[u8] = unsafe {
-            std::slice::from_raw_parts(bases.as_ptr() as *const G as *const u8, base_bytes)
-        };
-
-        assert_eq!(bbases.len(), base_bytes, "invalid cast lengths");
-
-        let mut base_buffer_g;
-        unsafe {
-            base_buffer_g =
-                rustacuda::memory::DeviceBuffer::<u8>::uninitialized(base_bytes).unwrap();
-            base_buffer_g.async_copy_from(bbases, &stream).unwrap();
-        };
-
-        let exp_bytes = std::mem::size_of::<<G::Engine as ScalarEngine>::Fr>() * n;
-        let bexps: &[u8] = unsafe {
-            std::slice::from_raw_parts(exps.as_ptr() as *const _ as *const u8, exp_bytes)
-        };
-
-        let mut exp_buffer_g;
-        unsafe {
-            exp_buffer_g = rustacuda::memory::DeviceBuffer::<u8>::uninitialized(exp_bytes).unwrap();
-            exp_buffer_g.async_copy_from(bexps, &stream).unwrap();
-        }
+        let mut base_buffer_g = copy_to_device_buffer(&bases, &stream)?;
+        let mut exp_buffer_g = copy_to_device_buffer(&exps, &stream)?;
 
         // Buckets are device side only
         let bucket_bytes = 2
             * self.core_count
             * bucket_len
             * std::mem::size_of::<<G as CurveAffine>::Projective>();
-        let mut bucket_buffer_g;
-        unsafe {
-            bucket_buffer_g =
-                rustacuda::memory::DeviceBuffer::<u8>::uninitialized(bucket_bytes).unwrap();
-        };
+        let mut bucket_buffer_g =
+            unsafe { rustacuda::memory::DeviceBuffer::<u8>::uninitialized(bucket_bytes) }?;
         let result_bytes =
             2 * self.core_count * std::mem::size_of::<<G as CurveAffine>::Projective>();
-        let mut result_buffer_g;
-        unsafe {
-            result_buffer_g =
-                rustacuda::memory::DeviceBuffer::<u8>::uninitialized(result_bytes).unwrap();
-        };
+        let mut result_buffer_g =
+            unsafe { rustacuda::memory::DeviceBuffer::<u8>::uninitialized(result_bytes) }?;
 
         // Make global work size divisible by `LOCAL_WORK_SIZE`
         let global_work_size = (num_windows * num_groups + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
@@ -431,8 +400,7 @@ where
                      num_groups as u32,
                      num_windows as u32,
                      window_size as u32
-                    ))
-                .unwrap();
+                    ))?;
             } else if TypeId::of::<G>() == TypeId::of::<E::G2Affine>() {
                 launch!(
                 module.G2_bellman_multiexp<<<global_work_size as u32,
@@ -446,21 +414,21 @@ where
                      num_groups as u32,
                      num_windows as u32,
                      window_size as u32
-                    ))
-                .unwrap();
+                    ))?;
             } else {
                 return Err(GPUError::Simple("Only E::G1 and E::G2 are supported!"));
             }
         };
 
         let mut results = vec![<G as CurveAffine>::Projective::zero(); 2 * self.core_count];
-        let bresults: &mut [u8] = unsafe {
-            std::slice::from_raw_parts_mut(results.as_mut_ptr() as *mut _ as *mut u8, result_bytes)
-        };
         unsafe {
-            result_buffer_g.async_copy_to(bresults, &stream).unwrap();
+            let bresults: &mut [u8] = std::slice::from_raw_parts_mut(
+                results.as_mut_ptr() as *mut _ as *mut u8,
+                result_bytes,
+            );
+            result_buffer_g.async_copy_to(bresults, &stream)?;
         }
-        stream.synchronize().unwrap();
+        stream.synchronize()?;
 
         // Using the algorithm below, we can calculate the final result by accumulating the results
         // of those `NUM_GROUPS` * `NUM_WINDOWS` threads.
@@ -478,6 +446,21 @@ where
         }
 
         Ok(acc)
+    }
+}
+
+fn copy_to_device_buffer<T>(
+    source: &[T],
+    stream: &rustacuda::stream::Stream,
+) -> rustacuda::error::CudaResult<rustacuda::memory::DeviceBuffer<u8>> {
+    let bytes_len = std::mem::size_of::<T>() * source.len();
+    unsafe {
+        let bytes: &[u8] =
+            std::slice::from_raw_parts(source.as_ptr() as *const T as *const u8, bytes_len);
+
+        let mut buffer = rustacuda::memory::DeviceBuffer::<u8>::uninitialized(bytes_len)?;
+        buffer.async_copy_from(bytes, stream)?;
+        Ok(buffer)
     }
 }
 

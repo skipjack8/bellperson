@@ -7,14 +7,14 @@ use crate::multicore::Worker;
 use crate::multiexp::{multiexp as cpu_multiexp, FullDensity};
 use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
-use log::{error, info};
+use log::{error, info, warn};
 use rayon::prelude::*;
 use rust_gpu_tools::*;
 use std::any::TypeId;
 use std::sync::Arc;
 
-use crate::rustacuda::memory::AsyncCopyDestination;
 use lazy_static::lazy_static;
+use rustacuda::memory::AsyncCopyDestination;
 use rustacuda::prelude::*;
 use std::ffi::CStr;
 
@@ -22,15 +22,22 @@ const MAX_WINDOW_SIZE: usize = 10;
 const LOCAL_WORK_SIZE: usize = 256;
 const MEMORY_PADDING: f64 = 0.2f64; // Let 20% of GPU memory be free
 
-fn gpu_init() -> bool {
-    match rustacuda::init(CudaFlags::empty()) {
-        Ok(()) => return true,
-        Err(_e) => return false,
-    }
+fn gpu_init() -> Vec<Device> {
+    rustacuda::init(CudaFlags::empty())
+        .and_then(|_| {
+            let devices: Vec<Device> = Device::devices()?
+                .filter_map(|device| device.ok())
+                .collect();
+            Ok(devices)
+        })
+        .unwrap_or_else(|err| {
+            warn!("failed to init cuda: {:?}", err);
+            Vec::new()
+        })
 }
 
 lazy_static! {
-    static ref GPU_INIT_RESULT: bool = gpu_init();
+    static ref CUDA_GPUS: Vec<Device> = gpu_init();
 }
 
 pub fn get_cpu_utilization() -> f64 {
@@ -246,21 +253,20 @@ pub struct CudaUnownedCtxs {
 
 impl CudaCtxs {
     pub fn create() -> rustacuda::error::CudaResult<CudaCtxs> {
-        if !*GPU_INIT_RESULT {
+        if CUDA_GPUS.is_empty() {
             return Err(rustacuda::error::CudaError::NotInitialized);
         }
 
         let mut contexts = vec![];
-        for device in Device::devices()? {
-            let device = device?;
+        for device in &*CUDA_GPUS {
             let ctx = Context::create_and_push(
                 ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO,
-                device,
+                *device,
             )?;
             rustacuda::context::ContextStack::pop()?;
             contexts.push(CudaCtx {
                 context: ctx,
-                device,
+                device: *device,
             });
         }
 

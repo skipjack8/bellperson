@@ -561,6 +561,7 @@ where
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
     drop(multiexp_kern);
+    drop(cuda_ctxs);
 
     #[cfg(feature = "gpu")]
     drop(prio_lock);

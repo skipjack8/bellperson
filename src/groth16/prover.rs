@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 use super::{ParameterSource, Proof};
 use crate::domain::{EvaluationDomain, Scalar};
-use crate::gpu::{LockedFFTKernel, LockedMultiexpKernel, CudaCtxs, CudaUnownedCtxs};
+use crate::gpu::{CudaCtxs, CudaUnownedCtxs, LockedFFTKernel, LockedMultiexpKernel};
 use crate::multicore::{Worker, THREAD_POOL};
 use crate::multiexp::{multiexp, DensityTracker, FullDensity};
 use crate::{
@@ -315,7 +315,11 @@ where
 
     let cuda_ctxs = CudaCtxs::create().unwrap();
     let cuda_unowned_ctxs = CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
-    let mut fft_kern = Some(LockedFFTKernel::<E>::new(cuda_unowned_ctxs.clone(), log_d, priority));
+    let mut fft_kern = Some(LockedFFTKernel::<E>::new(
+        cuda_unowned_ctxs.clone(),
+        log_d,
+        priority,
+    ));
     let provers_len = provers.len();
 
     let (a_s, params_result) = rayon::join(
@@ -323,20 +327,26 @@ where
             let a_s = provers
                 .iter_mut()
                 .map(|prover| {
-                    let mut a =
-                        EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.a, Vec::new()))?;
-                    let mut b =
-                        EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.b, Vec::new()))?;
-                    let mut c =
-                        EvaluationDomain::from_coeffs(std::mem::replace(&mut prover.c, Vec::new()))?;
-                    
+                    let mut a = EvaluationDomain::from_coeffs(std::mem::replace(
+                        &mut prover.a,
+                        Vec::new(),
+                    ))?;
+                    let mut b = EvaluationDomain::from_coeffs(std::mem::replace(
+                        &mut prover.b,
+                        Vec::new(),
+                    ))?;
+                    let mut c = EvaluationDomain::from_coeffs(std::mem::replace(
+                        &mut prover.c,
+                        Vec::new(),
+                    ))?;
+
                     a.ifft(&worker, &mut fft_kern)?;
                     a.coset_fft(&worker, &mut fft_kern)?;
                     b.ifft(&worker, &mut fft_kern)?;
                     b.coset_fft(&worker, &mut fft_kern)?;
                     c.ifft(&worker, &mut fft_kern)?;
                     c.coset_fft(&worker, &mut fft_kern)?;
-                    
+
                     a.mul_assign(&worker, &b);
                     drop(b);
                     a.sub_assign(&worker, &c);
@@ -346,11 +356,15 @@ where
                     let mut a = a.into_coeffs();
                     let a_len = a.len() - 1;
                     a.truncate(a_len);
-                    
+
                     // Ok(Arc::new(
                     //     a.into_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>(),
                     // ))
-                    Ok(Arc::new(a.into_par_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>()))
+                    Ok(Arc::new(
+                        a.into_par_iter()
+                            .map(|s| s.0.into_repr())
+                            .collect::<Vec<_>>(),
+                    ))
                 })
                 .collect::<Result<Vec<_>, SynthesisError>>();
             a_s
@@ -359,27 +373,46 @@ where
             // TODO: maybe it's best not to unwrap these, but I'm not sure how to handle errors
             let params_h = params.get_h(n).unwrap();
             let params_l = params.get_l(provers_len).unwrap();
-            let (a_inputs_source, a_aux_source) = params.get_a(input_len, a_aux_density_total).unwrap();
-            let (b_g1_inputs_source, b_g1_aux_source) =
-                params.get_b_g1(b_input_density_total, b_aux_density_total).unwrap();
-            let (b_g2_inputs_source, b_g2_aux_source) =
-                params.get_b_g2(b_input_density_total, b_aux_density_total).unwrap();
+            let (a_inputs_source, a_aux_source) =
+                params.get_a(input_len, a_aux_density_total).unwrap();
+            let (b_g1_inputs_source, b_g1_aux_source) = params
+                .get_b_g1(b_input_density_total, b_aux_density_total)
+                .unwrap();
+            let (b_g2_inputs_source, b_g2_aux_source) = params
+                .get_b_g2(b_input_density_total, b_aux_density_total)
+                .unwrap();
             println!("{:?} params done", SystemTime::now());
-            (params_h, params_l,
-                a_inputs_source, a_aux_source,
-                b_g1_inputs_source, b_g1_aux_source,
-                b_g2_inputs_source, b_g2_aux_source)
+            (
+                params_h,
+                params_l,
+                a_inputs_source,
+                a_aux_source,
+                b_g1_inputs_source,
+                b_g1_aux_source,
+                b_g2_inputs_source,
+                b_g2_aux_source,
+            )
         },
     );
     let a_s = a_s?;
-    let (params_h, params_l,
-         a_inputs_source, a_aux_source,
-         b_g1_inputs_source, b_g1_aux_source,
-         b_g2_inputs_source, b_g2_aux_source) = params_result;
+    let (
+        params_h,
+        params_l,
+        a_inputs_source,
+        a_aux_source,
+        b_g1_inputs_source,
+        b_g1_aux_source,
+        b_g2_inputs_source,
+        b_g2_aux_source,
+    ) = params_result;
 
     drop(fft_kern);
 
-    let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(cuda_unowned_ctxs, log_d, priority));
+    let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(
+        cuda_unowned_ctxs,
+        log_d,
+        priority,
+    ));
 
     let h_s = a_s
         .into_iter()

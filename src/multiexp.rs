@@ -309,8 +309,8 @@ where
                         n += 1;
                     }
                 }
-                
-            let (bss, skip) = bases.clone().get();
+
+                let (bss, skip) = bases.clone().get();
                 k.multiexp(pool, bss, Arc::new(exps.clone()), skip, n)
             }) {
                 return Waiter::done(Ok(p));
@@ -398,7 +398,11 @@ fn test_with_bls12() {
     assert_eq!(naive, fast);
 }
 
-pub fn create_multiexp_kernel<E>(contexts: gpu::CudaUnownedCtxs, _log_d: usize, priority: bool) -> Option<gpu::MultiexpKernel<E>>
+pub fn create_multiexp_kernel<E>(
+    contexts: gpu::CudaUnownedCtxs,
+    _log_d: usize,
+    priority: bool,
+) -> Option<gpu::MultiexpKernel<E>>
 where
     E: crate::bls::Engine,
 {
@@ -427,7 +431,11 @@ pub fn gpu_multiexp_consistency() {
     const START_LOG_D: usize = 10;
     let cuda_ctxs = gpu::CudaCtxs::create().unwrap(); // TODO: need to drop!
     let cuda_unowned_ctxs = gpu::CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
-    let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(cuda_unowned_ctxs, MAX_LOG_D, false));
+    let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(
+        cuda_unowned_ctxs,
+        MAX_LOG_D,
+        false,
+    ));
     let pool = Worker::new();
 
     let rng = &mut rand::thread_rng();

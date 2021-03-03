@@ -1,8 +1,8 @@
+use crate::gpu;
 use fs2::FileExt;
 use log::{debug, info, warn};
 use std::fs::File;
 use std::path::PathBuf;
-use crate::gpu;
 
 const GPU_LOCK_NAME: &str = "bellman.gpu.lock";
 const PRIORITY_LOCK_NAME: &str = "bellman.priority.lock";

@@ -430,7 +430,7 @@ pub fn gpu_multiexp_consistency() {
 
     const MAX_LOG_D: usize = 16;
     const START_LOG_D: usize = 10;
-    let cuda_ctxs = gpu::CudaCtxs::create().unwrap(); // TODO: need to drop!
+    let cuda_ctxs = gpu::CudaCtxs::create().unwrap();
     let cuda_unowned_ctxs = gpu::CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
     let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(
         cuda_unowned_ctxs,

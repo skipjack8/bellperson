@@ -509,6 +509,7 @@ where
         .collect::<Result<Vec<_>, SynthesisError>>()?;
 
     drop(multiexp_kern);
+    drop(cuda_ctxs);
 
     let proofs = h_s
         .into_iter()

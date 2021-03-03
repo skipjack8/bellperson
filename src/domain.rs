@@ -598,7 +598,7 @@ mod tests {
 
         let worker = Worker::new();
         let log_cpus = worker.log_num_cpus();
-        let cuda_ctxs = gpu::CudaCtxs::create().unwrap(); // TODO: need to drop!
+        let cuda_ctxs = gpu::CudaCtxs::create().unwrap();
         let cuda_unowned_ctxs = gpu::CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
         let mut kern =
             gpu::FFTKernel::create(cuda_unowned_ctxs, false).expect("Cannot initialize kernel!");

@@ -16,6 +16,8 @@ pub enum GPUError {
     KernelUninitialized,
     #[error("GPU accelerator is disabled!")]
     GPUDisabled,
+    #[error("Cuda {0}")]
+    Cuda(#[from] rustacuda::error::CudaError),
 }
 
 pub type GPUResult<T> = std::result::Result<T, GPUError>;

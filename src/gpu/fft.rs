@@ -28,7 +28,7 @@ impl<E> FFTKernel<E>
 where
     E: Engine,
 {
-    pub fn create(_ctxs: gpu::CudaUnownedCtxs, priority: bool) -> GPUResult<FFTKernel<E>> {
+    pub fn create(_ctxs: &[gpu::CudaUnownedCtx], priority: bool) -> GPUResult<FFTKernel<E>> {
         let lock = locks::GPULock::lock();
 
         let devices = opencl::Device::all();

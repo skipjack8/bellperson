@@ -235,6 +235,15 @@ pub struct CudaCtx {
     device: rustacuda::device::Device,
 }
 
+impl CudaCtx {
+    pub fn get_unowned(&self) -> CudaUnownedCtx {
+        CudaUnownedCtx {
+            context: self.context.get_unowned(),
+            device: self.device.clone(),
+        }
+    }
+}
+
 pub struct CudaCtxs {
     contexts: Vec<CudaCtx>,
 }
@@ -243,11 +252,6 @@ pub struct CudaCtxs {
 pub struct CudaUnownedCtx {
     context: rustacuda::context::UnownedContext,
     device: rustacuda::device::Device,
-}
-
-#[derive(Clone)]
-pub struct CudaUnownedCtxs {
-    contexts: Vec<CudaUnownedCtx>,
 }
 
 impl CudaCtxs {
@@ -262,7 +266,8 @@ impl CudaCtxs {
                 ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO,
                 *device,
             )?;
-            rustacuda::context::ContextStack::pop()?;
+            // FIXME: is this needed?
+            // rustacuda::context::ContextStack::pop()?;
             contexts.push(CudaCtx {
                 context: ctx,
                 device: *device,
@@ -271,20 +276,9 @@ impl CudaCtxs {
 
         Ok(CudaCtxs { contexts })
     }
-}
 
-impl CudaUnownedCtxs {
-    pub fn create(ctxs: &CudaCtxs) -> rustacuda::error::CudaResult<CudaUnownedCtxs> {
-        let contexts = ctxs
-            .contexts
-            .iter()
-            .map(|ctx| CudaUnownedCtx {
-                context: ctx.context.get_unowned(),
-                device: ctx.device.clone(),
-            })
-            .collect();
-
-        Ok(CudaUnownedCtxs { contexts })
+    pub fn get_unowned(&self) -> Vec<CudaUnownedCtx> {
+        self.contexts.iter().map(|ctx| ctx.get_unowned()).collect()
     }
 }
 
@@ -479,16 +473,15 @@ impl<E> MultiexpKernel<E>
 where
     E: Engine,
 {
-    pub fn create(ctxs: CudaUnownedCtxs, priority: bool) -> GPUResult<MultiexpKernel<E>> {
+    pub fn create(ctxs: &[CudaUnownedCtx], priority: bool) -> GPUResult<MultiexpKernel<E>> {
         let lock = locks::GPULock::lock();
 
         let kernels: Vec<_> = ctxs
-            .contexts
-            .into_iter()
+            .iter()
             .map(|ctx| {
                 (
                     ctx.device.clone(),
-                    SingleMultiexpKernelCuda::<E>::create(ctx, priority),
+                    SingleMultiexpKernelCuda::<E>::create(ctx.clone(), priority),
                 )
             })
             .filter_map(|(device, res)| {

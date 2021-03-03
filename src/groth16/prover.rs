@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 use super::{ParameterSource, Proof};
 use crate::domain::{EvaluationDomain, Scalar};
-use crate::gpu::{CudaCtxs, CudaUnownedCtxs, LockedFFTKernel, LockedMultiexpKernel};
+use crate::gpu::{CudaCtxs, LockedFFTKernel, LockedMultiexpKernel};
 use crate::multicore::{Worker, THREAD_POOL};
 use crate::multiexp::{multiexp, DensityTracker, FullDensity};
 use crate::{
@@ -314,12 +314,7 @@ where
     };
 
     let cuda_ctxs = CudaCtxs::create().unwrap();
-    let cuda_unowned_ctxs = CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
-    let mut fft_kern = Some(LockedFFTKernel::<E>::new(
-        cuda_unowned_ctxs.clone(),
-        log_d,
-        priority,
-    ));
+    let mut fft_kern = Some(LockedFFTKernel::<E>::new(&cuda_ctxs, log_d, priority));
     let provers_len = provers.len();
 
     let (a_s, params_result) = rayon::join(
@@ -408,11 +403,7 @@ where
 
     drop(fft_kern);
 
-    let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(
-        cuda_unowned_ctxs,
-        log_d,
-        priority,
-    ));
+    let mut multiexp_kern = Some(LockedMultiexpKernel::<E>::new(&cuda_ctxs, log_d, priority));
 
     let h_s = a_s
         .into_iter()

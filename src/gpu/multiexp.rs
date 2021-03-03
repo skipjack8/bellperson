@@ -239,6 +239,7 @@ pub struct CudaUnownedCtx {
     device: rustacuda::device::Device,
 }
 
+#[derive(Clone)]
 pub struct CudaUnownedCtxs {
     contexts: Vec<CudaUnownedCtx>,
 }
@@ -259,30 +260,26 @@ impl CudaCtxs {
             rustacuda::context::ContextStack::pop()?;
             contexts.push(CudaCtx {
                 context: ctx,
-                device: device,
+                device,
             });
         }
 
-        Ok(CudaCtxs { contexts: contexts })
+        Ok(CudaCtxs { contexts })
     }
 }
 
 impl CudaUnownedCtxs {
-    pub fn clone(&self) -> CudaUnownedCtxs {
-        CudaUnownedCtxs {
-            contexts: self.contexts.clone(), // TODO: this is probably not the right thing to do!
-        }
-    }
     pub fn create(ctxs: &CudaCtxs) -> rustacuda::error::CudaResult<CudaUnownedCtxs> {
-        let mut contexts = vec![];
-        for ctx in &ctxs.contexts {
-            contexts.push(CudaUnownedCtx {
+        let contexts = ctxs
+            .contexts
+            .iter()
+            .map(|ctx| CudaUnownedCtx {
                 context: ctx.context.get_unowned(),
                 device: ctx.device.clone(),
-            });
-        }
+            })
+            .collect();
 
-        Ok(CudaUnownedCtxs { contexts: contexts })
+        Ok(CudaUnownedCtxs { contexts })
     }
 }
 

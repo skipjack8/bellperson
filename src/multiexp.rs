@@ -399,7 +399,7 @@ fn test_with_bls12() {
 }
 
 pub fn create_multiexp_kernel<E>(
-    contexts: gpu::CudaUnownedCtxs,
+    contexts: &[gpu::CudaUnownedCtx],
     _log_d: usize,
     priority: bool,
 ) -> Option<gpu::MultiexpKernel<E>>
@@ -430,11 +430,8 @@ pub fn gpu_multiexp_consistency() {
     const MAX_LOG_D: usize = 16;
     const START_LOG_D: usize = 10;
     let cuda_ctxs = gpu::CudaCtxs::create().unwrap();
-    let cuda_unowned_ctxs = gpu::CudaUnownedCtxs::create(&cuda_ctxs).unwrap();
     let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(
-        cuda_unowned_ctxs,
-        MAX_LOG_D,
-        false,
+        &cuda_ctxs, MAX_LOG_D, false,
     ));
     let pool = Worker::new();
 

@@ -222,6 +222,10 @@ where
     E: Engine,
 {
     pub fn create(priority: bool) -> GPUResult<MultiexpKernel<E>> {
+        if locks::PriorityLock::should_break(priority) {
+            return Err(GPUError::GPUTaken);
+        }
+
         let lock = locks::GPULock::lock();
 
         let devices = opencl::Device::all()?;

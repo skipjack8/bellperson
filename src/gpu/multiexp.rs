@@ -301,15 +301,15 @@ where
 
 unsafe impl<E> Send for SingleMultiexpKernelCuda<E> where E: Engine {}
 
+const SOURCE_BIN: &[u8] = b"./src/gpu/multiexp/multiexp32.fatbin\0";
+
 impl<E> SingleMultiexpKernelCuda<E>
 where
     E: Engine,
 {
     pub fn create(ctx: CudaUnownedCtx, priority: bool) -> GPUResult<SingleMultiexpKernelCuda<E>> {
-        // TODO: how to handle the path??
-        // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp.cu -o multiexp.cubin)
-        // (cd src/gpu/multiexp; nvcc -O6 -cubin -gencode arch=compute_70,code=sm_75 multiexp32.cu -o multiexp32.cubin)
-        let src = CStr::from_bytes_with_nul(b"./src/gpu/multiexp/multiexp32.ptx\0").unwrap();
+        // (cd src/gpu/multiexp; nvcc -O6 -fatbin -arch=sm_86 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_75,code=sm_75 multiexp32.cu
+        let src = CStr::from_bytes_with_nul(SOURCE_BIN).unwrap();
 
         let exp_bits = exp_size::<E>() * 8;
         let name = ctx.device.name()?;

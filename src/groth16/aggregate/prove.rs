@@ -21,13 +21,13 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     srs: &ProverSRS<E>,
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError> {
-    if !srs.has_correct_len(proofs.len()) {
-        return Err(SynthesisError::MalformedSrs);
-    }
     if !proofs.len().is_power_of_two() {
         return Err(SynthesisError::NonPowerOfTwo);
     }
 
+    if !srs.has_correct_len(proofs.len()) {
+        return Err(SynthesisError::MalformedSrs);
+    }
     // We first commit to A B and C - these commitments are what the verifier
     // will use later to verify the TIPP and MIPP proofs
     let a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();

@@ -7,6 +7,7 @@ use bellperson::groth16::{
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use ff::{Field, PrimeField, ScalarEngine};
+use groupy::CurveProjective;
 use itertools::Itertools;
 use rand::{thread_rng, RngCore, SeedableRng};
 use rayon::prelude::*;
@@ -390,18 +391,20 @@ fn generate_proof<R: SeedableRng + RngCore>(
     (create_random_proof(c, p, &mut rng).unwrap(), statement)
 }
 
+/// This test creates and aggregates some valid proofs, then tries a bunch of
+/// failing test case scenarios
 #[test]
-fn test_groth16_aggregation_min() {
+fn test_groth16_aggregation() {
     const NUM_PUBLIC_INPUTS: usize = 50; //1000;
     {}
-    const NUM_PROOFS_TO_AGGREGATE: usize = 8; //1024;
+    const NUM_PROOFS: usize = 8; //1024;
     let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
 
     println!("Creating parameters...");
 
     // Generate parameters for inner product aggregation
-    let generic = setup_fake_srs(&mut rng, NUM_PROOFS_TO_AGGREGATE);
-    let (pk, vk) = generic.specialize(NUM_PROOFS_TO_AGGREGATE);
+    let generic = setup_fake_srs(&mut rng, NUM_PROOFS);
+    let (pk, vk) = generic.specialize(NUM_PROOFS);
 
     // Create parameters for our circuit
     let params = {
@@ -420,14 +423,14 @@ fn test_groth16_aggregation_min() {
     println!("Creating proofs...");
 
     // Generate proofs
-    println!("Generating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
+    println!("Generating {} Groth16 proofs...", NUM_PROOFS);
 
     let mut proofs = Vec::new();
     let mut statements = Vec::new();
     let mut generation_time = Duration::new(0, 0);
     let mut individual_verification_time = Duration::new(0, 0);
 
-    for _ in 0..NUM_PROOFS_TO_AGGREGATE {
+    for _ in 0..NUM_PROOFS {
         // Generate random inputs to product together
         let mut public_inputs = Vec::new();
         let mut statement = Vec::new();
@@ -464,32 +467,61 @@ fn test_groth16_aggregation_min() {
         statements.push(statement);
     }
 
-    // Aggregate proofs using inner product proofs
-    let start = Instant::now();
-    println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
-    let aggregate_proof =
+    // 1. Valid proofs
+    let mut aggregate_proof =
         aggregate_proofs::<Bls12>(&pk, &proofs).expect("failed to aggregate proofs");
-    let prover_time = start.elapsed().as_millis();
+    let result = verify_aggregate_proof(&vk, &pvk, &statements, &aggregate_proof)
+        .expect("these proofs should have been valid");
+    assert!(result);
 
-    println!("Verifying aggregated proof...");
-    let start = Instant::now();
-    let result = verify_aggregate_proof(&vk, &pvk, &statements, &aggregate_proof);
-    let verifier_time = start.elapsed().as_millis();
-    assert!(result.unwrap());
+    // 2. Non power of two
+    let err = aggregate_proofs::<Bls12>(&pk, &proofs[0..NUM_PROOFS - 1]).unwrap_err();
+    assert!(match err {
+        SynthesisError::NonPowerOfTwo => true,
+        _ => false,
+    });
 
-    let start = Instant::now();
-    let proofs: Vec<_> = proofs.iter().collect();
-    assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements).unwrap());
-    let batch_verifier_time = start.elapsed().as_millis();
+    // 3. aggregate invalid proof content (random A, B, and C)
+    let old_a = proofs[0].a.clone();
+    proofs[0].a = <Bls12 as Engine>::G1::random(&mut rng).into_affine();
+    let invalid_agg =
+        aggregate_proofs::<Bls12>(&pk, &proofs).expect("I should be able to aggregate");
+    let res = verify_aggregate_proof(&vk, &pvk, &statements, &invalid_agg).expect("no synthesis");
+    assert!(res == false);
+    proofs[0].a = old_a;
 
-    println!("Proof generation time: {} ms", generation_time.as_millis());
-    println!("Proof aggregation time: {} ms", prover_time);
-    println!("Proof aggregation verification time: {} ms", verifier_time);
-    println!(
-        "Proof individual verification time: {} ms",
-        individual_verification_time.as_millis()
-    );
-    println!("Proof batch verification: {} ms", batch_verifier_time);
+    let old_b = proofs[0].b.clone();
+    proofs[0].b = <Bls12 as Engine>::G2::random(&mut rng).into_affine();
+    let invalid_agg =
+        aggregate_proofs::<Bls12>(&pk, &proofs).expect("I should be able to aggregate");
+    let res = verify_aggregate_proof(&vk, &pvk, &statements, &invalid_agg).expect("no synthesis");
+    assert!(res == false);
+    proofs[0].b = old_b;
+
+    let old_c = proofs[0].c.clone();
+    proofs[0].c = <Bls12 as Engine>::G1::random(&mut rng).into_affine();
+    let invalid_agg =
+        aggregate_proofs::<Bls12>(&pk, &proofs).expect("I should be able to aggregate");
+    let res = verify_aggregate_proof(&vk, &pvk, &statements, &invalid_agg).expect("no synthesis");
+    assert!(res == false);
+    proofs[0].c = old_c;
+
+    // 4. verify with invalid aggregate proof
+    // first invalid commitment
+    let old_aggc = aggregate_proof.agg_c.clone();
+    aggregate_proof.agg_c = <Bls12 as Engine>::G1::random(&mut rng);
+    let res =
+        verify_aggregate_proof(&vk, &pvk, &statements, &aggregate_proof).expect("no synthesis");
+    assert!(res == false);
+    aggregate_proof.agg_c = old_aggc;
+
+    // invalid gipa element
+    let old_finala = aggregate_proof.tmipp.gipa.final_a.clone();
+    aggregate_proof.tmipp.gipa.final_a = <Bls12 as Engine>::G1::random(&mut rng).into_affine();
+    let res =
+        verify_aggregate_proof(&vk, &pvk, &statements, &aggregate_proof).expect("no synthesis");
+    assert!(res == false);
+    aggregate_proof.tmipp.gipa.final_a = old_finala;
 }
 
 #[test]

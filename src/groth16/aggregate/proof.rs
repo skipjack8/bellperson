@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// AggregateProof contains all elements to verify n aggregated Groth16 proofs
 /// using inner pairing product arguments. This proof can be created by any
 /// party in possession of valid Groth16 proofs.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AggregateProof<E: Engine> {
     /// commitment to A and B using the pair commitment scheme needed to verify
     /// TIPP relation.
@@ -32,7 +32,7 @@ pub struct AggregateProof<E: Engine> {
 
 /// It contains all elements derived in the GIPA loop for both TIPP and MIPP at
 /// the same time.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct GipaProof<E: Engine> {
     #[serde(bound(
         serialize = "E::Fqk: Serialize, E::Fqk: Serialize",
@@ -74,7 +74,7 @@ pub struct GipaProof<E: Engine> {
 
 /// It contains the GIPA recursive elements as well as the KZG openings for v
 /// and w
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct TippMippProof<E: Engine> {
     #[serde(bound(
         serialize = "GipaProof<E>: Serialize",

@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bellperson::groth16::{
-    aggregate_proofs, create_random_proof_batch, generate_random_parameters, prepare_verifying_key,
-    setup_inner_product, verify_aggregate_proof, verify_proofs_batch, Parameters, Proof,
-    VerifyingKey,
+    aggregate::{aggregate_proofs, setup_fake_srs, verify_aggregate_proof},
+    create_random_proof_batch, generate_random_parameters, prepare_verifying_key,
+    verify_proofs_batch, Parameters, Proof, VerifyingKey,
 };
 use bellperson::{
     bls::{Bls12, Engine, Fr},
@@ -182,7 +182,8 @@ fn main() {
     let pvk = prepare_verifying_key(&params.vk);
 
     let srs = if opts.aggregate {
-        Some(setup_inner_product(rng, opts.proofs))
+        let x = setup_fake_srs(rng, opts.proofs).specialize(opts.proofs);
+        Some(x)
     } else {
         None
     };
@@ -204,7 +205,7 @@ fn main() {
             let proofs = dummy_proofs::<Bls12, _>(opts.proofs, rng);
 
             let agg_proof = srs.as_ref().map(|srs| {
-                let (agg, took) = timer!(aggregate_proofs::<Bls12>(srs, &proofs).unwrap());
+                let (agg, took) = timer!(aggregate_proofs::<Bls12>(&srs.0, &proofs).unwrap());
                 println!("Proof aggregation finished in {}ms", took);
                 agg
             });
@@ -226,7 +227,7 @@ fn main() {
             println!("Proof generation finished in {}ms", took);
 
             let agg_proof = srs.as_ref().map(|srs| {
-                let (agg, took) = timer!(aggregate_proofs::<Bls12>(srs, &proofs).unwrap());
+                let (agg, took) = timer!(aggregate_proofs::<Bls12>(&srs.0, &proofs).unwrap());
                 println!("Proof aggregation finished in {}ms", took);
                 agg
             });
@@ -253,15 +254,13 @@ fn main() {
             if let Some(ref agg_proof) = agg_proof {
                 let srs = srs.as_ref().unwrap();
                 let (valid, took) =
-                    timer!(
-                        verify_aggregate_proof(&srs.get_verifier_key(), &pvk, &pis, agg_proof,)
-                            .unwrap()
-                    );
+                    timer!(verify_aggregate_proof(&srs.1, &pvk, &pis, agg_proof,).unwrap());
                 println!(
-                    "Verification aggregated finished in {}ms (Valid: {}) (Proof Size: {} bytes)",
+                    "Verification aggregated finished in {}ms (Valid: {}) (Proof Size: {} bytes, {})",
                     took,
                     valid,
                     bincode::serialize(agg_proof).unwrap().len(),
+                    agg_proof.serialized_len(),
                 );
             }
         }

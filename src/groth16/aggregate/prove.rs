@@ -278,6 +278,7 @@ fn gipa_tipp_mipp<E: Engine>(
     let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
     (
         GipaProof {
+            nproofs: a.len() as u32, // TODO: ensure u32
             comms_ab,
             comms_c,
             z_ab,

@@ -30,6 +30,8 @@ pub struct AggregateProof<E: Engine> {
     pub tmipp: TippMippProof<E>,
 }
 
+/// It contains all elements derived in the GIPA loop for both TIPP and MIPP at
+/// the same time.
 #[derive(Serialize, Deserialize)]
 pub struct GipaProof<E: Engine> {
     #[serde(bound(
@@ -70,6 +72,8 @@ pub struct GipaProof<E: Engine> {
     pub final_wkey: (E::G1Affine, E::G1Affine),
 }
 
+/// It contains the GIPA recursive elements as well as the KZG openings for v
+/// and w
 #[derive(Serialize, Deserialize)]
 pub struct TippMippProof<E: Engine> {
     #[serde(bound(

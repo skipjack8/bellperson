@@ -349,6 +349,8 @@ pub enum SynthesisError {
     MalformedProofs,
     #[error("malformed SRS")]
     MalformedSrs,
+    #[error("non power of two proofs given for aggregation")]
+    NonPowerOfTwo,
 }
 
 /// Represents a constraint system which can have new variables

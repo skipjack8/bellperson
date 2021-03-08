@@ -165,10 +165,9 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
     Ok(res)
 }
 
-/// verify_tipp returns a pairing equation to check the tipp proof. commAB is
-/// the commitment output of A and B, Z is the aggregated value: $A^r * B$ as
-/// described in the paper. $r$ is the randomness used to produce a random
-/// linear combination of A and B.
+/// verify_tipp_mipp returns a pairing equation to check the tipp proof.  $r$ is
+/// the randomness used to produce a random linear combination of A and B and
+/// used in the MIPP part with C
 fn verify_tipp_mipp<E: Engine>(
     v_srs: &VerifierSRS<E>,
     proof: &AggregateProof<E>,
@@ -177,7 +176,7 @@ fn verify_tipp_mipp<E: Engine>(
     info!("verify with srs shift");
     let now = Instant::now();
     // (T,U), Z for TIPP and MIPP  and all challenges
-    let (final_res, mut challenges, mut challenges_inv) = gipa_verify_tipp(&proof);
+    let (final_res, mut challenges, mut challenges_inv) = gipa_verify_tipp_mipp(&proof);
     println!(
         "TIPP verify: gipa verify tipp {}ms",
         now.elapsed().as_millis()
@@ -199,6 +198,7 @@ fn verify_tipp_mipp<E: Engine>(
         &fwkey.1
     );
 
+    // we take reference so they are able to be copied in the par! macro
     let final_a = &proof.tmipp.gipa.final_a;
     let final_b = &proof.tmipp.gipa.final_b;
     let final_c = &proof.tmipp.gipa.final_c;
@@ -211,7 +211,7 @@ fn verify_tipp_mipp<E: Engine>(
 
     let now = Instant::now();
     par! {
-        // Section 3.4. step 5 check the opening proof for v
+        // check the opening proof for v
         let vtuple = verify_kzg_opening_g2(
             v_srs,
             &fvkey,
@@ -220,7 +220,7 @@ fn verify_tipp_mipp<E: Engine>(
             &E::Fr::one(),
             &c,
         ),
-        // Section 3.4 step 6 check the opening proof for w
+        // check the opening proof for w - note that w has been rescaled by $r^{-1}$
         let wtuple = verify_kzg_opening_g1(
             v_srs,
             &fwkey,
@@ -229,8 +229,11 @@ fn verify_tipp_mipp<E: Engine>(
             &r_shift.inverse().unwrap(),
             &c,
         ),
+        //
+        // We create a sequence of pairing tuple that we aggregate together at
+        // the end to perform only once the final exponentiation.
+        //
         // TIPP
-        // Section 3.4 step 2
         // z = e(A,B)
         let check_z = make_tuple(final_a, final_b, final_zab),
         //  final_aB.0 = T = e(A,v1)e(w1,B)
@@ -246,7 +249,7 @@ fn verify_tipp_mipp<E: Engine>(
         let final_z =
             inner_product::multiexponentiation::<E::G1Affine>(&[final_c.clone()],
             &[final_r.clone()]),
-        // Check commiment correctness 4.2.2
+        // Check commiment correctness
         // T = e(C,v1)
         let check_t = make_tuple(final_c,&fvkey.0,final_tc),
         // U = e(A,v2)
@@ -278,17 +281,25 @@ fn verify_tipp_mipp<E: Engine>(
     acc
 }
 
-/// gipa_verify_tipp recurse on the proof and statement and produces the final
-/// values to be checked by TIPP verifier, namely:
-/// (T, U), Z, challenges, challenges_inv
-/// T,U are the final commitment values of A and B and Z the final product
-/// between A and B. Challenges are returned in inverse order as well to avoid
+/// gipa_verify_tipp_mipp recurse on the proof and statement and produces the final
+/// values to be checked by TIPP and MIPP verifier, namely, for TIPP for example:
+/// * T,U: the final commitment values of A and B
+/// * Z the final product between A and B.
+/// * Challenges are returned in inverse order as well to avoid
 /// repeating the operation multiple times later on.
-fn gipa_verify_tipp<E: Engine>(proof: &AggregateProof<E>) -> (GipaTUZ<E>, Vec<E::Fr>, Vec<E::Fr>) {
+/// * There are T,U,Z vectors as well for the MIPP relationship. Both TIPP and
+/// MIPP share the same challenges however, enabling to re-use common operations
+/// between them, such as the KZG proof for commitment keys.
+fn gipa_verify_tipp_mipp<E: Engine>(
+    proof: &AggregateProof<E>,
+) -> (GipaTUZ<E>, Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa verify TIPP");
     let gipa = &proof.tmipp.gipa;
+    // COM(A,B) = PROD e(A,B) given by prover
     let comms_ab = &gipa.comms_ab;
+    // COM(C,r) = SUM C^r given by prover
     let comms_c = &gipa.comms_c;
+    // Z vectors coming from the GIPA proofs
     let zs_ab = &gipa.z_ab;
     let zs_c = &gipa.z_c;
 
@@ -448,7 +459,6 @@ fn gipa_verify_tipp<E: Engine>(proof: &AggregateProof<E>) -> (GipaTUZ<E>, Vec<E:
 /// verify_kzg_opening_g2 takes a KZG opening, the final commitment key, SRS and
 /// any shift (in TIPP we shift the v commitment by r^-1) and returns a pairing
 /// tuple to check if the opening is correct or not.
-/// TODO optimization to do all in one miller loop maybe
 pub fn verify_kzg_opening_g2<E: Engine>(
     v_srs: &VerifierSRS<E>,
     final_vkey: &(E::G2Affine, E::G2Affine),

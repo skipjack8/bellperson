@@ -24,10 +24,12 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     if !srs.has_correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
     }
+    if !proofs.len().is_power_of_two() {
+        return Err(SynthesisError::NonPowerOfTwo);
+    }
 
     // We first commit to A B and C - these commitments are what the verifier
-    // will use later to verify the TIPP and MIPP proofs - even though the TIPP
-    // and MIPP proofs doesn't use them directly.
+    // will use later to verify the TIPP and MIPP proofs
     let a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
     let b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
     // A and B are committed together in this scheme
@@ -54,6 +56,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     // w^{r^{-1}}
     let wkey_r_inv = srs.wkey.scale(&r_inv);
 
+    // we prove tipp and mipp using the same recursive loop
     let proof = prove_tipp_mipp::<E>(&srs, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
     let ip_ab = inner_product::pairing::<E>(&a, &b_r);
     let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, &r_vec);
@@ -71,9 +74,12 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     })
 }
 
-/// Proves a TIPP relation between A and B. Commitment keys must be of size of A
-/// and B. In the context of Groth16 aggregation, we have that A = A^r and vkey
-/// is scaled by r^{-1}.
+/// Proves a TIPP relation between A and B as well as a MIPP relation with C and
+/// r. Commitment keys must be of size of A, B and C. In the context of Groth16
+/// aggregation, we have that B = B^r and wkey is scaled by r^{-1}. The
+/// commitment key v is used to commit to A and C recursively in GIPA such that
+/// only one KZG proof is needed for v. In the original paper version, since the
+/// challenges of GIPA would be different, two KZG proofs would be needed.
 fn prove_tipp_mipp<E: Engine>(
     srs: &ProverSRS<E>,
     a: &[E::G1Affine],
@@ -134,10 +140,10 @@ fn prove_tipp_mipp<E: Engine>(
     })
 }
 
-/// gipa_tipp peforms the recursion of the GIPA protocol for TIPP. It returns a
-/// proof containing all intermdiate committed values, as well as the
-/// challenges generated necessary to do the polynomial commitment proof later
-/// in TIPP.
+/// gipa_tipp_mipp peforms the recursion of the GIPA protocol for TIPP and MIPP.
+/// It returns a proof containing all intermdiate committed values, as well as
+/// the challenges generated necessary to do the polynomial commitment proof
+/// later in TIPP.
 fn gipa_tipp_mipp<E: Engine>(
     a: &[E::G1Affine],
     b: &[E::G2Affine],
@@ -146,9 +152,13 @@ fn gipa_tipp_mipp<E: Engine>(
     wkey: &WKey<E>, // scaled key w^r^-1
     r: &[E::Fr],
 ) -> (GipaProof<E>, Vec<E::Fr>, Vec<E::Fr>) {
+    // the values of vectors A and B rescaled at each step of the loop
     let (mut m_a, mut m_b) = (a.to_vec(), b.to_vec());
+    // the values of vectors C and r rescaled at each step of the loop
     let (mut m_c, mut m_r) = (c.to_vec(), r.to_vec());
+    // the values of the commitment keys rescaled at each step of the loop
     let (mut vkey, mut wkey) = (vkey.clone(), wkey.clone());
+    // storing the values for including in the proof
     let mut comms_ab = Vec::new();
     let mut comms_c = Vec::new();
     let mut z_ab = Vec::new();
@@ -284,7 +294,7 @@ fn gipa_tipp_mipp<E: Engine>(
     )
 }
 
-/// Returns the KZG opening proof for the given commitment key. In math, it
+/// Returns the KZG opening proof for the given commitment key. Specifically, it
 /// returns $g^{f(alpha) - f(z) / (alpha - z)}$ for $a$ and $b$.
 fn prove_commitment_key_kzg_opening<G: CurveAffine>(
     srs_powers_alpha_table: &dyn MultiscalarPrecomp<G>,
@@ -327,7 +337,8 @@ fn prove_commitment_key_kzg_opening<G: CurveAffine>(
 
     // we do one proof over h^a and one proof over h^b (or g^a and g^b depending
     // on the curve we are on). that's the extra cost of the commitment scheme
-    // used which is compatible with Groth16 CRS.
+    // used which is compatible with Groth16 CRS insteaf of the original paper
+    // of Bunz'19
     Ok(rayon::join(
         || {
             par_multiscalar::<_, G>(
@@ -350,6 +361,8 @@ fn prove_commitment_key_kzg_opening<G: CurveAffine>(
 
 /// It returns the evaluation of the polynomial $\prod (1 + x_{l-j}(rX)^{2j}$ at
 /// the point z, where transcript contains the reversed order of all challenges (the x).
+/// THe challenges must be in reversed order for the correct evaluation of the
+/// polynomial in O(logn)
 pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
     transcript: &[F],
     z: &F,

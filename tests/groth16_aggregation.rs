@@ -315,8 +315,8 @@ fn test_groth16_bench() {
 
             let buff = bincode::serialize(&aggregate_proof).expect("this should work");
             let start = Instant::now();
-            let agg2: AggregateProof<Bls12> = bincode::deserialize(&buff[..]).unwrap();
-            let result = verify_aggregate_proof(&vk, &pvk, &statements[..i], &aggregate_proof);
+            let deserialized: AggregateProof<Bls12> = bincode::deserialize(&buff[..]).unwrap();
+            let result = verify_aggregate_proof(&vk, &pvk, &statements[..i], &deserialized);
             assert!(result.unwrap());
             let verifier_time = start.elapsed().as_millis();
 

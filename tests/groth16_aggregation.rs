@@ -1,7 +1,9 @@
 use bellperson::bls::{Bls12, Engine, Fr, FrRepr};
 use bellperson::gadgets::num::AllocatedNum;
 use bellperson::groth16::{
-    aggregate::{aggregate_proofs, setup_fake_srs, verify_aggregate_proof, GenericSRS},
+    aggregate::{
+        aggregate_proofs, setup_fake_srs, verify_aggregate_proof, AggregateProof, GenericSRS,
+    },
     create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof,
     verify_proofs_batch, Parameters, Proof,
 };
@@ -310,7 +312,10 @@ fn test_groth16_bench() {
                 aggregate_proofs::<Bls12>(&pk, &proofs[..i]).expect("failed to aggregate proofs");
             let prover_time = start.elapsed().as_millis();
             println!("\t-Aggregate Verification ...");
+
+            let buff = bincode::serialize(&aggregate_proof).expect("this should work");
             let start = Instant::now();
+            let agg2: AggregateProof<Bls12> = bincode::deserialize(&buff[..]).unwrap();
             let result = verify_aggregate_proof(&vk, &pvk, &statements[..i], &aggregate_proof);
             assert!(result.unwrap());
             let verifier_time = start.elapsed().as_millis();
@@ -515,7 +520,7 @@ fn test_groth16_aggregation() {
     assert!(res == false);
     aggregate_proof.agg_c = old_aggc;
 
-    // invalid gipa element
+    // 5. invalid gipa element
     let old_finala = aggregate_proof.tmipp.gipa.final_a.clone();
     aggregate_proof.tmipp.gipa.final_a = <Bls12 as Engine>::G1::random(&mut rng).into_affine();
     let res =

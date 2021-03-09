@@ -38,6 +38,7 @@ where
 
         // Select the first device for FFT
         let device = devices[0].clone();
+        let device_name = device.name();
 
         let src = sources::kernel::<E>(device.brand() == opencl::Brand::Nvidia);
 
@@ -46,7 +47,7 @@ where
         let omegas_buffer = program.create_buffer::<E::Fr>(LOG2_MAX_ELEMENTS)?;
 
         info!("FFT: 1 working device(s) selected.");
-        info!("FFT: Device 0: {}", program.device().name());
+        info!("FFT: Device 0: {}", device_name);
 
         Ok(FFTKernel {
             program,
@@ -111,7 +112,7 @@ where
                 pq[i].mul_assign(&twiddle);
             }
         }
-        self.pq_buffer.write_from(0, &pq)?;
+        self.program.write_from_buffer(&self.pq_buffer, 0, &pq)?;
 
         // Precalculate [omega, omega^2, omega^4, omega^8, ..., omega^(2^31)]
         let mut omegas = vec![E::Fr::zero(); 32];
@@ -119,7 +120,8 @@ where
         for i in 1..LOG2_MAX_ELEMENTS {
             omegas[i] = omegas[i - 1].pow([2u64]);
         }
-        self.omegas_buffer.write_from(0, &omegas)?;
+        self.program
+            .write_from_buffer(&self.omegas_buffer, 0, &omegas)?;
 
         Ok(())
     }
@@ -135,7 +137,7 @@ where
         let max_deg = cmp::min(MAX_LOG2_RADIX, log_n);
         self.setup_pq_omegas(omega, n, max_deg)?;
 
-        src_buffer.write_from(0, &*a)?;
+        self.program.write_from_buffer(&src_buffer, 0, &*a)?;
         let mut log_p = 0u32;
         while log_p < log_n {
             let deg = cmp::min(max_deg, log_n - log_p);
@@ -144,7 +146,7 @@ where
             std::mem::swap(&mut src_buffer, &mut dst_buffer);
         }
 
-        src_buffer.read_into(0, a)?;
+        self.program.read_into_buffer(&src_buffer, 0, a)?;
 
         Ok(())
     }

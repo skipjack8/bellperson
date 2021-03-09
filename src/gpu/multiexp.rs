@@ -166,12 +166,12 @@ where
         // be `num_groups` * `num_windows` threads in total.
         // Each thread will use `num_groups` * `num_windows` * `bucket_len` buckets.
 
-        let mut base_buffer = self.program.create_buffer::<G>(n)?;
-        base_buffer.write_from(0, bases)?;
-        let mut exp_buffer = self
+        let base_buffer = self.program.create_buffer::<G>(n)?;
+        self.program.write_from_buffer(&base_buffer, 0, bases)?;
+        let exp_buffer = self
             .program
             .create_buffer::<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>(n)?;
-        exp_buffer.write_from(0, exps)?;
+        self.program.write_from_buffer(&exp_buffer, 0, exps)?;
 
         let bucket_buffer = self
             .program
@@ -209,7 +209,8 @@ where
             .run()?;
 
         let mut results = vec![<G as CurveAffine>::Projective::zero(); num_groups * num_windows];
-        result_buffer.read_into(0, &mut results)?;
+        self.program
+            .read_into_buffer(&result_buffer, 0, &mut results)?;
 
         // Using the algorithm below, we can calculate the final result by accumulating the results
         // of those `NUM_GROUPS` * `NUM_WINDOWS` threads.
@@ -229,6 +230,10 @@ where
         Ok(acc)
     }
 }
+
+// NOTE vmx 2021-04-06: opencl3 doesn't implement `Send` for their types, hence make the kernel
+// itself `Send` so that it can be send between threads.
+unsafe impl<E: Engine> Send for SingleMultiexpKernel<E> {}
 
 pub struct CudaCtx {
     context: rustacuda::context::Context,

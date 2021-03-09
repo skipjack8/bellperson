@@ -37,6 +37,7 @@ where
 
         // Select the first device for FFT
         let device = devices[0].clone();
+        let device_name = device.name();
 
         let src = sources::kernel::<E>(device.brand() == opencl::Brand::Nvidia);
 
@@ -45,7 +46,7 @@ where
         let omegas_buffer = program.create_buffer::<E::Fr>(LOG2_MAX_ELEMENTS)?;
 
         info!("FFT: 1 working device(s) selected.");
-        info!("FFT: Device 0: {}", program.device().name());
+        info!("FFT: Device 0: {}", device_name);
 
         Ok(FFTKernel {
             program,

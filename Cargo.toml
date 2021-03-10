@@ -86,5 +86,5 @@ harness = false
 paired = { git = "https://github.com/filecoin-project/paired", branch = "ser-de" }
 fff = { git = "https://github.com/filecoin-project/ff", branch = "ser-de" }
 groupy = { git = "https://github.com/filecoin-project/group", branch = "ser-de" }
-# blstrs = { git = "https://github.com/filecoin-project/blstrs", branch = "ser-de" }
-blstrs = { path = "../blstrs" }
+blstrs = { git = "https://github.com/filecoin-project/blstrs", branch = "feat-compression" }
+#blstrs = { path = "../blstrs" }

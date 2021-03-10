@@ -38,9 +38,6 @@ pub struct AggregateProof<E: Engine> {
     pub tmipp: TippMippProof<E>,
 }
 
-/// It contains all elements derived in the GIPA loop for both TIPP and MIPP at
-/// the same time.
-#[derive(Serialize, Deserialize, Debug)]
 impl<E: Engine> AggregateProof<E> {
     /// Writes the agggregated proof into the provided buffer.
     pub fn write(&self, mut out: impl Write) -> std::io::Result<()> {
@@ -75,7 +72,9 @@ impl<E: Engine> AggregateProof<E> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+/// It contains all elements derived in the GIPA loop for both TIPP and MIPP at
+/// the same time.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct GipaProof<E: Engine> {
     pub nproofs: u32,
     #[serde(bound(
@@ -116,9 +115,6 @@ pub struct GipaProof<E: Engine> {
     pub final_wkey: (E::G1Affine, E::G1Affine),
 }
 
-/// It contains the GIPA recursive elements as well as the KZG openings for v
-/// and w
-#[derive(Serialize, Deserialize, Debug)]
 impl<E: Engine> GipaProof<E> {
     fn log_proofs(&self) -> usize {
         (self.nproofs as f32).log2().ceil() as usize
@@ -185,7 +181,9 @@ impl<E: Engine> GipaProof<E> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+/// It contains the GIPA recursive elements as well as the KZG openings for v
+/// and w
+#[derive(Serialize, Deserialize, Debug)]
 pub struct TippMippProof<E: Engine> {
     #[serde(bound(
         serialize = "GipaProof<E>: Serialize",

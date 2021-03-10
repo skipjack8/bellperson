@@ -7,7 +7,12 @@
 
 use crossbeam_channel::{bounded, Receiver};
 use lazy_static::lazy_static;
+use log::{error, trace};
 use std::env;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static WORKER_SPAWN_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 lazy_static! {
     static ref NUM_CPUS: usize = if let Ok(num) = env::var("BELLMAN_NUM_CPUS") {
@@ -19,6 +24,8 @@ lazy_static! {
     } else {
         num_cpus::get()
     };
+    // See Worker::compute below for a description of this.
+    static ref WORKER_SPAWN_MAX_COUNT: usize = *NUM_CPUS * 4;
     pub static ref THREAD_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
         .num_threads(*NUM_CPUS)
         .build()
@@ -47,10 +54,45 @@ impl Worker {
         R: Send + 'static,
     {
         let (sender, receiver) = bounded(1);
-        THREAD_POOL.spawn(move || {
-            let res = f();
-            sender.send(res).unwrap();
-        });
+
+        let thread_index = if THREAD_POOL.current_thread_index().is_some() {
+            THREAD_POOL.current_thread_index().unwrap()
+        } else {
+            0
+        };
+
+        // We keep track here of how many times spawn has been called.
+        // It can be called without limit, each time, putting a
+        // request for a new thread to execute a method on the
+        // ThreadPool.  However, if we allow it to be called without
+        // limits, we run the risk of memory exhaustion due to limited
+        // stack space consumed by all of the pending closures to be
+        // executed.
+        let previous_count = WORKER_SPAWN_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        // If the number of spawns requested has exceeded the number
+        // of cores available for processing by some factor (the
+        // default being 4), instead of requesting that we spawn a new
+        // thread, we instead execute the closure in the context of an
+        // install call to help clear the growing work queue and
+        // minimize the chances of memory exhaustion.
+        if previous_count > *WORKER_SPAWN_MAX_COUNT {
+            THREAD_POOL.install(move || {
+                trace!("[{}] switching to install to help clear backlog[current threads {}, threads requested {}]",
+                       thread_index,
+                       THREAD_POOL.current_num_threads(),
+                       WORKER_SPAWN_COUNTER.load(Ordering::SeqCst));
+                let res = f();
+                sender.send(res).unwrap();
+                WORKER_SPAWN_COUNTER.fetch_sub(1, Ordering::SeqCst);
+            });
+        } else {
+            THREAD_POOL.spawn(move || {
+                let res = f();
+                sender.send(res).unwrap();
+                WORKER_SPAWN_COUNTER.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
 
         Waiter { receiver }
     }
@@ -77,6 +119,11 @@ pub struct Waiter<T> {
 impl<T> Waiter<T> {
     /// Wait for the result.
     pub fn wait(&self) -> T {
+        if THREAD_POOL.current_thread_index().is_some() {
+            // Calling `wait()` from within the worker thread pool can lead to dead logs
+            error!("The wait call should never be done inside the worker thread pool");
+            debug_assert!(false);
+        }
         self.receiver.recv().unwrap()
     }
 

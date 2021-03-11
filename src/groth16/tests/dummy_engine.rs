@@ -261,7 +261,11 @@ impl ScalarEngine for DummyEngine {
 }
 
 impl blstrs::Compress for Fr {
-    fn write_compressed<W: std::io::Write>(self, mut out: W) -> std::io::Result<()> {
+    fn write_compressed<W: std::io::Write>(self, _out: W) -> std::io::Result<()> {
+        unimplemented!()
+    }
+
+    fn read_compressed<R: std::io::Read>(_source: R) -> std::io::Result<Self> {
         unimplemented!()
     }
 }

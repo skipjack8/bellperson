@@ -1,7 +1,7 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 use ff::{PrimeField, PrimeFieldRepr};
-use groupy::{CurveAffine, CurveProjective};
+use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use serde::{Deserialize, Serialize};
 
 use blstrs::Compress;
@@ -38,6 +38,16 @@ pub struct AggregateProof<E: Engine> {
     pub tmipp: TippMippProof<E>,
 }
 
+impl<E: Engine> PartialEq for AggregateProof<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.com_ab == other.com_ab
+            && self.com_c == other.com_c
+            && self.ip_ab == other.ip_ab
+            && self.agg_c == other.agg_c
+            && self.tmipp == other.tmipp
+    }
+}
+
 impl<E: Engine> AggregateProof<E> {
     /// Writes the agggregated proof into the provided buffer.
     pub fn write(&self, mut out: impl Write) -> std::io::Result<()> {
@@ -69,6 +79,31 @@ impl<E: Engine> AggregateProof<E> {
         self.write(&mut out).unwrap();
 
         out.len()
+    }
+
+    pub fn read(mut source: impl Read) -> std::io::Result<Self> {
+        let com_ab = (
+            <E::Fqk as Compress>::read_compressed(&mut source)?,
+            <E::Fqk as Compress>::read_compressed(&mut source)?,
+        );
+
+        let com_c = (
+            <E::Fqk as Compress>::read_compressed(&mut source)?,
+            <E::Fqk as Compress>::read_compressed(&mut source)?,
+        );
+
+        let ip_ab = <E::Fqk as Compress>::read_compressed(&mut source)?;
+        let agg_c = read_affine::<E::G1Affine, _>(&mut source)?.into_projective();
+
+        let tmipp = TippMippProof::read(&mut source)?;
+
+        Ok(AggregateProof {
+            com_ab,
+            com_c,
+            ip_ab,
+            agg_c,
+            tmipp,
+        })
     }
 }
 
@@ -115,9 +150,25 @@ pub struct GipaProof<E: Engine> {
     pub final_wkey: (E::G1Affine, E::G1Affine),
 }
 
+impl<E: Engine> PartialEq for GipaProof<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nproofs == other.nproofs
+            && self.comms_ab == other.comms_ab
+            && self.comms_c == other.comms_c
+            && self.z_ab == other.z_ab
+            && self.z_c == other.z_c
+            && self.final_a == other.final_a
+            && self.final_b == other.final_b
+            && self.final_c == other.final_c
+            && self.final_r == other.final_r
+            && self.final_vkey == other.final_vkey
+            && self.final_wkey == other.final_wkey
+    }
+}
+
 impl<E: Engine> GipaProof<E> {
-    fn log_proofs(&self) -> usize {
-        (self.nproofs as f32).log2().ceil() as usize
+    fn log_proofs(nproofs: usize) -> usize {
+        (nproofs as f32).log2().ceil() as usize
     }
 
     /// Writes the  proof into the provided buffer.
@@ -125,7 +176,8 @@ impl<E: Engine> GipaProof<E> {
         // number of proofs
         out.write_all(&self.nproofs.to_le_bytes()[..])?;
 
-        assert_eq!(self.comms_ab.len(), self.log_proofs());
+        let log_proofs = Self::log_proofs(self.nproofs as usize);
+        assert_eq!(self.comms_ab.len(), log_proofs);
         // comms_ab
         for (x, y) in &self.comms_ab {
             x.0.write_compressed(&mut out)?;
@@ -134,7 +186,7 @@ impl<E: Engine> GipaProof<E> {
             y.1.write_compressed(&mut out)?;
         }
 
-        assert_eq!(self.comms_c.len(), self.log_proofs());
+        assert_eq!(self.comms_c.len(), log_proofs);
         // comms_c
         for (x, y) in &self.comms_c {
             x.0.write_compressed(&mut out)?;
@@ -143,14 +195,14 @@ impl<E: Engine> GipaProof<E> {
             y.1.write_compressed(&mut out)?;
         }
 
-        assert_eq!(self.z_ab.len(), self.log_proofs());
+        assert_eq!(self.z_ab.len(), log_proofs);
         // z_ab
         for (x, y) in &self.z_ab {
             x.write_compressed(&mut out)?;
             y.write_compressed(&mut out)?;
         }
 
-        assert_eq!(self.z_c.len(), self.log_proofs());
+        assert_eq!(self.z_c.len(), log_proofs);
         // z_c
         for (x, y) in &self.z_c {
             out.write_all(x.into_affine().into_compressed().as_ref())?;
@@ -179,6 +231,75 @@ impl<E: Engine> GipaProof<E> {
 
         Ok(())
     }
+
+    fn read(mut source: impl Read) -> std::io::Result<Self> {
+        let mut buffer = 0u32.to_le_bytes();
+        source.read_exact(&mut buffer)?;
+        let nproofs = u32::from_le_bytes(buffer);
+
+        let log_proofs = Self::log_proofs(nproofs as usize);
+
+        fn read_output<E: Engine, R: Read>(mut source: R) -> std::io::Result<commit::Output<E>> {
+            let a = <E::Fqk as Compress>::read_compressed(&mut source)?;
+            let b = <E::Fqk as Compress>::read_compressed(&mut source)?;
+            Ok((a, b))
+        }
+
+        let mut comms_ab = Vec::with_capacity(log_proofs);
+        for _ in 0..log_proofs {
+            comms_ab.push((
+                read_output::<E, _>(&mut source)?,
+                read_output::<E, _>(&mut source)?,
+            ));
+        }
+
+        let mut comms_c = Vec::with_capacity(log_proofs);
+        for _ in 0..log_proofs {
+            comms_c.push((
+                read_output::<E, _>(&mut source)?,
+                read_output::<E, _>(&mut source)?,
+            ));
+        }
+
+        let mut z_ab = Vec::with_capacity(log_proofs);
+        for _ in 0..log_proofs {
+            z_ab.push(read_output::<E, _>(&mut source)?);
+        }
+
+        let mut z_c = Vec::with_capacity(log_proofs);
+        for _ in 0..log_proofs {
+            z_c.push((
+                read_affine::<E::G1Affine, _>(&mut source)?.into_projective(),
+                read_affine::<E::G1Affine, _>(&mut source)?.into_projective(),
+            ));
+        }
+
+        let final_a = read_affine(&mut source)?;
+        let final_b = read_affine(&mut source)?;
+        let final_c = read_affine(&mut source)?;
+
+        let mut final_r_repr = <E::Fr as PrimeField>::Repr::default();
+        final_r_repr.read_le(&mut source)?;
+        let final_r = <E::Fr as PrimeField>::from_repr(final_r_repr)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
+
+        let final_vkey = (read_affine(&mut source)?, read_affine(&mut source)?);
+        let final_wkey = (read_affine(&mut source)?, read_affine(&mut source)?);
+
+        Ok(GipaProof {
+            nproofs,
+            comms_ab,
+            comms_c,
+            z_ab,
+            z_c,
+            final_a,
+            final_b,
+            final_c,
+            final_r,
+            final_vkey,
+            final_wkey,
+        })
+    }
 }
 
 /// It contains the GIPA recursive elements as well as the KZG openings for v
@@ -200,6 +321,14 @@ pub struct TippMippProof<E: Engine> {
         deserialize = "E::G1Affine: Deserialize<'de>",
     ))]
     pub wkey_opening: KZGOpening<E::G1Affine>,
+}
+
+impl<E: Engine> PartialEq for TippMippProof<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.gipa == other.gipa
+            && self.vkey_opening == other.vkey_opening
+            && self.wkey_opening == other.wkey_opening
+    }
 }
 
 impl<E: Engine> TippMippProof<E> {
@@ -224,8 +353,81 @@ impl<E: Engine> TippMippProof<E> {
 
         Ok(())
     }
+
+    fn read(mut source: impl Read) -> std::io::Result<Self> {
+        let gipa = GipaProof::read(&mut source)?;
+        let vkey_opening = (read_affine(&mut source)?, read_affine(&mut source)?);
+
+        let wkey_opening = (read_affine(&mut source)?, read_affine(&mut source)?);
+
+        Ok(TippMippProof {
+            gipa,
+            vkey_opening,
+            wkey_opening,
+        })
+    }
 }
 
 /// KZGOpening represents the KZG opening of a commitment key (which is a tuple
 /// given commitment keys are a tuple).
 pub type KZGOpening<G> = (G, G);
+
+fn read_affine<G: CurveAffine, R: std::io::Read>(mut source: R) -> std::io::Result<G> {
+    let mut affine_compressed = <G as CurveAffine>::Compressed::empty();
+    source.read_exact(affine_compressed.as_mut())?;
+    let affine = affine_compressed
+        .into_affine()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
+
+    Ok(affine)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::bls::{Bls12, Fr, G1Affine, G1Projective, G2Affine, G2Projective};
+    use ff::Field;
+
+    #[test]
+    fn test_read_write() {
+        // create pairing, as pairing results can be compressed
+        let p = G1Projective::one().into_affine();
+        let q = G2Projective::one().into_affine();
+        let a = Bls12::pairing(p, q);
+
+        let proof = AggregateProof::<Bls12> {
+            com_ab: (a, a),
+            com_c: (a, a),
+            ip_ab: a,
+            agg_c: G1Projective::one(),
+            tmipp: TippMippProof::<Bls12> {
+                gipa: GipaProof {
+                    nproofs: 4,
+                    comms_ab: vec![((a, a), (a, a)), ((a, a), (a, a))],
+                    comms_c: vec![((a, a), (a, a)), ((a, a), (a, a))],
+                    z_ab: vec![(a, a), (a, a)],
+                    z_c: vec![
+                        (G1Projective::one(), G1Projective::one()),
+                        (G1Projective::one(), G1Projective::one()),
+                    ],
+                    final_a: G1Affine::one(),
+                    final_b: G2Affine::one(),
+                    final_c: G1Affine::one(),
+                    final_r: Fr::one(),
+                    final_vkey: (G2Affine::one(), G2Affine::one()),
+                    final_wkey: (G1Affine::one(), G1Affine::one()),
+                },
+                vkey_opening: (G2Affine::one(), G2Affine::one()),
+                wkey_opening: (G1Affine::one(), G1Affine::one()),
+            },
+        };
+
+        let mut buffer = Vec::new();
+        proof.write(&mut buffer).unwrap();
+        assert_eq!(buffer.len(), 8_244);
+
+        let out = AggregateProof::<Bls12>::read(std::io::Cursor::new(&buffer)).unwrap();
+        assert_eq!(proof, out);
+    }
+}

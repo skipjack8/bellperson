@@ -313,9 +313,12 @@ fn test_groth16_bench() {
             let prover_time = start.elapsed().as_millis();
             println!("\t-Aggregate Verification ...");
 
-            let buff = bincode::serialize(&aggregate_proof).expect("this should work");
+            let mut buffer = Vec::new();
+            aggregate_proof.write(&mut buffer).unwrap();
             let start = Instant::now();
-            let deserialized: AggregateProof<Bls12> = bincode::deserialize(&buff[..]).unwrap();
+            let deserialized =
+                AggregateProof::<Bls12>::read(std::io::Cursor::new(&buffer)).unwrap();
+
             let result = verify_aggregate_proof(&vk, &pvk, &statements[..i], &deserialized);
             assert!(result.unwrap());
             let verifier_time = start.elapsed().as_millis();
@@ -349,7 +352,7 @@ fn test_groth16_bench() {
             let proofs: Vec<_> = proofs.iter().take(i).collect();
             assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements[..i]).unwrap());
             let batch_all_time = start.elapsed().as_millis();
-            let agg_size = bincode::serialize(&aggregate_proof).unwrap().len();
+            let agg_size = buffer.len();
             records.push(Record {
                 nproofs: i as u32,
                 aggregate_create_ms: prover_time as u32,

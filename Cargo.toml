@@ -75,3 +75,6 @@ maintenance = { status = "actively-developed" }
 [[bench]]
 name = "lc"
 harness = false
+
+[patch."https://github.com/vmx/opencl3"]
+opencl3 = { git = "https://github.com/vmx//opencl3", branch = "tmp-opencl3-issue-8" }

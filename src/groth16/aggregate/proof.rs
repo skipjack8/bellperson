@@ -4,9 +4,7 @@ use ff::{PrimeField, PrimeFieldRepr};
 use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use serde::{Deserialize, Serialize};
 
-use blstrs::Compress;
-
-use crate::bls::Engine;
+use crate::bls::{Compress, Engine};
 use crate::groth16::aggregate::commit;
 
 /// AggregateProof contains all elements to verify n aggregated Groth16 proofs

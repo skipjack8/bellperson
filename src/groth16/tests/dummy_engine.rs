@@ -260,7 +260,7 @@ impl ScalarEngine for DummyEngine {
     type Fr = Fr;
 }
 
-impl blstrs::Compress for Fr {
+impl crate::bls::Compress for Fr {
     fn write_compressed<W: std::io::Write>(self, _out: W) -> std::io::Result<()> {
         unimplemented!()
     }

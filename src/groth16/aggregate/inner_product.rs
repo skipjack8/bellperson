@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::multiscalar::*;
 
-/// pairing_miller_affine returns the miller loop evaluated on inputs, i.e.
+/// Returns the miller loop evaluated on inputs, i.e.
 /// e(l_1,r_1)e(l_2,r_2)...
 /// NOTE: the result is not in the final subgroup, one must run
 /// `E::final_exponentiation` to use the final result.

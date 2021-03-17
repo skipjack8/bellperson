@@ -9,7 +9,8 @@ use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use memmap::Mmap;
 use rayon::prelude::*;
 use sha2::Sha256;
-use std::io::{self, Read, Write};
+use std::convert::TryFrom;
+use std::io::{self, Error, ErrorKind, Read, Write};
 use std::mem::size_of;
 
 /// It contains the maximum number of raw elements of the SRS needed to aggregate and verify
@@ -18,7 +19,7 @@ use std::mem::size_of;
 /// precomputed tables that drastically increase prover's performance.
 /// This GenericSRS is usually formed from the transcript of two distinct power of taus ceremony
 /// ,in other words from two distinct Groth16 CRS.
-/// See [there](https://github.com/nikkolasg.taupipp) a way on how to generate this GenesisSRS.
+/// See [there](https://github.com/nikkolasg/taupipp) a way on how to generate this GenesisSRS.
 #[derive(Clone, Debug)]
 pub struct GenericSRS<E: Engine> {
     /// $\{g^a^i\}_{i=0}^{N}$ where N is the smallest size of the two Groth16 CRS.
@@ -64,7 +65,6 @@ pub struct VerifierSRS<E: Engine> {
     pub n: usize,
     pub g: E::G1,
     pub h: E::G2,
-    // TODO look if g_alpha and g_beta still needed
     pub g_alpha: E::G1,
     pub g_beta: E::G1,
     pub h_alpha: E::G2,
@@ -123,25 +123,25 @@ impl<E: Engine> GenericSRS<E> {
         // we skip the first one since g^a^0 = g which is not part of the commitment
         // key (i.e. we don't use it in the prover's code) so for g we skip directly to
         // g^a^{n+1}
-        let glow = n + 1;
+        let g_low = n + 1;
         // we need powers up to 2n
-        let gup = glow + n;
-        let hlow = 1;
-        let hup = hlow + n;
+        let g_up = g_low + n;
+        let h_low = 1;
+        let h_up = h_low + n;
         let g_alpha_powers_table =
-            precompute_fixed_window(&self.g_alpha_powers[glow..gup], WINDOW_SIZE);
+            precompute_fixed_window(&self.g_alpha_powers[g_low..g_up], WINDOW_SIZE);
         let g_beta_powers_table =
-            precompute_fixed_window(&self.g_beta_powers[glow..gup], WINDOW_SIZE);
+            precompute_fixed_window(&self.g_beta_powers[g_low..g_up], WINDOW_SIZE);
         let h_alpha_powers_table =
-            precompute_fixed_window(&self.h_alpha_powers[hlow..hup], WINDOW_SIZE);
+            precompute_fixed_window(&self.h_alpha_powers[h_low..h_up], WINDOW_SIZE);
         let h_beta_powers_table =
-            precompute_fixed_window(&self.h_beta_powers[hlow..hup], WINDOW_SIZE);
-        let v1 = self.h_alpha_powers[hlow..hup].to_vec();
-        let v2 = self.h_beta_powers[hlow..hup].to_vec();
+            precompute_fixed_window(&self.h_beta_powers[h_low..h_up], WINDOW_SIZE);
+        let v1 = self.h_alpha_powers[h_low..h_up].to_vec();
+        let v2 = self.h_beta_powers[h_low..h_up].to_vec();
         let vkey = VKey::<E> { a: v1, b: v2 };
         assert!(vkey.has_correct_len(n));
-        let w1 = self.g_alpha_powers[glow..gup].to_vec();
-        let w2 = self.g_beta_powers[glow..gup].to_vec();
+        let w1 = self.g_alpha_powers[g_low..g_up].to_vec();
+        let w2 = self.g_beta_powers[g_low..g_up].to_vec();
         // needed by the verifier to check KZG opening with a shifted base point for
         // the w commitment
         let g_alpha_n1 = w1[0].into_projective();
@@ -297,7 +297,7 @@ pub fn setup_fake_srs<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize) -> 
     }
 }
 
-fn structured_generators_scalar_power<G: CurveProjective>(
+pub(crate) fn structured_generators_scalar_power<G: CurveProjective>(
     num: usize,
     g: &G,
     s: &G::Scalar,
@@ -323,7 +323,12 @@ fn structured_generators_scalar_power<G: CurveProjective>(
 }
 
 fn write_vec<G: CurveAffine, W: Write>(w: &mut W, v: &[G]) -> io::Result<()> {
-    w.write_u32::<BigEndian>(v.len() as u32)?;
+    w.write_u32::<BigEndian>(u32::try_from(v.len()).map_err(|_| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            format!("invalid vector length > u32: {}", v.len()),
+        )
+    })?)?;
     for p in v {
         write_point(w, p)?;
     }

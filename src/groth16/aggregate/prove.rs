@@ -16,7 +16,6 @@ use crate::groth16::{multiscalar::*, Proof};
 use crate::SynthesisError;
 
 /// Aggregate `n` zkSnark proofs, where `n` must be a power of two.
-/// It implements the algorithm section 5 of the paper.
 pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     srs: &ProverSRS<E>,
     proofs: &[Proof<E>],
@@ -30,12 +29,22 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     }
     // We first commit to A B and C - these commitments are what the verifier
     // will use later to verify the TIPP and MIPP proofs
-    let a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>();
-    let b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>();
+    par! {
+        let a = proofs.iter().map(|proof| proof.a).collect::<Vec<_>>(),
+        let b = proofs.iter().map(|proof| proof.b).collect::<Vec<_>>(),
+        let c = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>()
+    };
+
     // A and B are committed together in this scheme
-    let com_ab = commit::pair::<E>(&srs.vkey, &srs.wkey, &a, &b);
-    let c = proofs.iter().map(|proof| proof.c).collect::<Vec<_>>();
-    let com_c = commit::single_g1::<E>(&srs.vkey, &c);
+    // we need to take the reference so the macro doesn't consume the value
+    // first
+    let refa = &a;
+    let refb = &b;
+    let refc = &c;
+    par! {
+        let com_ab = commit::pair::<E>(&srs.vkey, &srs.wkey, refa, refb),
+        let com_c = commit::single_g1::<E>(&srs.vkey, refc)
+    };
 
     // Random linear combination of proofs
     let r = oracle!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1);
@@ -53,17 +62,21 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .zip(r_vec.par_iter())
         .map(|(bi, ri)| mul!(bi.into_projective(), ri.into_repr()).into_affine())
         .collect::<Vec<_>>();
+    let refb_r = &b_r;
     // w^{r^{-1}}
     let wkey_r_inv = srs.wkey.scale(&r_inv);
 
     // we prove tipp and mipp using the same recursive loop
     let proof = prove_tipp_mipp::<E>(&srs, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
-    let ip_ab = inner_product::pairing::<E>(&a, &b_r);
-    let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, &r_vec);
+    par! {
+        let ip_ab = inner_product::pairing::<E>(&refa, &refb_r),
+        let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&refc, &r_vec)
+    };
 
-    // TODO - move assertion to a test - this is a property of the scheme
-    let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r);
-    assert_eq!(com_ab, computed_com_ab);
+    debug_assert!({
+        let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r);
+        com_ab == computed_com_ab
+    });
 
     Ok(AggregateProof {
         com_ab,
@@ -106,7 +119,7 @@ fn prove_tipp_mipp<E: Engine>(
 
     // KZG challenge point
     let z = oracle!(
-        &challenges.first().unwrap(),
+        &challenges[0],
         &proof.final_vkey.0,
         &proof.final_vkey.1,
         &proof.final_wkey.0,
@@ -180,8 +193,6 @@ fn gipa_tipp_mipp<E: Engine>(
         // r[:n']   r[:n']
         let (r_left, r_right) = m_r.split_at_mut(split);
 
-        // TODO: make that mutable split to avoid copying - may require to
-        // not use struct...  for the moment i prefer readability
         let (vk_left, vk_right) = vkey.split(split);
         let (wk_left, wk_right) = wkey.split(split);
 
@@ -257,9 +268,9 @@ fn gipa_tipp_mipp<E: Engine>(
         m_r.resize(len, E::Fr::zero()); // shrink to new size
 
         // v_left + v_right^x^-1
-        vkey = VKey::<E>::compress(&vk_left, &vk_right, &c_inv);
+        vkey = vk_left.compress(&vk_right, &c_inv);
         // w_left + w_right^x
-        wkey = WKey::<E>::compress(&wk_left, &wk_right, &c);
+        wkey = wk_left.compress(&wk_right, &c);
 
         comms_ab.push((tab_l, tab_r));
         comms_c.push((tuc_l, tuc_r));
@@ -404,7 +415,6 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
     let mut power_2_r = *r_shift;
 
     for x in transcript.iter() {
-        //for j in 0..(2_usize).pow(i as u32) {
         let n = coefficients.len();
         for j in 0..n {
             let coeff = mul!(coefficients[j], &mul!(*x, &power_2_r));

@@ -33,6 +33,9 @@ fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     powers
 }
 
+/// compress is similar to commit::{V,W}KEY::compress: it modifies the `vec`
+/// vector by setting the value at index $i:0 -> split$  $vec[i] = vec[i] +
+/// vec[i+split]^scaler$. The `vec` vector is half of its size after this call.
 fn compress<C: CurveAffine>(vec: &mut Vec<C>, split: usize, scaler: &C::Scalar) {
     let (left, right) = vec.split_at_mut(split);
     left.par_iter_mut()

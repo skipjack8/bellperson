@@ -2,6 +2,7 @@ use crossbeam_channel::bounded;
 use digest::Digest;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
+use log::debug;
 use log::*;
 use rayon::prelude::*;
 use sha2::Sha256;
@@ -18,7 +19,9 @@ use crate::groth16::{
 };
 use crate::SynthesisError;
 
+use std::default::Default;
 use std::time::Instant;
+
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
     ip_verifier_srs: &VerifierSRS<E>,
     pvk: &PreparedVerifyingKey<E>,
@@ -56,7 +59,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 proof,
                 &r, // we give the extra r as it's not part of the proof itself - it is simply used on top for the groth16 aggregation
             );
-            println!("TIPP took {} ms", now.elapsed().as_millis());
+            debug!("TIPP took {} ms", now.elapsed().as_millis());
             tipa_ab.send(tuple).unwrap();
         });
 
@@ -96,7 +99,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 .send(structured_scalar_power(public_inputs.len(), &r))
                 .unwrap();
             let elapsed = now.elapsed().as_millis();
-            println!("generation of r vector: {}ms", elapsed);
+            debug!("generation of r vector: {}ms", elapsed);
         });
 
         // 5. compute the middle part of the final pairing equation, the one
@@ -143,7 +146,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 &pvk.gamma_g2,
             )]));
             let elapsed = now.elapsed().as_millis();
-            println!("table generation: {}ms", elapsed);
+            debug!("table generation: {}ms", elapsed);
 
             send_tuple.send(tuple).unwrap();
         });
@@ -177,7 +180,7 @@ fn verify_tipp_mipp<E: Engine>(
     let now = Instant::now();
     // (T,U), Z for TIPP and MIPP  and all challenges
     let (final_res, mut challenges, mut challenges_inv) = gipa_verify_tipp_mipp(&proof);
-    println!(
+    debug!(
         "TIPP verify: gipa verify tipp {}ms",
         now.elapsed().as_millis()
     );
@@ -256,7 +259,7 @@ fn verify_tipp_mipp<E: Engine>(
         let check_u = make_tuple(final_c,&fvkey.1,final_uc)
     };
 
-    println!(
+    debug!(
         "TIPP verify: parallel checks before merge: {}ms",
         now.elapsed().as_millis(),
     );
@@ -277,7 +280,7 @@ fn verify_tipp_mipp<E: Engine>(
     acc.merge(&check_t);
     acc.merge(&check_u);
     acc.merge(&wtuple);
-    println!("TIPP verify: final merge {}ms", now.elapsed().as_millis());
+    debug!("TIPP verify: final merge {}ms", now.elapsed().as_millis());
     acc
 }
 
@@ -344,7 +347,7 @@ fn gipa_verify_tipp_mipp<E: Engine>(
         challenges_inv.push(c_inv);
     }
 
-    println!(
+    debug!(
         "TIPP verify: gipa challenge gen took {}ms",
         now.elapsed().as_millis()
     );
@@ -413,7 +416,7 @@ fn gipa_verify_tipp_mipp<E: Engine>(
                 Op::ZC(zc_r, c_inv_repr),
             ]
         })
-        .fold(GipaTUZ::<E>::empty, |mut res, op: Op<E>| {
+        .fold(GipaTUZ::<E>::default, |mut res, op: Op<E>| {
             match op {
                 Op::TAB(tx, c) => {
                     let tx: E::Fqk = tx.pow(c);
@@ -443,13 +446,13 @@ fn gipa_verify_tipp_mipp<E: Engine>(
             }
             res
         })
-        .reduce(GipaTUZ::empty, |mut acc_res, res| {
+        .reduce(GipaTUZ::default, |mut acc_res, res| {
             acc_res.merge(&res);
             acc_res
         });
 
     final_res.merge(&res);
-    println!(
+    debug!(
         "TIPP verify: gipa prep and accumulate took {}ms",
         now.elapsed().as_millis()
     );
@@ -605,11 +608,11 @@ struct GipaTUZ<E: Engine> {
     pub zc: E::G1,
 }
 
-impl<E> GipaTUZ<E>
+impl<E> Default for GipaTUZ<E>
 where
     E: Engine,
 {
-    fn empty() -> Self {
+    fn default() -> Self {
         Self {
             tab: E::Fqk::one(),
             uab: E::Fqk::one(),
@@ -619,6 +622,12 @@ where
             zc: E::G1::zero(),
         }
     }
+}
+
+impl<E> GipaTUZ<E>
+where
+    E: Engine,
+{
     fn merge(&mut self, other: &Self) {
         self.tab.mul_assign(&other.tab);
         self.uab.mul_assign(&other.uab);

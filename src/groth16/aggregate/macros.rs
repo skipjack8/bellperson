@@ -1,3 +1,7 @@
+/// returns an Fr element derived from sha256 hash of all elements that gets
+/// passed to the macro. It runs in a loop in case the Fr element doesn't have
+/// an inverse and prepends a monotically increasing counter before
+/// each hash input.
 macro_rules! oracle {
     // https://fromherotozero.dev/blog/introduction-to-rust-macros/
     ( $( $x:expr), * ) => { {

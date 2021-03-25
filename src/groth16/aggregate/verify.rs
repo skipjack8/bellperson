@@ -64,6 +64,9 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         });
 
         // Check aggregate pairing product equation
+        // SUM of a geometric progression
+        // SUM a^i = (1 - a^n) / (1 - a) = -(1-a^n)/-(1-a)
+        // = (a^n - 1) / (a - 1)
         info!("checking aggregate pairing");
         let mut r_sum = r.pow(&[public_inputs.len() as u64]);
         r_sum.sub_assign(&E::Fr::one());

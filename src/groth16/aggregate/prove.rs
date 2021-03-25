@@ -69,7 +69,9 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     // we prove tipp and mipp using the same recursive loop
     let proof = prove_tipp_mipp::<E>(&srs, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
     par! {
+        // compute A * B^r for the verifier
         let ip_ab = inner_product::pairing::<E>(&refa, &refb_r),
+        // compute C^r for the verifier
         let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&refc, &r_vec)
     };
 

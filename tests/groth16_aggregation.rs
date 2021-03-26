@@ -348,9 +348,23 @@ fn test_groth16_bench() {
             let batch_verifier_time = start.elapsed().as_millis();
 
             println!("\t-Batch all-in verification...");
+            let proofs_serialized: Vec<Vec<_>> = proofs
+                .iter()
+                .take(i)
+                .map(|p| {
+                    let mut buff = Vec::new();
+                    p.write(&mut buff).unwrap();
+                    buff
+                })
+                .collect::<Vec<Vec<_>>>();
             let start = Instant::now();
-            let proofs: Vec<_> = proofs.iter().take(i).collect();
-            assert!(verify_proofs_batch(&pvk, &mut rng, &proofs, &statements[..i]).unwrap());
+            let proofs: Vec<_> = proofs_serialized
+                .into_iter()
+                .map(|buff| Proof::<Bls12>::read(std::io::Cursor::new(&buff)).unwrap())
+                .collect::<Vec<_>>();
+            let proofs_ref: Vec<_> = proofs.iter().collect();
+
+            assert!(verify_proofs_batch(&pvk, &mut rng, &proofs_ref, &statements[..i]).unwrap());
             let batch_all_time = start.elapsed().as_millis();
             let agg_size = buffer.len();
             records.push(Record {

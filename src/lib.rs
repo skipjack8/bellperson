@@ -356,6 +356,11 @@ pub enum SynthesisError {
     IncompatibleLengthVector(String),
     #[error("invalid pairing")]
     InvalidPairing,
+    /// During GPU kernel management
+    #[error("Scheduler error: {0}")]
+    Scheduler(#[from] scheduler_client::Error),
+    #[error("encountered an error: {0}")]
+    Other(String),
 }
 
 /// Represents a constraint system which can have new variables

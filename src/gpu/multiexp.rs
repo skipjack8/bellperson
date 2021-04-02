@@ -1,5 +1,4 @@
 use super::error::{GPUError, GPUResult};
-use super::locks;
 use super::sources;
 use super::utils;
 use crate::bls::Engine;
@@ -12,6 +11,8 @@ use rayon::prelude::*;
 use rust_gpu_tools::*;
 use std::any::TypeId;
 use std::sync::Arc;
+
+use scheduler_client::{ResourceAlloc, ResourceMemory, ResourceType};
 
 const MAX_WINDOW_SIZE: usize = 10;
 const LOCAL_WORK_SIZE: usize = 256;
@@ -42,7 +43,6 @@ where
     core_count: usize,
     n: usize,
 
-    priority: bool,
     _phantom: std::marker::PhantomData<E::Fr>,
 }
 
@@ -101,12 +101,16 @@ impl<E> SingleMultiexpKernel<E>
 where
     E: Engine,
 {
-    pub fn create(d: opencl::Device, priority: bool) -> GPUResult<SingleMultiexpKernel<E>> {
+    pub fn create(d: opencl::Device, memory: Option<u64>) -> GPUResult<SingleMultiexpKernel<E>> {
         let src = sources::kernel::<E>(d.brand() == opencl::Brand::Nvidia);
 
         let exp_bits = exp_size::<E>() * 8;
         let core_count = utils::get_core_count(&d);
-        let mem = d.memory();
+        let mem = if let Some(mem) = memory {
+            mem
+        } else {
+            d.memory()
+        };
         let max_n = calc_chunk_size::<E>(mem, core_count);
         let best_n = calc_best_chunk_size(MAX_WINDOW_SIZE, core_count, exp_bits);
         let n = std::cmp::min(max_n, best_n);
@@ -115,7 +119,6 @@ where
             program: opencl::Program::from_opencl(d, &src)?,
             core_count,
             n,
-            priority,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -129,10 +132,6 @@ where
     where
         G: CurveAffine,
     {
-        if locks::PriorityLock::should_break(self.priority) {
-            return Err(GPUError::GPUTaken);
-        }
-
         let exp_bits = exp_size::<E>() * 8;
         let window_size = calc_window_size(n as usize, exp_bits, self.core_count);
         let num_windows = ((exp_bits as f64) / (window_size as f64)).ceil() as usize;
@@ -213,32 +212,55 @@ where
     E: Engine,
 {
     kernels: Vec<SingleMultiexpKernel<E>>,
-    _lock: locks::GPULock, // RFC 1857: struct fields are dropped in the same order as they are declared.
 }
 
 impl<E> MultiexpKernel<E>
 where
     E: Engine,
 {
-    pub fn create(priority: bool) -> GPUResult<MultiexpKernel<E>> {
-        let lock = locks::GPULock::lock();
+    pub fn create(alloc: Option<&ResourceAlloc>) -> GPUResult<MultiexpKernel<E>> {
+        let kernels = if let Some(alloc) = alloc {
+            if alloc.devices.is_empty() {
+                return Err(GPUError::Simple("No working GPUs found!"));
+            }
+            let mem = match alloc.requirement.resource {
+                ResourceType::Gpu(ResourceMemory::Mem(m)) => Some(m),
+                _ => None,
+            };
 
-        let devices = opencl::Device::all();
-
-        let kernels: Vec<_> = devices
-            .into_iter()
-            .map(|d| (d, SingleMultiexpKernel::<E>::create(d.clone(), priority)))
-            .filter_map(|(device, res)| {
-                if let Err(ref e) = res {
-                    error!(
-                        "Cannot initialize kernel for device '{}'! Error: {}",
-                        device.name(),
-                        e
-                    );
-                }
-                res.ok()
-            })
-            .collect();
+            alloc
+                .devices
+                .iter()
+                .filter_map(|id| opencl::GPUSelector::Uuid(*id).get_device())
+                .map(|d| (d.clone(), SingleMultiexpKernel::<E>::create(d.clone(), mem)))
+                .filter_map(|(device, res)| {
+                    if let Err(ref e) = res {
+                        error!(
+                            "Cannot initialize kernel for device '{}'! Error: {}",
+                            device.name(),
+                            e
+                        );
+                    }
+                    res.ok()
+                })
+                .collect::<Vec<_>>()
+        } else {
+            let devices = opencl::Device::all();
+            devices
+                .into_iter()
+                .map(|d| (d, SingleMultiexpKernel::<E>::create(d.clone(), None)))
+                .filter_map(|(device, res)| {
+                    if let Err(ref e) = res {
+                        error!(
+                            "Cannot initialize kernel for device '{}'! Error: {}",
+                            device.name(),
+                            e
+                        );
+                    }
+                    res.ok()
+                })
+                .collect::<Vec<_>>()
+        };
 
         if kernels.is_empty() {
             return Err(GPUError::Simple("No working GPUs found!"));
@@ -256,10 +278,7 @@ where
                 k.n
             );
         }
-        Ok(MultiexpKernel::<E> {
-            kernels,
-            _lock: lock,
-        })
+        Ok(MultiexpKernel::<E> { kernels })
     }
 
     pub fn multiexp<G>(

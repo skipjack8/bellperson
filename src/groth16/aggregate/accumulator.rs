@@ -1,6 +1,6 @@
 use crate::bls::Engine;
 use ff::{Field, PrimeField};
-use groupy::CurveAffine;
+use groupy::{CurveAffine, CurveProjective};
 use paired::PairingCurveAffine;
 use rand::thread_rng;
 
@@ -31,6 +31,12 @@ where
         Self(result, E::Fqk::one())
     }
 
+    /// returns a pairing tuple that is scaled by a random element. Specifically
+    /// we have e(A,B)e(C,D)... = out <=> e(g,h)^{ab + cd} = out
+    /// We rescale using a random element $r$ to give
+    /// e(rA,B)e(rC,D) ... = out^r <=>
+    /// e(A,B)^r e(C,D)^r = out^r <=> e(g,h)^{abr + cdr} = out^r
+    /// (e(g,h)^{ab + cd})^r = out^r
     pub fn from_miller_inputs<'a, I>(it: I, out: &'a E::Fqk) -> PairingTuple<E>
     where
         I: IntoIterator<
@@ -45,9 +51,8 @@ where
         let (g1scaled, g2): (Vec<_>, Vec<_>) = it
             .into_iter()
             .map(|&(a, b)| {
-                let na = a.clone();
-                na.mul(coeff);
-                (a.prepare(), b)
+                let na = a.mul(coeff).into_affine();
+                (na.prepare(), b)
             })
             .unzip();
         let pairs = g1scaled
@@ -55,8 +60,6 @@ where
             .zip(g2.iter())
             .map(|(ar, &b)| (ar, b))
             .collect::<Vec<_>>();
-        //let pairs_ref: Vec<_> = pairs.into_iter().map(|(a, b)| (a, b)).collect();
-        //let miller_out = E::miller_loop(pairs_ref.iter());
         let miller_out = E::miller_loop(pairs.iter());
         let mut outt = out.clone();
         if out != &E::Fqk::one() {
@@ -76,5 +79,28 @@ where
 
     pub fn verify(&self) -> bool {
         E::final_exponentiation(&self.0).unwrap() == self.1
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::bls::{Bls12, Fr, G1Projective, G2Projective};
+    use crate::groth16::aggregate::structured_generators_scalar_power;
+    use ff::Field;
+    use groupy::CurveProjective;
+    use rand_core::SeedableRng;
+
+    #[test]
+    fn test_pairing_randomize() {
+        let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+        let g1r = G1Projective::random(&mut rng);
+        let g2r = G2Projective::random(&mut rng);
+        let exp = Bls12::pairing(g1r.clone(), g2r.clone());
+        let tuple = PairingTuple::<Bls12>::from_miller_inputs(
+            &[(&g1r.into_affine(), &g2r.into_affine().prepare())],
+            &exp,
+        );
+        assert!(tuple.verify());
     }
 }

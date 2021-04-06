@@ -59,7 +59,11 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 proof,
                 &r, // we give the extra r as it's not part of the proof itself - it is simply used on top for the groth16 aggregation
             );
-            debug!("TIPP took {} ms", now.elapsed().as_millis());
+            print!(
+                "TIPP took {} ms -> verified {}",
+                now.elapsed().as_millis(),
+                tuple.verify()
+            );
             tipa_ab.send(tuple).unwrap();
         });
 
@@ -78,10 +82,10 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         s.spawn(move |_| {
             let mut alpha_g1_r_sum = pvk.alpha_g1;
             alpha_g1_r_sum.mul_assign(r_sum);
-            let tuple = PairingTuple::<E>::from_miller_inputs(
-                &[(&alpha_g1_r_sum.into_affine(), &pvk.beta_g2)],
-                &E::Fqk::one(),
-            );
+            let tuple = PairingTuple::<E>::from_miller_one(E::miller_loop(&[(
+                &alpha_g1_r_sum.into_affine().prepare(),
+                &pvk.beta_g2,
+            )]));
 
             p1.send(tuple).unwrap();
         });
@@ -89,15 +93,12 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         // 4. Compute right part of the final pairing equation
         let p3 = send_tuple.clone();
         s.spawn(move |_| {
-            let tuple = PairingTuple::from_miller_inputs(
-                &[(
-                    // e(c^r vector form, h^delta)
-                    // let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec)
-                    &proof.agg_c.into_affine(),
-                    &pvk.delta_g2,
-                )],
-                &E::Fqk::one(),
-            );
+            let tuple = PairingTuple::from_miller_one(E::miller_loop(&[(
+                // e(c^r vector form, h^delta)
+                // let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec)
+                &proof.agg_c.into_affine().prepare(),
+                &pvk.delta_g2,
+            )]));
             p3.send(tuple).unwrap();
         });
 
@@ -150,10 +151,10 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
 
             g_ic.add_assign(&totsi);
 
-            let tuple = PairingTuple::from_miller_inputs(
-                &[(&g_ic.into_affine(), &pvk.gamma_g2)],
-                &E::Fqk::one(),
-            );
+            let tuple = PairingTuple::from_miller_one(E::miller_loop(&[(
+                &g_ic.into_affine().prepare(),
+                &pvk.gamma_g2,
+            )]));
             let elapsed = now.elapsed().as_millis();
             debug!("table generation: {}ms", elapsed);
 

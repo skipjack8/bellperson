@@ -42,15 +42,20 @@ where
     {
         let mut rng = thread_rng();
         let coeff = E::Fr::random(&mut rng);
-        let pairs = it
+        let (g1scaled, g2): (Vec<_>, Vec<_>) = it
             .into_iter()
-            .map(|(a, b)| {
+            .map(|&(a, b)| {
                 let na = a.clone();
                 na.mul(coeff);
-                (&a.prepare(), b)
+                (a.prepare(), b)
             })
+            .unzip();
+        let pairs = g1scaled
+            .iter()
+            .zip(g2.iter())
+            .map(|(ar, &b)| (ar, b))
             .collect::<Vec<_>>();
-        //let pairs_ref: Vec<_> = pairs.into_iter().map(|(a, b)| (&a, b)).collect();
+        //let pairs_ref: Vec<_> = pairs.into_iter().map(|(a, b)| (a, b)).collect();
         //let miller_out = E::miller_loop(pairs_ref.iter());
         let miller_out = E::miller_loop(pairs.iter());
         let mut outt = out.clone();

@@ -252,7 +252,7 @@ fn verify_tipp_mipp<E: Engine>(
         let check_ab0 = PairingTuple::<E>::from_miller_inputs(&[(final_a, &fvkey.0.prepare()),(&fwkey.0, &final_b.prepare())], final_tab),
 
         //  final_aB.1 = U = e(A,v2)e(w2,B)
-        let check_ab1 = PairingTuple::<E>::from_miller_inputs(&[(final_a, &fvkey.1),(&fwkey.1, &final_b.prepare())], final_uab),
+        let check_ab1 = PairingTuple::<E>::from_miller_inputs(&[(final_a, &fvkey.1.prepare()),(&fwkey.1, &final_b.prepare())], final_uab),
 
         // MIPP
         // Verify base inner product commitment

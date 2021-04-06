@@ -50,7 +50,7 @@ where
                 (a.prepare(), b)
             })
             .collect::<Vec<_>>();
-        let pairs_ref: Vec<_> = pairs.iter().map(|(a, b)| (a, b)).collect();
+        let pairs_ref: Vec<_> = pairs.iter().map(|(&a, &b)| (&a, b)).collect();
         let miller_out = E::miller_loop(pairs_ref.iter());
         let mut outt = out.clone();
         if out != &E::Fqk::one() {

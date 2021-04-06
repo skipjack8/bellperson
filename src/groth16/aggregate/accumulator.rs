@@ -47,12 +47,12 @@ where
             .map(|(a, b)| {
                 let na = a.clone();
                 na.mul(coeff);
-                (a.prepare(), b)
+                (&a.prepare(), b)
             })
             .collect::<Vec<_>>();
-        let pairs_ref: Vec<_> = pairs.into_iter().map(|(a, b)| (&a, b)).collect();
-        let miller_out = E::miller_loop(pairs_ref.iter());
-        //let miller_out = E::miller_loop(pairs.iter());
+        //let pairs_ref: Vec<_> = pairs.into_iter().map(|(a, b)| (&a, b)).collect();
+        //let miller_out = E::miller_loop(pairs_ref.iter());
+        let miller_out = E::miller_loop(pairs.iter());
         let mut outt = out.clone();
         if out != &E::Fqk::one() {
             outt = outt.pow(&coeff.into_repr());

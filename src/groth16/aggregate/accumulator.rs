@@ -1,5 +1,7 @@
 use crate::bls::Engine;
-use ff::Field;
+use ff::{Field, PrimeField};
+use rand::thread_rng;
+use rand::Rng;
 
 /// PairingTuple is an alias to a pair of
 /// - a miller loop result that is to be multiplied by other miller loop results
@@ -29,7 +31,13 @@ where
         Self(miller, exp)
     }
 
+    /// takes another pairing tuple and combine both sides together as a random
+    /// linear combination.
     pub fn merge(&mut self, p2: &PairingTuple<E>) {
+        let mut rng = thread_rng();
+        let coeff = E::Fr::random(&mut rng);
+        p2.0.pow(&coeff.into_repr());
+        p2.1.pow(&coeff.into_repr());
         // multiply miller loop results together
         self.0.mul_assign(&p2.0);
         // multiply  right side in GT together

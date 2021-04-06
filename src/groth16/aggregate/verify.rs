@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use sha2::Sha256;
 
 use super::{
-    accumulator::PairingTuple, inner_product,
+    accumulator::PairingCheck, inner_product,
     prove::polynomial_evaluation_product_form_from_transcript, structured_scalar_power,
     AggregateProof, KZGOpening, VerifierSRS,
 };
@@ -59,11 +59,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
                 proof,
                 &r, // we give the extra r as it's not part of the proof itself - it is simply used on top for the groth16 aggregation
             );
-            print!(
-                "TIPP took {} ms -> verified {}",
-                now.elapsed().as_millis(),
-                tuple.verify()
-            );
+            debug!("TIPP took {} ms", now.elapsed().as_millis(),);
             tipa_ab.send(tuple).unwrap();
         });
 
@@ -78,11 +74,15 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         r_sum.mul_assign(&b);
 
         // 3. Compute left part of the final pairing equation
+        //
+        // NOTE From this point on, we are only checking *one* pairing check so
+        // we don't need to randomize as all other checks are being randomized
+        // already so this is the "base check" so to speak.
         let p1 = send_tuple.clone();
         s.spawn(move |_| {
             let mut alpha_g1_r_sum = pvk.alpha_g1;
             alpha_g1_r_sum.mul_assign(r_sum);
-            let tuple = PairingTuple::<E>::from_miller_one(E::miller_loop(&[(
+            let tuple = PairingCheck::<E>::from_miller_one(E::miller_loop(&[(
                 &alpha_g1_r_sum.into_affine().prepare(),
                 &pvk.beta_g2,
             )]));
@@ -93,7 +93,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         // 4. Compute right part of the final pairing equation
         let p3 = send_tuple.clone();
         s.spawn(move |_| {
-            let tuple = PairingTuple::from_miller_one(E::miller_loop(&[(
+            let tuple = PairingCheck::from_miller_one(E::miller_loop(&[(
                 // e(c^r vector form, h^delta)
                 // let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec)
                 &proof.agg_c.into_affine().prepare(),
@@ -151,7 +151,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
 
             g_ic.add_assign(&totsi);
 
-            let tuple = PairingTuple::from_miller_one(E::miller_loop(&[(
+            let tuple = PairingCheck::from_miller_one(E::miller_loop(&[(
                 &g_ic.into_affine().prepare(),
                 &pvk.gamma_g2,
             )]));
@@ -164,7 +164,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         s.spawn(move |_| {
             // final value ip_ab is what we want to compare in the groth16
             // aggregated equation A * B
-            let mut acc = PairingTuple::from_pair(E::Fqk::one(), proof.ip_ab.clone());
+            let mut acc = PairingCheck::from_pair(E::Fqk::one(), proof.ip_ab.clone());
             while let Ok(tuple) = rcv_tuple.recv() {
                 acc.merge(&tuple);
             }
@@ -185,7 +185,7 @@ fn verify_tipp_mipp<E: Engine>(
     v_srs: &VerifierSRS<E>,
     proof: &AggregateProof<E>,
     r_shift: &E::Fr,
-) -> PairingTuple<E> {
+) -> PairingCheck<E> {
     info!("verify with srs shift");
     let now = Instant::now();
     // (T,U), Z for TIPP and MIPP  and all challenges
@@ -248,12 +248,12 @@ fn verify_tipp_mipp<E: Engine>(
         //
         // TIPP
         // z = e(A,B)
-        let check_z = PairingTuple::<E>::from_miller_inputs(&[(final_a, &final_b.prepare())], final_zab),
+        let check_z = PairingCheck::<E>::from_miller_inputs(&[(final_a, &final_b.prepare())], final_zab),
         //  final_aB.0 = T = e(A,v1)e(w1,B)
-        let check_ab0 = PairingTuple::<E>::from_miller_inputs(&[(final_a, &fvkey.0.prepare()),(&fwkey.0, &final_b.prepare())], final_tab),
+        let check_ab0 = PairingCheck::<E>::from_miller_inputs(&[(final_a, &fvkey.0.prepare()),(&fwkey.0, &final_b.prepare())], final_tab),
 
         //  final_aB.1 = U = e(A,v2)e(w2,B)
-        let check_ab1 = PairingTuple::<E>::from_miller_inputs(&[(final_a, &fvkey.1.prepare()),(&fwkey.1, &final_b.prepare())], final_uab),
+        let check_ab1 = PairingCheck::<E>::from_miller_inputs(&[(final_a, &fvkey.1.prepare()),(&fwkey.1, &final_b.prepare())], final_uab),
 
         // MIPP
         // Verify base inner product commitment
@@ -263,9 +263,9 @@ fn verify_tipp_mipp<E: Engine>(
             &[final_r.clone()]),
         // Check commiment correctness
         // T = e(C,v1)
-        let check_t = PairingTuple::<E>::from_miller_inputs(&[(final_c,&fvkey.0.prepare())],final_tc),
+        let check_t = PairingCheck::<E>::from_miller_inputs(&[(final_c,&fvkey.0.prepare())],final_tc),
         // U = e(A,v2)
-        let check_u = PairingTuple::<E>::from_miller_inputs(&[(final_c,&fvkey.1.prepare())],final_uc)
+        let check_u = PairingCheck::<E>::from_miller_inputs(&[(final_c,&fvkey.1.prepare())],final_uc)
     };
 
     debug!(
@@ -277,7 +277,7 @@ fn verify_tipp_mipp<E: Engine>(
     // only check that doesn't require pairing so we can give a tuple that will
     // render the equation wrong in case it's false
     if !b {
-        return PairingTuple::new_invalid();
+        return PairingCheck::new_invalid();
     }
     let now = Instant::now();
     let mut acc = vtuple;
@@ -476,7 +476,7 @@ pub fn verify_kzg_opening_g2<E: Engine>(
     challenges: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
-) -> PairingTuple<E> {
+) -> PairingCheck<E> {
     // f_v(z)
     let vpoly_eval_z =
         polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
@@ -531,7 +531,7 @@ pub fn verify_kzg_opening_g2<E: Engine>(
 
     // this pair should be one when multiplied
     let (l, r) = rayon::join(|| mul!(q1, &q2), || mul!(p1, &p2));
-    PairingTuple::from_miller_one(mul!(l, &r))
+    PairingCheck::from_miller_one(mul!(l, &r))
 }
 
 /// Similar to verify_kzg_opening_g2 but for g1.
@@ -542,7 +542,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
     challenges: &[E::Fr],
     r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
-) -> PairingTuple<E> {
+) -> PairingCheck<E> {
     let wkey_poly_eval =
         polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
 
@@ -593,7 +593,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
         )])
     };
     let (l, r) = rayon::join(|| mul!(q1, &q2), || mul!(p1, &p2));
-    PairingTuple::from_miller_one(mul!(l, &r))
+    PairingCheck::from_miller_one(mul!(l, &r))
 }
 
 /// Keeps track of the variables that have been sent by the prover and must

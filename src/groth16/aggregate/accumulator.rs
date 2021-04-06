@@ -4,30 +4,30 @@ use groupy::{CurveAffine, CurveProjective};
 use paired::PairingCurveAffine;
 use rand::thread_rng;
 
-/// PairingTuple is an alias to a pair of
+/// PairingCheck is an alias to a pair of
 /// - a miller loop result that is to be multiplied by other miller loop results
 /// before going into a final exponentiation result
 /// - a right side result which is already in the right subgroup Gt which is to
 /// be compared to the left side when "final_exponentiatiat"-ed
-pub struct PairingTuple<E: Engine>(E::Fqk, E::Fqk);
+pub struct PairingCheck<E: Engine>(E::Fqk, E::Fqk);
 
-impl<E> PairingTuple<E>
+impl<E> PairingCheck<E>
 where
     E: Engine,
 {
-    pub fn new() -> PairingTuple<E> {
+    pub fn new() -> PairingCheck<E> {
         Self(E::Fqk::one(), E::Fqk::one())
     }
 
-    pub fn new_invalid() -> PairingTuple<E> {
+    pub fn new_invalid() -> PairingCheck<E> {
         Self(E::Fqk::one(), E::Fqk::zero())
     }
 
-    pub fn from_pair(result: E::Fqk, exp: E::Fqk) -> PairingTuple<E> {
+    pub fn from_pair(result: E::Fqk, exp: E::Fqk) -> PairingCheck<E> {
         Self(result, exp)
     }
 
-    pub fn from_miller_one(result: E::Fqk) -> PairingTuple<E> {
+    pub fn from_miller_one(result: E::Fqk) -> PairingCheck<E> {
         Self(result, E::Fqk::one())
     }
 
@@ -37,7 +37,12 @@ where
     /// e(rA,B)e(rC,D) ... = out^r <=>
     /// e(A,B)^r e(C,D)^r = out^r <=> e(g,h)^{abr + cdr} = out^r
     /// (e(g,h)^{ab + cd})^r = out^r
-    pub fn from_miller_inputs<'a, I>(it: I, out: &'a E::Fqk) -> PairingTuple<E>
+    ///
+    /// The reason why the second element from the tuples is "Prepared" is
+    /// because our Groth16 verifying keys are loaded as "prepared" already.
+    /// Since there is no way to "unprepare", and multiplication by the random
+    /// element is cheaper on G1 anyway, we are forced to accept this status.
+    pub fn from_miller_inputs<'a, I>(it: I, out: &'a E::Fqk) -> PairingCheck<E>
     where
         I: IntoIterator<
             Item = &'a (
@@ -65,12 +70,12 @@ where
         if out != &E::Fqk::one() {
             outt = outt.pow(&coeff.into_repr());
         }
-        PairingTuple(miller_out, outt)
+        PairingCheck(miller_out, outt)
     }
 
     /// takes another pairing tuple and combine both sides together as a random
     /// linear combination.
-    pub fn merge(&mut self, p2: &PairingTuple<E>) {
+    pub fn merge(&mut self, p2: &PairingCheck<E>) {
         // multiply miller loop results together
         self.0.mul_assign(&p2.0);
         // multiply  right side in GT together
@@ -85,9 +90,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::bls::{Bls12, Fr, G1Projective, G2Projective};
-    use crate::groth16::aggregate::structured_generators_scalar_power;
-    use ff::Field;
+    use crate::bls::{Bls12, G1Projective, G2Projective};
     use groupy::CurveProjective;
     use rand_core::SeedableRng;
 
@@ -97,7 +100,7 @@ mod test {
         let g1r = G1Projective::random(&mut rng);
         let g2r = G2Projective::random(&mut rng);
         let exp = Bls12::pairing(g1r.clone(), g2r.clone());
-        let tuple = PairingTuple::<Bls12>::from_miller_inputs(
+        let tuple = PairingCheck::<Bls12>::from_miller_inputs(
             &[(&g1r.into_affine(), &g2r.into_affine().prepare())],
             &exp,
         );

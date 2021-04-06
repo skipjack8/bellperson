@@ -1,7 +1,6 @@
 use crate::bls::Engine;
 use ff::{Field, PrimeField};
 use rand::thread_rng;
-use rand::Rng;
 
 /// PairingTuple is an alias to a pair of
 /// - a miller loop result that is to be multiplied by other miller loop results

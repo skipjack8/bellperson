@@ -78,20 +78,26 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
         s.spawn(move |_| {
             let mut alpha_g1_r_sum = pvk.alpha_g1;
             alpha_g1_r_sum.mul_assign(r_sum);
-            let tuple = E::miller_loop(&[(&alpha_g1_r_sum.into_affine().prepare(), &pvk.beta_g2)]);
+            let tuple = PairingTuple::<E>::from_miller_inputs(
+                &[(&alpha_g1_r_sum.into_affine(), &pvk.beta_g2)],
+                &E::Fqk::one(),
+            );
 
-            p1.send(PairingTuple::from_miller(tuple)).unwrap();
+            p1.send(tuple).unwrap();
         });
 
         // 4. Compute right part of the final pairing equation
         let p3 = send_tuple.clone();
         s.spawn(move |_| {
-            let tuple = PairingTuple::from_miller(E::miller_loop(&[(
-                // e(c^r vector form, h^delta)
-                // let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec)
-                &proof.agg_c.into_affine().prepare(),
-                &pvk.delta_g2,
-            )]));
+            let tuple = PairingTuple::from_miller_inputs(
+                &[(
+                    // e(c^r vector form, h^delta)
+                    // let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&c, r_vec)
+                    &proof.agg_c.into_affine(),
+                    &pvk.delta_g2,
+                )],
+                &E::Fqk::one(),
+            );
             p3.send(tuple).unwrap();
         });
 
@@ -144,10 +150,10 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug>(
 
             g_ic.add_assign(&totsi);
 
-            let tuple = PairingTuple::from_miller(E::miller_loop(&[(
-                &g_ic.into_affine().prepare(),
-                &pvk.gamma_g2,
-            )]));
+            let tuple = PairingTuple::from_miller_inputs(
+                &[(&g_ic.into_affine(), &pvk.gamma_g2)],
+                &E::Fqk::one(),
+            );
             let elapsed = now.elapsed().as_millis();
             debug!("table generation: {}ms", elapsed);
 
@@ -241,13 +247,12 @@ fn verify_tipp_mipp<E: Engine>(
         //
         // TIPP
         // z = e(A,B)
-        let check_z = make_tuple(final_a, final_b, final_zab),
+        let check_z = PairingTuple::<E>::from_miller_inputs(&[(final_a, &final_b.prepare())], final_zab),
         //  final_aB.0 = T = e(A,v1)e(w1,B)
-        let check_ab11 = make_tuple(final_a, &fvkey.0, &E::Fqk::one()),
-        let check_ab12 = make_tuple(&fwkey.0, final_b, final_tab),
-        let check_ab21 = make_tuple(final_a, &fvkey.1, &E::Fqk::one()),
-        let check_ab22 = make_tuple(&fwkey.1, final_b,
-            final_uab),
+        let check_ab0 = PairingTuple::<E>::from_miller_inputs(&[(final_a, &fvkey.0.prepare()),(&fwkey.0, &final_b.prepare())], final_tab),
+
+        //  final_aB.1 = U = e(A,v2)e(w2,B)
+        let check_ab1 = PairingTuple::<E>::from_miller_inputs(&[(final_a, &fvkey.1),(&fwkey.1, &final_b.prepare())], final_uab),
 
         // MIPP
         // Verify base inner product commitment
@@ -257,9 +262,9 @@ fn verify_tipp_mipp<E: Engine>(
             &[final_r.clone()]),
         // Check commiment correctness
         // T = e(C,v1)
-        let check_t = make_tuple(final_c,&fvkey.0,final_tc),
+        let check_t = PairingTuple::<E>::from_miller_inputs(&[(final_c,&fvkey.0.prepare())],final_tc),
         // U = e(A,v2)
-        let check_u = make_tuple(final_c,&fvkey.1,final_uc)
+        let check_u = PairingTuple::<E>::from_miller_inputs(&[(final_c,&fvkey.1.prepare())],final_uc)
     };
 
     debug!(
@@ -276,10 +281,8 @@ fn verify_tipp_mipp<E: Engine>(
     let now = Instant::now();
     let mut acc = vtuple;
     acc.merge(&check_z);
-    acc.merge(&check_ab11);
-    acc.merge(&check_ab12);
-    acc.merge(&check_ab21);
-    acc.merge(&check_ab22);
+    acc.merge(&check_ab0);
+    acc.merge(&check_ab1);
     acc.merge(&check_t);
     acc.merge(&check_u);
     acc.merge(&wtuple);
@@ -527,7 +530,7 @@ pub fn verify_kzg_opening_g2<E: Engine>(
 
     // this pair should be one when multiplied
     let (l, r) = rayon::join(|| mul!(q1, &q2), || mul!(p1, &p2));
-    PairingTuple::from_miller(mul!(l, &r))
+    PairingTuple::from_miller_one(mul!(l, &r))
 }
 
 /// Similar to verify_kzg_opening_g2 but for g1.
@@ -589,14 +592,7 @@ pub fn verify_kzg_opening_g1<E: Engine>(
         )])
     };
     let (l, r) = rayon::join(|| mul!(q1, &q2), || mul!(p1, &p2));
-    PairingTuple::from_miller(mul!(l, &r))
-}
-
-fn make_tuple<E: Engine>(left: &E::G1Affine, right: &E::G2Affine, out: &E::Fqk) -> PairingTuple<E> {
-    PairingTuple::<E>::from_pair(
-        inner_product::pairing_miller_affine::<E>(&[left.clone()], &[right.clone()]),
-        out.clone(),
-    )
+    PairingTuple::from_miller_one(mul!(l, &r))
 }
 
 /// Keeps track of the variables that have been sent by the prover and must

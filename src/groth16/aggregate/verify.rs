@@ -248,12 +248,12 @@ fn verify_tipp_mipp<E: Engine>(
         //
         // TIPP
         // z = e(A,B)
-        let check_z = PairingCheck::<E>::from_miller_inputs(&[(final_a, &final_b.prepare())], final_zab),
+        let check_z = PairingCheck::<E>::from_miller_inputs(&[(final_a, final_b)], final_zab),
         //  final_aB.0 = T = e(A,v1)e(w1,B)
-        let check_ab0 = PairingCheck::<E>::from_miller_inputs(&[(final_a, &fvkey.0.prepare()),(&fwkey.0, &final_b.prepare())], final_tab),
+        let check_ab0 = PairingCheck::<E>::from_miller_inputs(&[(final_a, &fvkey.0),(&fwkey.0, final_b)], final_tab),
 
         //  final_aB.1 = U = e(A,v2)e(w2,B)
-        let check_ab1 = PairingCheck::<E>::from_miller_inputs(&[(final_a, &fvkey.1.prepare()),(&fwkey.1, &final_b.prepare())], final_uab),
+        let check_ab1 = PairingCheck::<E>::from_miller_inputs(&[(final_a, &fvkey.1),(&fwkey.1, final_b)], final_uab),
 
         // MIPP
         // Verify base inner product commitment
@@ -263,9 +263,9 @@ fn verify_tipp_mipp<E: Engine>(
             &[final_r.clone()]),
         // Check commiment correctness
         // T = e(C,v1)
-        let check_t = PairingCheck::<E>::from_miller_inputs(&[(final_c,&fvkey.0.prepare())],final_tc),
+        let check_t = PairingCheck::<E>::from_miller_inputs(&[(final_c,&fvkey.0)],final_tc),
         // U = e(A,v2)
-        let check_u = PairingCheck::<E>::from_miller_inputs(&[(final_c,&fvkey.1.prepare())],final_uc)
+        let check_u = PairingCheck::<E>::from_miller_inputs(&[(final_c,&fvkey.1)],final_uc)
     };
 
     debug!(

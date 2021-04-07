@@ -4,7 +4,11 @@ use groupy::{CurveAffine, CurveProjective};
 use paired::PairingCurveAffine;
 use rand::thread_rng;
 
-/// PairingCheck is an alias to a pair of
+/// PairingCheck represents a check of the form e(A,B)e(C,D)... = T. Checks can
+/// be aggregated together using random linear combination. The efficiency comes
+/// from keeping the results from the miller loop output before proceding to a final
+/// exponentiation when verifying if all checks are verified.
+/// It is a tuple:
 /// - a miller loop result that is to be multiplied by other miller loop results
 /// before going into a final exponentiation result
 /// - a right side result which is already in the right subgroup Gt which is to
@@ -31,43 +35,33 @@ where
         Self(result, E::Fqk::one())
     }
 
-    /// returns a pairing tuple that is scaled by a random element. Specifically
+    /// returns a pairing tuple that is scaled by a random element.
+    /// When aggregating pairing checks, this creates a random linear
+    /// combination of all checks so that it is secure. Specifically
     /// we have e(A,B)e(C,D)... = out <=> e(g,h)^{ab + cd} = out
     /// We rescale using a random element $r$ to give
     /// e(rA,B)e(rC,D) ... = out^r <=>
     /// e(A,B)^r e(C,D)^r = out^r <=> e(g,h)^{abr + cdr} = out^r
     /// (e(g,h)^{ab + cd})^r = out^r
-    ///
-    /// The reason why the second element from the tuples is "Prepared" is
-    /// because our Groth16 verifying keys are loaded as "prepared" already.
-    /// Since there is no way to "unprepare", and multiplication by the random
-    /// element is cheaper on G1 anyway, we are forced to accept this status.
     pub fn from_miller_inputs<'a, I>(it: I, out: &'a E::Fqk) -> PairingCheck<E>
     where
-        I: IntoIterator<
-            Item = &'a (
-                &'a E::G1Affine,
-                &'a <E::G2Affine as PairingCurveAffine>::Prepared,
-            ),
-        >,
+        I: IntoIterator<Item = &'a (&'a E::G1Affine, &'a E::G2Affine)>,
     {
         let mut rng = thread_rng();
         let coeff = E::Fr::random(&mut rng);
-        let (g1scaled, g2): (Vec<_>, Vec<_>) = it
+        let pairs = it
             .into_iter()
             .map(|&(a, b)| {
                 let na = a.mul(coeff).into_affine();
-                (na.prepare(), b)
+                (na.prepare(), b.prepare())
             })
-            .unzip();
-        let pairs = g1scaled
-            .iter()
-            .zip(g2.iter())
-            .map(|(ar, &b)| (ar, b))
             .collect::<Vec<_>>();
-        let miller_out = E::miller_loop(pairs.iter());
+        let pairs_ref: Vec<_> = pairs.iter().map(|(a, b)| (a, b)).collect();
+        let miller_out = E::miller_loop(pairs_ref.iter());
         let mut outt = out.clone();
         if out != &E::Fqk::one() {
+            // we only need to make this expensive operation is the output is
+            // not one since 1^r = 1
             outt = outt.pow(&coeff.into_repr());
         }
         PairingCheck(miller_out, outt)
@@ -101,7 +95,7 @@ mod test {
         let g2r = G2Projective::random(&mut rng);
         let exp = Bls12::pairing(g1r.clone(), g2r.clone());
         let tuple = PairingCheck::<Bls12>::from_miller_inputs(
-            &[(&g1r.into_affine(), &g2r.into_affine().prepare())],
+            &[(&g1r.into_affine(), &g2r.into_affine())],
             &exp,
         );
         assert!(tuple.verify());

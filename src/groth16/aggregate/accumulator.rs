@@ -53,8 +53,7 @@ where
     where
         I: IntoIterator<Item = &'a (&'a E::G1Affine, &'a E::G2Affine)>,
     {
-        let mut rng = thread_rng();
-        let coeff = E::Fr::random(&mut rng);
+        let coeff = derive_non_zero::<E>();
         let pairs = it
             .into_iter()
             .map(|&(a, b)| {
@@ -84,6 +83,16 @@ where
 
     pub fn verify(&self) -> bool {
         E::final_exponentiation(&self.0).unwrap() == self.1
+    }
+}
+
+fn derive_non_zero<E: Engine>() -> E::Fr {
+    let mut rng = thread_rng();
+    loop {
+        let coeff = E::Fr::random(&mut rng);
+        if coeff != E::Fr::zero() {
+            return coeff;
+        }
     }
 }
 

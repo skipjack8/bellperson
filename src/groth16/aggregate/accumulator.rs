@@ -1,8 +1,14 @@
-use crate::bls::Engine;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
-use paired::PairingCurveAffine;
 use rand::thread_rng;
+
+#[cfg(feature = "pairing")]
+use paired::{Engine, PairingCurveAffine};
+
+#[cfg(feature = "blst")]
+use crate::bls::Engine;
+#[cfg(feature = "blst")]
+use blstrs::PairingCurveAffine;
 
 /// PairingCheck represents a check of the form e(A,B)e(C,D)... = T. Checks can
 /// be aggregated together using random linear combination. The efficiency comes
@@ -84,9 +90,14 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::bls::{Bls12, G1Projective, G2Projective};
     use groupy::CurveProjective;
     use rand_core::SeedableRng;
+
+    #[cfg(feature = "blst")]
+    use crate::bls::{Bls12, G1Projective, G2Projective};
+
+    #[cfg(feature = "pairing")]
+    use paired::bls12_381::{Bls12, G1 as G1Projective, G2 as G2Projective};
 
     #[test]
     fn test_pairing_randomize() {

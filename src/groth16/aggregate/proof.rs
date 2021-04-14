@@ -234,6 +234,12 @@ impl<E: Engine> GipaProof<E> {
         let mut buffer = 0u32.to_le_bytes();
         source.read_exact(&mut buffer)?;
         let nproofs = u32::from_le_bytes(buffer);
+        if nproofs < 2 || !nproofs.is_power_of_two() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "number of proofs is invalid",
+            ));
+        }
 
         let log_proofs = Self::log_proofs(nproofs as usize);
 

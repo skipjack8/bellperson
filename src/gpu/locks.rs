@@ -91,7 +91,6 @@ macro_rules! locked_kernel {
         {
             log_d: usize,
             priority: bool,
-            contexts: Vec<gpu::CudaUnownedCtx>,
             kernel: Option<$kern<E>>,
         }
 
@@ -99,11 +98,10 @@ macro_rules! locked_kernel {
         where
             E: Engine,
         {
-            pub fn new(contexts: &gpu::CudaCtxs, log_d: usize, priority: bool) -> $class<E> {
+            pub fn new(log_d: usize, priority: bool) -> $class<E> {
                 $class::<E> {
                     log_d,
                     priority,
-                    contexts: contexts.get_unowned(),
                     kernel: None,
                 }
             }
@@ -112,7 +110,7 @@ macro_rules! locked_kernel {
                 if self.kernel.is_none() {
                     PriorityLock::wait(self.priority);
                     info!("GPU is available for {}!", $name);
-                    self.kernel = $func::<E>(&self.contexts, self.log_d, self.priority);
+                    self.kernel = $func::<E>(self.log_d, self.priority);
                 }
             }
 

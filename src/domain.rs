@@ -559,15 +559,11 @@ fn parallel_fft_consistency() {
     test_consistency::<Bls12, _>(rng);
 }
 
-pub fn create_fft_kernel<E>(
-    contexts: &[gpu::CudaUnownedCtx],
-    _log_d: usize,
-    priority: bool,
-) -> Option<gpu::FFTKernel<E>>
+pub fn create_fft_kernel<E>(_log_d: usize, priority: bool) -> Option<gpu::FFTKernel<E>>
 where
     E: Engine,
 {
-    match gpu::FFTKernel::create(contexts, priority) {
+    match gpu::FFTKernel::create(priority) {
         Ok(k) => {
             info!("GPU FFT kernel instantiated!");
             Some(k)
@@ -598,10 +594,7 @@ mod tests {
 
         let worker = Worker::new();
         let log_cpus = worker.log_num_cpus();
-        let cuda_ctxs = gpu::CudaCtxs::create().unwrap();
-        let cuda_ctxs_unowned = cuda_ctxs.get_unowned();
-        let mut kern =
-            gpu::FFTKernel::create(&cuda_ctxs_unowned, false).expect("Cannot initialize kernel!");
+        let mut kern = gpu::FFTKernel::create(false).expect("Cannot initialize kernel!");
 
         for log_d in 1..=20 {
             let d = 1 << log_d;

@@ -336,15 +336,15 @@ where
 
     let result = pool.compute(move || multiexp_inner(bases, density_map, exponents, c));
 
-    // #[cfg(feature = "gpu")]
-    // {
-    //     // Do not give the control back to the caller till the
-    //     // multiexp is done. We may want to reacquire the GPU again
-    //     // between the multiexps.
-    //     let result = result.wait();
-    //     Waiter::done(result)
-    // }
-    // #[cfg(not(feature = "gpu"))]
+    #[cfg(feature = "gpu")]
+    {
+        // Do not give the control back to the caller till the
+        // multiexp is done. We may want to reacquire the GPU again
+        // between the multiexps.
+        let result = result.wait();
+        Waiter::done(result)
+    }
+    #[cfg(not(feature = "gpu"))]
     result
 }
 
@@ -400,14 +400,13 @@ fn test_with_bls12() {
 }
 
 pub fn create_multiexp_kernel<E>(
-    contexts: &[gpu::CudaUnownedCtx],
     _log_d: usize,
     priority: bool,
 ) -> Option<gpu::MultiexpKernel<E>>
 where
     E: crate::bls::Engine,
 {
-    match gpu::MultiexpKernel::<E>::create(contexts, priority) {
+    match gpu::MultiexpKernel::<E>::create(priority) {
         Ok(k) => {
             info!("GPU Multiexp kernel instantiated!");
             Some(k)
@@ -430,10 +429,7 @@ pub fn gpu_multiexp_consistency() {
 
     const MAX_LOG_D: usize = 16;
     const START_LOG_D: usize = 10;
-    let cuda_ctxs = gpu::CudaCtxs::create().unwrap();
-    let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(
-        &cuda_ctxs, MAX_LOG_D, false,
-    ));
+    let mut kern = Some(gpu::LockedMultiexpKernel::<Bls12>::new(MAX_LOG_D, false));
     let pool = Worker::new();
 
     let rng = &mut rand::thread_rng();

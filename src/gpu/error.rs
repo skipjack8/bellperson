@@ -1,5 +1,5 @@
 #[cfg(feature = "gpu")]
-use rust_gpu_tools::opencl;
+use rust_gpu_tools::{cuda, opencl};
 
 #[derive(thiserror::Error, Debug)]
 pub enum GPUError {
@@ -16,8 +16,8 @@ pub enum GPUError {
     KernelUninitialized,
     #[error("GPU accelerator is disabled!")]
     GPUDisabled,
-    #[error("Cuda {0}")]
-    Cuda(#[from] rustacuda::error::CudaError),
+    #[error("Cuda Error: {0}")]
+    Cuda(#[from] cuda::GPUError),
 }
 
 pub type GPUResult<T> = std::result::Result<T, GPUError>;

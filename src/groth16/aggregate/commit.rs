@@ -31,6 +31,7 @@ use rayon::prelude::*;
 
 use crate::bls::Engine;
 use crate::groth16::aggregate::inner_product;
+use crate::SynthesisError;
 
 /// Key is a generic commitment key that is instanciated with g and h as basis,
 /// and a and b as powers.
@@ -65,7 +66,10 @@ where
 
     /// Returns both vectors scaled by the given vector entrywise.
     /// In other words, it returns $\{v_i^{s_i}\}$
-    pub fn scale(&self, s_vec: &[G::Scalar]) -> Self {
+    pub fn scale(&self, s_vec: &[G::Scalar]) -> Result<Self, SynthesisError> {
+        if self.a.len() != s_vec.len() {
+            return Err(SynthesisError::InvalidLengthVector);
+        }
         let (a, b) = self
             .a
             .par_iter()
@@ -78,7 +82,7 @@ where
             })
             .unzip();
 
-        Self { a: a, b: b }
+        Ok(Self { a: a, b: b })
     }
 
     /// Returns the left and right commitment key part. It makes copy.
@@ -100,9 +104,11 @@ where
     /// Takes a left and right commitment key and returns a commitment
     /// key $left \circ right^{scale} = (left_i*right_i^{scale} ...)$. This is
     /// required step during GIPA recursion.
-    pub fn compress(&self, right: &Self, scale: &G::Scalar) -> Self {
+    pub fn compress(&self, right: &Self, scale: &G::Scalar) -> Result<Self, SynthesisError> {
         let left = self;
-        assert_eq!(left.a.len(), right.a.len());
+        if left.a.len() != right.a.len() {
+            return Err(SynthesisError::InvalidLengthVector);
+        }
         let (a, b): (Vec<G>, Vec<G>) = left
             .a
             .par_iter()
@@ -118,16 +124,13 @@ where
             })
             .unzip();
 
-        assert_eq!(a.len(), left.a.len());
-        assert_eq!(b.len(), left.a.len());
-        Self { a: a, b: b }
+        Ok(Self { a: a, b: b })
     }
 
     /// Returns the first values in the vector of v1 and v2 (respectively
     /// w1 and w2). When commitment key is of size one, it's a proxy to get the
     /// final values.
     pub fn first(&self) -> (G, G) {
-        assert!(self.has_correct_len(1));
         (self.a[0], self.b[0])
     }
 }
@@ -139,11 +142,17 @@ pub type Output<E> = (<E as Engine>::Fqk, <E as Engine>::Fqk);
 /// $T = \prod_{i=0}^n e(A_i, v_{1,i})$
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})$
 /// Output is $(T,U)$
-pub fn single_g1<E: Engine>(vkey: &VKey<E>, a: &[E::G1Affine]) -> Output<E> {
-    rayon::join(
-        || inner_product::pairing::<E>(a, &vkey.a),
-        || inner_product::pairing::<E>(a, &vkey.b),
-    )
+pub fn single_g1<E: Engine>(
+    vkey: &VKey<E>,
+    a_vec: &[E::G1Affine],
+) -> Result<Output<E>, SynthesisError> {
+    par! {
+        let a = inner_product::pairing::<E>(a_vec, &vkey.a),
+        let b = inner_product::pairing::<E>(a_vec, &vkey.b)
+    };
+    let a = a?;
+    let b = b?;
+    Ok((a, b))
 }
 
 /// Commits to a tuple of G1 vector and G2 vector in the following way:
@@ -155,27 +164,23 @@ pub fn pair<E: Engine>(
     wkey: &WKey<E>,
     a: &[E::G1Affine],
     b: &[E::G2Affine],
-) -> Output<E> {
-    let ((mut t1, t2), (mut u1, u2)) = rayon::join(
-        || {
-            rayon::join(
-                // (A * v)
-                || inner_product::pairing::<E>(a, &vkey.a),
-                // (w * B)
-                || inner_product::pairing::<E>(&wkey.a, b),
-            )
-        },
-        || {
-            rayon::join(
-                || inner_product::pairing::<E>(a, &vkey.b),
-                || inner_product::pairing::<E>(&wkey.b, b),
-            )
-        },
-    );
+) -> Result<Output<E>, SynthesisError> {
+    par! {
+        // (A * v)
+        let t1 = inner_product::pairing::<E>(a, &vkey.a),
+        // (w * B)
+        let t2 = inner_product::pairing::<E>(&wkey.a, b),
+        let u1 = inner_product::pairing::<E>(a, &vkey.b),
+        let u2 = inner_product::pairing::<E>(&wkey.b, b)
+    };
+    let mut t1 = t1?;
+    let t2 = t2?;
+    let mut u1 = u1?;
+    let u2 = u2?;
     // (A * v)(w * B)
     t1.mul_assign(&t2);
     u1.mul_assign(&u2);
-    (t1, u1)
+    Ok((t1, u1))
 }
 
 #[cfg(test)]
@@ -199,13 +204,13 @@ mod tests {
         let a = (0..n)
             .map(|_| G1Projective::random(&mut rng).into_affine())
             .collect::<Vec<_>>();
-        let c1 = single_g1::<Bls12>(&vkey, &a);
-        let c2 = single_g1::<Bls12>(&vkey, &a);
+        let c1 = single_g1::<Bls12>(&vkey, &a).unwrap();
+        let c2 = single_g1::<Bls12>(&vkey, &a).unwrap();
         assert_eq!(c1, c2);
         let b = (0..n)
             .map(|_| G1Projective::random(&mut rng).into_affine())
             .collect::<Vec<_>>();
-        let c3 = single_g1::<Bls12>(&vkey, &b);
+        let c3 = single_g1::<Bls12>(&vkey, &b).unwrap();
         assert!(c1 != c3);
     }
 
@@ -233,8 +238,9 @@ mod tests {
         let b = (0..n)
             .map(|_| G2Projective::random(&mut rng).into_affine())
             .collect::<Vec<_>>();
-        let c1 = pair::<Bls12>(&vkey, &wkey, &a, &b);
-        let c2 = pair::<Bls12>(&vkey, &wkey, &a, &b);
+        let c1 = pair::<Bls12>(&vkey, &wkey, &a, &b).unwrap();
+        let c2 = pair::<Bls12>(&vkey, &wkey, &a, &b).unwrap();
         assert_eq!(c1, c2);
+        pair::<Bls12>(&vkey, &wkey, &a[1..2], &b).expect_err("this should have failed");
     }
 }

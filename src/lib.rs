@@ -352,6 +352,10 @@ pub enum SynthesisError {
     MalformedSrs,
     #[error("non power of two proofs given for aggregation")]
     NonPowerOfTwo,
+    #[error("incompatible vector length")]
+    InvalidLengthVector,
+    #[error("invalid pairing")]
+    InvalidPairing,
 }
 
 /// Represents a constraint system which can have new variables

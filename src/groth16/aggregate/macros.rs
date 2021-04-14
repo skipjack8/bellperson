@@ -23,6 +23,7 @@ macro_rules! oracle {
         r
     }};
 }
+
 macro_rules! par {
     ($(let $name:ident = $f:expr),+) => {
         $(

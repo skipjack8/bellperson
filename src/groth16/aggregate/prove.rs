@@ -45,6 +45,8 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         let com_ab = commit::pair::<E>(&srs.vkey, &srs.wkey, refa, refb),
         let com_c = commit::single_g1::<E>(&srs.vkey, refc)
     };
+    let com_ab = com_ab?;
+    let com_c = com_c?;
 
     // Random linear combination of proofs
     let r = oracle!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1);
@@ -64,7 +66,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .collect::<Vec<_>>();
     let refb_r = &b_r;
     // w^{r^{-1}}
-    let wkey_r_inv = srs.wkey.scale(&r_inv);
+    let wkey_r_inv = srs.wkey.scale(&r_inv)?;
 
     // we prove tipp and mipp using the same recursive loop
     let proof = prove_tipp_mipp::<E>(&srs, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
@@ -74,9 +76,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         // compute C^r for the verifier
         let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&refc, &r_vec)
     };
+    let ip_ab = ip_ab?;
+    let agg_c = agg_c?;
 
     debug_assert!({
-        let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r);
+        let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r).unwrap();
         com_ab == computed_com_ab
     });
 
@@ -109,7 +113,7 @@ fn prove_tipp_mipp<E: Engine>(
     let r_shift = r_vec[1].clone();
     // Run GIPA
     let (proof, mut challenges, mut challenges_inv) =
-        gipa_tipp_mipp::<E>(a, b, c, &srs.vkey, &wkey, r_vec);
+        gipa_tipp_mipp::<E>(a, b, c, &srs.vkey, &wkey, r_vec)?;
 
     // Prove final commitment keys are wellformed
     // we reverse the transcript so the polynomial in kzg opening is constructed
@@ -166,7 +170,7 @@ fn gipa_tipp_mipp<E: Engine>(
     vkey: &VKey<E>,
     wkey: &WKey<E>, // scaled key w^r^-1
     r: &[E::Fr],
-) -> (GipaProof<E>, Vec<E::Fr>, Vec<E::Fr>) {
+) -> Result<(GipaProof<E>, Vec<E::Fr>, Vec<E::Fr>), SynthesisError> {
     // the values of vectors A and B rescaled at each step of the loop
     let (mut m_a, mut m_b) = (a.to_vec(), b.to_vec());
     // the values of vectors C and r rescaled at each step of the loop
@@ -224,6 +228,14 @@ fn gipa_tipp_mipp<E: Engine>(
             // u_r = c[:n'] * v[n':]
             let tuc_r = commit::single_g1::<E>(&rvk_right, rc_left)
         };
+        let tab_l = tab_l?;
+        let tab_r = tab_r?;
+        let zab_l = zab_l?;
+        let zab_r = zab_r?;
+        let zc_l = zc_l?;
+        let zc_r = zc_r?;
+        let tuc_l = tuc_l?;
+        let tuc_r = tuc_r?;
 
         // Fiat-Shamir challenge
         let default_transcript = E::Fr::zero();
@@ -270,9 +282,9 @@ fn gipa_tipp_mipp<E: Engine>(
         m_r.resize(len, E::Fr::zero()); // shrink to new size
 
         // v_left + v_right^x^-1
-        vkey = vk_left.compress(&vk_right, &c_inv);
+        vkey = vk_left.compress(&vk_right, &c_inv)?;
         // w_left + w_right^x
-        wkey = wk_left.compress(&wk_right, &c);
+        wkey = wk_left.compress(&wk_right, &c)?;
 
         comms_ab.push((tab_l, tab_r));
         comms_c.push((tuc_l, tuc_r));
@@ -289,7 +301,7 @@ fn gipa_tipp_mipp<E: Engine>(
 
     let (final_a, final_b, final_c, final_r) = (m_a[0], m_b[0], m_c[0], m_r[0]);
     let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
-    (
+    Ok((
         GipaProof {
             nproofs: a.len() as u32, // TODO: ensure u32
             comms_ab,
@@ -305,7 +317,7 @@ fn gipa_tipp_mipp<E: Engine>(
         },
         challenges,
         challenges_inv,
-    )
+    ))
 }
 
 /// Returns the KZG opening proof for the given commitment key. Specifically, it

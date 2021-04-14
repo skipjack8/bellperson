@@ -258,6 +258,11 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
         // U = e(A,v2)
         let _check_u = pairing_checks.merge_miller_inputs(&[(final_c,&fvkey.1)],final_uc)
     };
+    if let Err(_) = final_z {
+        pairing_checks.invalidate();
+        return;
+    }
+    let final_z = final_z.unwrap();
 
     debug!(
         "TIPP verify: parallel checks before merge: {}ms",

@@ -6,6 +6,7 @@ macro_rules! oracle {
     // https://fromherotozero.dev/blog/introduction-to-rust-macros/
     ( $( $x:expr), * ) => { {
         let mut counter_nonce: usize = 0;
+        let one = E::Fr::one();
         let r = loop {
             counter_nonce += 1;
             let mut hash_input = Vec::new();
@@ -15,6 +16,9 @@ macro_rules! oracle {
             )*
             let d = &Sha256::digest(&hash_input);
             if let Some(c) = E::Fr::from_random_bytes(&d) {
+                if c ==  one {
+                    continue;
+                }
                 if let Some(_) = c.inverse() {
                     break c;
                 }

@@ -146,12 +146,10 @@ pub fn single_g1<E: Engine>(
     vkey: &VKey<E>,
     a_vec: &[E::G1Affine],
 ) -> Result<Output<E>, SynthesisError> {
-    par! {
+    try_par! {
         let a = inner_product::pairing::<E>(a_vec, &vkey.a),
         let b = inner_product::pairing::<E>(a_vec, &vkey.b)
     };
-    let a = a?;
-    let b = b?;
     Ok((a, b))
 }
 
@@ -165,7 +163,7 @@ pub fn pair<E: Engine>(
     a: &[E::G1Affine],
     b: &[E::G2Affine],
 ) -> Result<Output<E>, SynthesisError> {
-    par! {
+    try_par! {
         // (A * v)
         let t1 = inner_product::pairing::<E>(a, &vkey.a),
         // (w * B)
@@ -173,10 +171,8 @@ pub fn pair<E: Engine>(
         let u1 = inner_product::pairing::<E>(a, &vkey.b),
         let u2 = inner_product::pairing::<E>(&wkey.b, b)
     };
-    let mut t1 = t1?;
-    let t2 = t2?;
-    let mut u1 = u1?;
-    let u2 = u2?;
+    let mut t1 = t1;
+    let mut u1 = u1;
     // (A * v)(w * B)
     t1.mul_assign(&t2);
     u1.mul_assign(&u2);

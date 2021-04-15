@@ -10,6 +10,7 @@ use groupy::{CurveAffine, CurveProjective};
 use paired::{Engine, PairingCurveAffine};
 use rayon::prelude::*;
 
+use crate::SynthesisError;
 use std::sync::{
     atomic::{AtomicBool, Ordering::SeqCst},
     Arc, Mutex,
@@ -27,8 +28,8 @@ use std::sync::{
 pub struct PairingChecks<E: Engine, R: rand::RngCore + Send> {
     /// Circuit breaker to allow canceling all checks and marking the whole check as failed.
     valid: Arc<AtomicBool>,
-    merge_send: Sender<PairingCheck<E>>,
-    valid_recv: Receiver<bool>,
+    merge_send: Sender<Result<PairingCheck<E>, SynthesisError>>,
+    valid_recv: Receiver<Result<bool, SynthesisError>>,
     /// Random number generator used for generating the random coefficients.
     rng: Mutex<R>,
     /// Ensures that the non randomized check is only added exactly once.
@@ -37,8 +38,10 @@ pub struct PairingChecks<E: Engine, R: rand::RngCore + Send> {
 
 impl<E: Engine, R: rand::RngCore + Send> PairingChecks<E, R> {
     pub fn new(rng: R) -> Self {
-        let (merge_send, merge_recv): (Sender<PairingCheck<E>>, Receiver<PairingCheck<E>>) =
-            bounded(10);
+        let (merge_send, merge_recv): (
+            Sender<Result<PairingCheck<E>, SynthesisError>>,
+            Receiver<Result<PairingCheck<E>, SynthesisError>>,
+        ) = bounded(10);
         let (valid_send, valid_recv) = bounded(1);
 
         let valid = Arc::new(AtomicBool::new(true));
@@ -47,13 +50,22 @@ impl<E: Engine, R: rand::RngCore + Send> PairingChecks<E, R> {
         rayon::spawn(move || {
             let mut acc = PairingCheck::new();
             while let Ok(tuple) = merge_recv.recv() {
+                if let Err(e) = tuple {
+                    valid_copy.store(false, SeqCst);
+                    // we signal an invalid proof - malformed for example
+                    valid_send.send(Err(e)).expect("failed to send error");
+                    return;
+                }
+
                 // only do work as long as we know we are still valid
                 if valid_copy.load(SeqCst) {
-                    acc.merge(&tuple);
+                    acc.merge(&tuple.unwrap());
+                } else {
+                    return;
                 }
             }
             if valid_copy.load(SeqCst) {
-                valid_send.send(acc.verify()).expect("failed to send");
+                valid_send.send(Ok(acc.verify())).expect("failed to send");
             }
         });
 
@@ -69,6 +81,12 @@ impl<E: Engine, R: rand::RngCore + Send> PairingChecks<E, R> {
     /// Fails the whole check.
     pub fn invalidate(&self) {
         self.valid.store(false, SeqCst);
+    }
+
+    pub fn report_err(&self, e: SynthesisError) {
+        self.merge_send
+            .send(Err(e))
+            .expect("expect to send on channel");
     }
 
     fn merge_pair(&self, result: E::Fqk, exp: E::Fqk, must_randomize: bool) {
@@ -128,10 +146,10 @@ impl<E: Engine, R: rand::RngCore + Send> PairingChecks<E, R> {
             self.non_random_check_done.store(true, SeqCst);
         };
 
-        self.merge_send.send(check).unwrap();
+        self.merge_send.send(Ok(check)).unwrap();
     }
 
-    pub fn verify(self) -> bool {
+    pub fn verify(self) -> Result<bool, SynthesisError> {
         let Self {
             valid,
             merge_send,
@@ -141,7 +159,10 @@ impl<E: Engine, R: rand::RngCore + Send> PairingChecks<E, R> {
 
         drop(merge_send); // stop the merge process
 
-        valid.load(SeqCst) && valid_recv.recv().unwrap_or_default()
+        if !valid.load(SeqCst) {
+            return Ok(false);
+        }
+        valid_recv.recv().unwrap()
     }
 }
 

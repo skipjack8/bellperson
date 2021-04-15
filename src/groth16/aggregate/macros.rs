@@ -28,6 +28,24 @@ macro_rules! oracle {
     }};
 }
 
+macro_rules! try_par {
+    ($(let $name:ident = $f:expr),+) => {
+        $(
+            let mut $name = None;
+        )+
+            rayon::scope(|s| {
+                $(
+                    let $name = &mut $name;
+                    s.spawn(move |_| {
+                        *$name = Some($f);
+                    });)+
+            });
+        $(
+            let $name = $name.unwrap()?;
+        )+
+    };
+}
+
 macro_rules! par {
     ($(let $name:ident = $f:expr),+) => {
         $(

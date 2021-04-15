@@ -41,12 +41,10 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let refa = &a;
     let refb = &b;
     let refc = &c;
-    par! {
+    try_par! {
         let com_ab = commit::pair::<E>(&srs.vkey, &srs.wkey, refa, refb),
         let com_c = commit::single_g1::<E>(&srs.vkey, refc)
     };
-    let com_ab = com_ab?;
-    let com_c = com_c?;
 
     // Random linear combination of proofs
     let r = oracle!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1);
@@ -70,14 +68,12 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
 
     // we prove tipp and mipp using the same recursive loop
     let proof = prove_tipp_mipp::<E>(&srs, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
-    par! {
+    try_par! {
         // compute A * B^r for the verifier
         let ip_ab = inner_product::pairing::<E>(&refa, &refb_r),
         // compute C^r for the verifier
         let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&refc, &r_vec)
     };
-    let ip_ab = ip_ab?;
-    let agg_c = agg_c?;
 
     debug_assert!({
         let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r).unwrap();
@@ -211,7 +207,7 @@ fn gipa_tipp_mipp<E: Engine>(
         let (rc_left, rc_right) = (&c_left, &c_right);
         let (rr_left, rr_right) = (&r_left, &r_right);
         // See section 3.3 for paper version with equivalent names
-        par! {
+        try_par! {
             // TIPP part
             let tab_l = commit::pair::<E>(&rvk_left, &rwk_right, &ra_right, &rb_left),
             let tab_r = commit::pair::<E>(&rvk_right, &rwk_left, &ra_left, &rb_right),
@@ -228,14 +224,6 @@ fn gipa_tipp_mipp<E: Engine>(
             // u_r = c[:n'] * v[n':]
             let tuc_r = commit::single_g1::<E>(&rvk_right, rc_left)
         };
-        let tab_l = tab_l?;
-        let tab_r = tab_r?;
-        let zab_l = zab_l?;
-        let zab_r = zab_r?;
-        let zc_l = zc_l?;
-        let zc_r = zc_r?;
-        let tuc_l = tuc_l?;
-        let tuc_r = tuc_r?;
 
         // Fiat-Shamir challenge
         let default_transcript = E::Fr::zero();

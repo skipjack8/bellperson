@@ -214,17 +214,16 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
     let now = Instant::now();
     par! {
         // check the opening proof for v
-        let _vtuple = verify_kzg_opening_g2(
+        let _vtuple = verify_kzg_v(
             v_srs,
             &fvkey,
             &proof.tmipp.vkey_opening,
             &challenges_inv,
-            &E::Fr::one(),
             &c,
             pairing_checks,
         ),
         // check the opening proof for w - note that w has been rescaled by $r^{-1}$
-        let _wtuple = verify_kzg_opening_g1(
+        let _wtuple = verify_kzg_w(
             v_srs,
             &fwkey,
             &proof.tmipp.wkey_opening,
@@ -450,18 +449,20 @@ fn gipa_verify_tipp_mipp<E: Engine>(
 /// verify_kzg_opening_g2 takes a KZG opening, the final commitment key, SRS and
 /// any shift (in TIPP we shift the v commitment by r^-1) and returns a pairing
 /// tuple to check if the opening is correct or not.
-pub fn verify_kzg_opening_g2<E: Engine, R: rand::RngCore + Send>(
+pub fn verify_kzg_v<E: Engine, R: rand::RngCore + Send>(
     v_srs: &VerifierSRS<E>,
     final_vkey: &(E::G2Affine, E::G2Affine),
     vkey_opening: &KZGOpening<E::G2Affine>,
     challenges: &[E::Fr],
-    r_shift: &E::Fr,
     kzg_challenge: &E::Fr,
     pairing_checks: &PairingChecks<E, R>,
 ) {
     // f_v(z)
-    let vpoly_eval_z =
-        polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
+    let vpoly_eval_z = polynomial_evaluation_product_form_from_transcript(
+        challenges,
+        kzg_challenge,
+        &E::Fr::one(),
+    );
     // -g such that when we test a pairing equation we only need to check if
     // it's equal 1 at the end:
     // e(a,b) = e(c,d) <=> e(a,b)e(-c,d) = 1
@@ -509,7 +510,7 @@ pub fn verify_kzg_opening_g2<E: Engine, R: rand::RngCore + Send>(
 }
 
 /// Similar to verify_kzg_opening_g2 but for g1.
-pub fn verify_kzg_opening_g1<E: Engine, R: rand::RngCore + Send>(
+pub fn verify_kzg_w<E: Engine, R: rand::RngCore + Send>(
     v_srs: &VerifierSRS<E>,
     final_wkey: &(E::G1Affine, E::G1Affine),
     wkey_opening: &KZGOpening<E::G1Affine>,
@@ -518,8 +519,14 @@ pub fn verify_kzg_opening_g1<E: Engine, R: rand::RngCore + Send>(
     kzg_challenge: &E::Fr,
     pairing_checks: &PairingChecks<E, R>,
 ) {
-    let wkey_poly_eval =
-        polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift);
+    // compute in parallel f(z) and z^n and then combines into f_w(z) = z^n * f(z)
+    par! {
+        let fz = polynomial_evaluation_product_form_from_transcript(challenges, kzg_challenge, r_shift),
+        let zn = kzg_challenge.pow(&[v_srs.n as u64])
+    };
+
+    let mut fwz = fz;
+    fwz.mul_assign(&zn);
 
     // -h such that when we test a pairing equation we only need to check if
     // it's equal 1 at the end:
@@ -529,12 +536,11 @@ pub fn verify_kzg_opening_g1<E: Engine, R: rand::RngCore + Send>(
 
     par! {
         // first check on w1
-        // let K = g^{a^{n}}
-        // e(w1 K^{-f_w(z)},h)
+        // e(w_1 / g^{f_w(z)},h) == e(\pi_{w,1},h^a/h^z) \\
         let _check1 = pairing_checks.merge_miller_inputs(&[(
             &sub!(
                 final_wkey.0.into_projective(),
-                &mul!(v_srs.g_alpha_n1, wkey_poly_eval)
+                &mul!(v_srs.g, fwz)
             )
             .into_affine(),
             &nh.into_affine(),
@@ -546,12 +552,11 @@ pub fn verify_kzg_opening_g1<E: Engine, R: rand::RngCore + Send>(
                 .into_affine(),
         )], &E::Fqk::one()),
         // then do second check
-        // let K = g^{b^{n}}
-        // e(w2 K^{-f_w(z)},h)
+        // e(w_2 / g^{f_w(z)},h) == e(\pi_{w,2},h^b/h^z) \\
         let _check2 = pairing_checks.merge_miller_inputs(&[(
             &sub!(
                 final_wkey.1.into_projective(),
-                &mul!(v_srs.g_beta_n1, wkey_poly_eval)
+                &mul!(v_srs.g, fwz)
             )
             .into_affine() ,
             &nh.into_affine(),

@@ -40,16 +40,17 @@ pub struct GenericSRS<E: Engine> {
 pub struct ProverSRS<E: Engine> {
     /// number of proofs to aggregate
     pub n: usize,
-    /// $\{g^a^i\}_{i=n+1}^{2n}$ where n is the number of proofs to be aggregated table starts at
-    /// i=n+1 since base is offset with commitment keys. Specially, during the KZG opening proof,
-    /// we need the vector of the SRS for g to start at $g^{a^{n+1}}$ because the commitment key
-    /// $w$ starts at the same power.
+    /// $\{g^a^i\}_{i=0}^{2n-1}$ where n is the number of proofs to be aggregated
+    /// We take all powers instead of only ones from n -> 2n-1 (w commitment key
+    /// is formed from these powers) since the prover will create a shifted
+    /// polynomial of degree 2n-1 when doing the KZG opening proof.
     pub g_alpha_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
-    /// $\{h^a^i\}_{i=1}^{n}$
+    /// $\{h^a^i\}_{i=0}^{n-1}$ - here we don't need to go to 2n-1 since v
+    /// commitment key only goes up to n-1 exponent.
     pub h_alpha_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
-    /// $\{g^b^i\}_{i=n+1}^{2n}$
+    /// $\{g^b^i\}_{i=0}^{2n-1}$
     pub g_beta_powers_table: MultiscalarPrecompOwned<E::G1Affine>,
-    /// $\{h^b^i\}_{i=1}^{n}$
+    /// $\{h^b^i\}_{i=0}^{n-1}$
     pub h_beta_powers_table: MultiscalarPrecompOwned<E::G2Affine>,
     /// commitment key using in MIPP and TIPP
     pub vkey: VKey<E>,
@@ -69,10 +70,6 @@ pub struct VerifierSRS<E: Engine> {
     pub g_beta: E::G1,
     pub h_alpha: E::G2,
     pub h_beta: E::G2,
-    /// equals to $g^{alpha^{n}}$
-    pub g_alpha_n1: E::G1,
-    /// equals to $g^{beta^{n}}$
-    pub g_beta_n1: E::G1,
 }
 
 impl<E: Engine> PartialEq for GenericSRS<E> {
@@ -92,8 +89,6 @@ impl<E: Engine> PartialEq for VerifierSRS<E> {
             && self.g_beta == other.g_beta
             && self.h_alpha == other.h_alpha
             && self.h_beta == other.h_beta
-            && self.g_alpha_n1 == other.g_alpha_n1
-            && self.g_beta_n1 == other.g_beta_n1
     }
 }
 
@@ -120,9 +115,10 @@ impl<E: Engine> GenericSRS<E> {
         assert!(self.g_beta_powers.len() >= tn);
         assert!(self.h_beta_powers.len() >= tn);
         let n = num_proofs;
-        // g^n -> g^{n-1}
-        let g_low = n;
-        let g_up = g_low + n;
+        // when doing the KZG opening we need _all_ coefficients from 0
+        // to 2n-1 because the polynomial is of degree 2n-1.
+        let g_low = 0;
+        let g_up = tn;
         let h_low = 0;
         let h_up = h_low + n;
         let g_alpha_powers_table =
@@ -137,12 +133,10 @@ impl<E: Engine> GenericSRS<E> {
         let v2 = self.h_beta_powers[h_low..h_up].to_vec();
         let vkey = VKey::<E> { a: v1, b: v2 };
         assert!(vkey.has_correct_len(n));
-        let w1 = self.g_alpha_powers[g_low..g_up].to_vec();
-        let w2 = self.g_beta_powers[g_low..g_up].to_vec();
-        // needed by the verifier to check KZG opening with a shifted base point for
-        // the w commitment
-        let g_alpha_n1 = w1[0].into_projective();
-        let g_beta_n1 = w2[0].into_projective();
+        // however, here we only need the "right" shifted bases for the
+        // commitment scheme.
+        let w1 = self.g_alpha_powers[n..g_up].to_vec();
+        let w2 = self.g_beta_powers[n..g_up].to_vec();
         let wkey = WKey::<E> { a: w1, b: w2 };
         assert!(wkey.has_correct_len(n));
         let pk = ProverSRS::<E> {
@@ -162,8 +156,6 @@ impl<E: Engine> GenericSRS<E> {
             g_beta: self.g_beta_powers[1].into_projective(),
             h_alpha: self.h_alpha_powers[1].into_projective(),
             h_beta: self.h_beta_powers[1].into_projective(),
-            g_alpha_n1,
-            g_beta_n1,
         };
         (pk, vk)
     }

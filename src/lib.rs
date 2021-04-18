@@ -346,8 +346,8 @@ pub enum SynthesisError {
     /// During GPU multiexp/fft, some GPU related error happened
     #[error("encountered a GPU error: {0}")]
     GPUError(#[from] gpu::GPUError),
-    #[error("attempted to aggregate malformed proofs")]
-    MalformedProofs,
+    #[error("attempted to aggregate malformed proofs: {0}")]
+    MalformedProofs(String),
     #[error("malformed SRS")]
     MalformedSrs,
     #[error("non power of two proofs given for aggregation")]

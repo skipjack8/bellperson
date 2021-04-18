@@ -103,9 +103,6 @@ fn prove_tipp_mipp<E: Engine>(
     wkey: &WKey<E>, // scaled key w^r-1
     r_vec: &[E::Fr],
 ) -> Result<TippMippProof<E>, SynthesisError> {
-    if !a.len().is_power_of_two() || a.len() != b.len() {
-        return Err(SynthesisError::MalformedProofs);
-    }
     let r_shift = r_vec[1].clone();
     // Run GIPA
     let (proof, mut challenges, mut challenges_inv) =

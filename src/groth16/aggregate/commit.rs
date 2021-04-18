@@ -68,7 +68,9 @@ where
     /// In other words, it returns $\{v_i^{s_i}\}$
     pub fn scale(&self, s_vec: &[G::Scalar]) -> Result<Self, SynthesisError> {
         if self.a.len() != s_vec.len() {
-            return Err(SynthesisError::InvalidLengthVector);
+            return Err(SynthesisError::IncompatibleLengthVector(
+                "scaling commitment key".to_string(),
+            ));
         }
         let (a, b) = self
             .a
@@ -107,7 +109,9 @@ where
     pub fn compress(&self, right: &Self, scale: &G::Scalar) -> Result<Self, SynthesisError> {
         let left = self;
         if left.a.len() != right.a.len() {
-            return Err(SynthesisError::InvalidLengthVector);
+            return Err(SynthesisError::IncompatibleLengthVector(
+                "compressing commitment key".to_string(),
+            ));
         }
         let (a, b): (Vec<G>, Vec<G>) = left
             .a

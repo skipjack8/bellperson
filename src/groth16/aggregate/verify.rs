@@ -257,22 +257,20 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
         // U = e(A,v2)
         let _check_u = pairing_checks.merge_miller_inputs(&[(final_c,&fvkey.1)],final_uc)
     };
-    if let Err(e) = final_z {
-        pairing_checks.report_err(e);
-        return;
-    }
-    let final_z = final_z.unwrap();
-
-    debug!(
-        "TIPP verify: parallel checks before merge: {}ms",
-        now.elapsed().as_millis(),
-    );
-
-    let b = final_z == final_res.zc;
-    // only check that doesn't require pairing so we can give a tuple that will
-    // render the equation wrong in case it's false
-    if !b {
-        pairing_checks.invalidate();
+    match final_z {
+        Err(e) => pairing_checks.report_err(e),
+        Ok(z) => {
+            debug!(
+                "TIPP verify: parallel checks before merge: {}ms",
+                now.elapsed().as_millis(),
+            );
+            let b = z == final_res.zc;
+            // only check that doesn't require pairing so we can give a tuple
+            // that will render the equation wrong in case it's false
+            if !b {
+                pairing_checks.invalidate();
+            }
+        }
     }
 }
 

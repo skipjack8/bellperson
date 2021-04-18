@@ -352,8 +352,8 @@ pub enum SynthesisError {
     MalformedSrs,
     #[error("non power of two proofs given for aggregation")]
     NonPowerOfTwo,
-    #[error("incompatible vector length")]
-    InvalidLengthVector,
+    #[error("incompatible vector length: {0}")]
+    IncompatibleLengthVector(String),
     #[error("invalid pairing")]
     InvalidPairing,
 }

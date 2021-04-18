@@ -15,7 +15,9 @@ pub(crate) fn pairing_miller_affine<E: Engine>(
     right: &[E::G2Affine],
 ) -> Result<E::Fqk, SynthesisError> {
     if left.len() != right.len() {
-        return Err(SynthesisError::InvalidLengthVector);
+        return Err(SynthesisError::IncompatibleLengthVector(
+            "pairing_miller_affine left and right".to_string(),
+        ));
     }
     let pairs = left
         .par_iter()
@@ -41,7 +43,9 @@ pub(crate) fn multiexponentiation<G: CurveAffine>(
     right: &[G::Scalar],
 ) -> Result<G::Projective, SynthesisError> {
     if left.len() != right.len() {
-        return Err(SynthesisError::InvalidLengthVector);
+        return Err(SynthesisError::IncompatibleLengthVector(
+            "multiexponentiation left and right".to_string(),
+        ));
     }
 
     let table = precompute_fixed_window::<G>(&left, WINDOW_SIZE);

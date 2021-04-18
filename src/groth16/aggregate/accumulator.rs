@@ -50,18 +50,21 @@ impl<E: Engine, R: rand::RngCore + Send> PairingChecks<E, R> {
         rayon::spawn(move || {
             let mut acc = PairingCheck::new();
             while let Ok(tuple) = merge_recv.recv() {
-                if let Err(e) = tuple {
-                    valid_copy.store(false, SeqCst);
-                    // we signal an invalid proof - malformed for example
-                    valid_send.send(Err(e)).expect("failed to send error");
-                    return;
-                }
-
-                // only do work as long as we know we are still valid
-                if valid_copy.load(SeqCst) {
-                    acc.merge(&tuple.unwrap());
-                } else {
-                    return;
+                match tuple {
+                    Ok(check) => {
+                        // only do work as long as we know we are still valid
+                        if valid_copy.load(SeqCst) {
+                            acc.merge(&check);
+                        } else {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        // we signal an invalid proof - malformed for example
+                        valid_copy.store(false, SeqCst);
+                        valid_send.send(Err(e)).expect("failed to send error");
+                        return;
+                    }
                 }
             }
             if valid_copy.load(SeqCst) {

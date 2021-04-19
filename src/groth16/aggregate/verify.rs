@@ -30,6 +30,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
     proof: &AggregateProof<E>,
 ) -> Result<bool, SynthesisError> {
     info!("verify_aggregate_proof");
+    proof.parsing_check()?;
 
     // Random linear combination of proofs
     let r = oracle!(
@@ -38,8 +39,6 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
         &proof.com_c.0,
         &proof.com_c.1
     );
-
-    proof.parsing_check()?;
 
     for pub_input in public_inputs {
         if (pub_input.len() + 1) != pvk.ic.len() {

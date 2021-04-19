@@ -16,7 +16,7 @@ macro_rules! oracle {
             )*
             let d = &Sha256::digest(&hash_input);
             if let Some(c) = E::Fr::from_random_bytes(&d) {
-                if c ==  one {
+                if c == one {
                     continue;
                 }
                 if let Some(_) = c.inverse() {

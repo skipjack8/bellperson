@@ -47,7 +47,13 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     };
 
     // Random linear combination of proofs
-    let r = oracle!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1);
+    let r = oracle!(
+        "randomr".to_string(),
+        &com_ab.0,
+        &com_ab.1,
+        &com_c.0,
+        &com_c.1
+    );
     // r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
     // r^-1, r^-2, r^-3
@@ -121,6 +127,7 @@ fn prove_tipp_mipp<E: Engine>(
 
     // KZG challenge point
     let z = oracle!(
+        "randomz".to_string(),
         &challenges[0],
         &proof.final_vkey.0,
         &proof.final_vkey.1,
@@ -230,6 +237,7 @@ fn gipa_tipp_mipp<E: Engine>(
 
         // combine both TIPP and MIPP transcript
         let c_inv = oracle!(
+            "randomgipa".to_string(),
             &transcript,
             &tab_l.0,
             &tab_l.1,

@@ -33,6 +33,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
 
     // Random linear combination of proofs
     let r = oracle!(
+        "randomr".to_string(),
         &proof.com_ab.0,
         &proof.com_ab.1,
         &proof.com_c.0,
@@ -193,6 +194,7 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
     let fwkey = proof.tmipp.gipa.final_wkey;
     // KZG challenge point
     let c = oracle!(
+        "randomz".to_string(),
         &challenges.first().unwrap(),
         &fvkey.0,
         &fvkey.1,
@@ -315,6 +317,7 @@ fn gipa_verify_tipp_mipp<E: Engine>(
         // Fiat-Shamir challenge
         let transcript = challenges.last().unwrap_or(&default_transcript);
         let c_inv = oracle!(
+            "randomgipa".to_string(),
             &transcript,
             &tab_l.0,
             &tab_l.1,

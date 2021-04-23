@@ -319,14 +319,14 @@ fn gipa_verify_tipp_mipp<E: Engine>(
         let c_inv = oracle!(
             "randomgipa".to_string(),
             &transcript,
-            &tab_l.0,
-            &tab_l.1,
-            &tab_r.0,
-            &tab_r.1,
             &zab_l,
             &zab_r,
             &zc_l,
             &zc_r,
+            &tab_l.0,
+            &tab_l.1,
+            &tab_r.0,
+            &tab_r.1,
             &tc_l.0,
             &tc_l.1,
             &tc_r.0,
@@ -470,10 +470,11 @@ pub fn verify_kzg_v<E: Engine, R: rand::RngCore + Send>(
     // it's equal 1 at the end:
     // e(a,b) = e(c,d) <=> e(a,b)e(-c,d) = 1
     let mut ng = v_srs.g.clone();
+    // e(A,B) = e(C,D) <=> e(A,B)e(-C,D) == 1 <=> e(A,B)e(C,D)^-1 == 1
     ng.negate();
     par! {
         // verify first part of opening - v1
-        // e(g, v1 h^{-af_v(z)})
+        // e(-g, v1-(f_v(z)}*h)) ==> e(g^-1,h^{f_v(a)} * h^{-f_v(z)})
         let _check1 = pairing_checks.merge_miller_inputs(&[(
             &ng.into_affine(),
             // in additive notation: final_vkey = uH,
@@ -484,7 +485,7 @@ pub fn verify_kzg_v<E: Engine, R: rand::RngCore + Send>(
             )
             .into_affine(),
         ),
-        // e(g^{a - z}, opening_1) ==> (aG) - (zG)
+        // e(g^{a - z}, opening_1) ==> e(g^{a-z}, h^q(a))
         (
             &sub!(v_srs.g_alpha, &mul!(v_srs.g, kzg_challenge.clone()))
                 .into_affine(),
@@ -540,6 +541,7 @@ pub fn verify_kzg_w<E: Engine, R: rand::RngCore + Send>(
     par! {
         // first check on w1
         // e(w_1 / g^{f_w(z)},h) == e(\pi_{w,1},h^a/h^z) \\
+        // e(g^{f_w(a) - f_w(z)},
         let _check1 = pairing_checks.merge_miller_inputs(&[(
             &sub!(
                 final_wkey.0.into_projective(),

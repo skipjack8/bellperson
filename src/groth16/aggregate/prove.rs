@@ -54,9 +54,9 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         &com_c.0,
         &com_c.1
     );
-    // r, r^2, r^3, r^4 ...
+    // 1,r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
-    // r^-1, r^-2, r^-3
+    // 1,r^-1, r^-2, r^-3
     let r_inv = r_vec
         .par_iter()
         .map(|ri| ri.inverse().unwrap())
@@ -106,7 +106,7 @@ fn prove_tipp_mipp<E: Engine>(
     a: &[E::G1Affine],
     b: &[E::G2Affine],
     c: &[E::G1Affine],
-    wkey: &WKey<E>, // scaled key w^r-1
+    wkey: &WKey<E>, // scaled key w^r^-1
     r_vec: &[E::Fr],
 ) -> Result<TippMippProof<E>, SynthesisError> {
     if !a.len().is_power_of_two() || a.len() != b.len() {
@@ -217,6 +217,7 @@ fn gipa_tipp_mipp<E: Engine>(
             // TIPP part
             let tab_l = commit::pair::<E>(&rvk_left, &rwk_right, &ra_right, &rb_left),
             let tab_r = commit::pair::<E>(&rvk_right, &rwk_left, &ra_left, &rb_right),
+            // \prod e(A_right,B_left)
             let zab_l = inner_product::pairing::<E>(&ra_right, &rb_left),
             let zab_r = inner_product::pairing::<E>(&ra_left, &rb_right),
 
@@ -239,19 +240,20 @@ fn gipa_tipp_mipp<E: Engine>(
         let c_inv = oracle!(
             "randomgipa".to_string(),
             &transcript,
-            &tab_l.0,
-            &tab_l.1,
-            &tab_r.0,
-            &tab_r.1,
             &zab_l,
             &zab_r,
             &zc_l,
             &zc_r,
+            &tab_l.0,
+            &tab_l.1,
+            &tab_r.0,
+            &tab_r.1,
             &tuc_l.0,
             &tuc_l.1,
             &tuc_r.0,
             &tuc_r.1
         );
+
         // Optimization for multiexponentiation to rescale G2 elements with
         // 128-bit challenge Swap 'c' and 'c_inv' since can't control bit size
         // of c_inv
@@ -327,6 +329,7 @@ fn prove_commitment_v<G: CurveAffine>(
         transcript,
         &G::Scalar::one(),
     ));
+
     // f_v(z)
     let vkey_poly_z = polynomial_evaluation_product_form_from_transcript(
         &transcript,
@@ -382,8 +385,8 @@ fn prove_commitment_w<G: CurveAffine>(
 /// Returns the KZG opening proof for the given commitment key. Specifically, it
 /// returns $g^{f(alpha) - f(z) / (alpha - z)}$ for $a$ and $b$.
 fn create_kzg_opening<G: CurveAffine>(
-    srs_powers_alpha_table: &dyn MultiscalarPrecomp<G>,
-    srs_powers_beta_table: &dyn MultiscalarPrecomp<G>,
+    srs_powers_alpha_table: &dyn MultiscalarPrecomp<G>, // h^alpha^i
+    srs_powers_beta_table: &dyn MultiscalarPrecomp<G>,  // h^beta^i
     srs_powers_len: usize,
     poly: DensePolynomial<G::Scalar>,
     eval_poly: G::Scalar,
@@ -474,6 +477,7 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
 //
 // This method expects the coefficients in reverse order so transcript[i] =
 // x_{l-j}.
+// f(Y) = Y^n * \prod (1 + x_{l-j-1} (r_shiftY^{2^j}))
 fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: &F) -> Vec<F> {
     let mut coefficients = vec![F::one()];
     let mut power_2_r = *r_shift;

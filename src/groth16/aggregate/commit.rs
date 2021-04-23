@@ -159,15 +159,17 @@ pub fn pair<E: Engine>(
     let ((mut t1, t2), (mut u1, u2)) = rayon::join(
         || {
             rayon::join(
-                // (A * v)
+                // (A * v1)
                 || inner_product::pairing::<E>(a, &vkey.a),
-                // (w * B)
+                // (w1 * B)
                 || inner_product::pairing::<E>(&wkey.a, b),
             )
         },
         || {
             rayon::join(
+                // (A * v2)
                 || inner_product::pairing::<E>(a, &vkey.b),
+                // (w2 * B)
                 || inner_product::pairing::<E>(&wkey.b, b),
             )
         },

@@ -20,6 +20,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     srs: &ProverSRS<E>,
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError> {
+    if !proofs.len() < 2 {
+        return Err(SynthesisError::MalformedProofs(
+            "aggregating less than 2 proofs is not allowed".to_string(),
+        ));
+    }
     if !proofs.len().is_power_of_two() {
         return Err(SynthesisError::NonPowerOfTwo);
     }

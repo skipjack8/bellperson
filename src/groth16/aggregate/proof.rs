@@ -81,7 +81,7 @@ impl<E: Engine> AggregateProof<E> {
                 "proofs vectors don't have the same size".to_string(),
             ));
         }
-        return Ok(());
+        Ok(())
     }
     /// Writes the agggregated proof into the provided buffer.
     pub fn write(&self, mut out: impl Write) -> std::io::Result<()> {

@@ -4,12 +4,13 @@
 /// each hash input.
 macro_rules! oracle {
     // https://fromherotozero.dev/blog/introduction-to-rust-macros/
-    ( $( $x:expr), * ) => { {
+    ( $y:expr, $( $x:expr), * ) => { {
         let mut counter_nonce: usize = 0;
         let one = E::Fr::one();
         let r = loop {
             counter_nonce += 1;
             let mut hash_input = Vec::new();
+            hash_input.append(&mut $y.as_bytes().to_vec());
             hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             $(
                 bincode::serialize_into(&mut hash_input, $x).expect("vec");

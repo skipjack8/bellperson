@@ -89,11 +89,11 @@ where
             .arg(dst_buffer)
             .arg(&self.pq_buffer)
             .arg(&self.omegas_buffer)
-            .arg(opencl::LocalBuffer::<E::Fr>::new(1 << deg))
-            .arg(n)
-            .arg(log_p)
-            .arg(deg)
-            .arg(max_deg)
+            .arg(&opencl::LocalBuffer::<E::Fr>::new(1 << deg))
+            .arg(&n)
+            .arg(&log_p)
+            .arg(&deg)
+            .arg(&max_deg)
             .run()?;
         Ok(())
     }

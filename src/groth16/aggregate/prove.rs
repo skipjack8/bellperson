@@ -47,10 +47,16 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     };
 
     // Random linear combination of proofs
-    let r = oracle!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1);
-    // r, r^2, r^3, r^4 ...
+    let r = oracle!(
+        "randomr".to_string(),
+        &com_ab.0,
+        &com_ab.1,
+        &com_c.0,
+        &com_c.1
+    );
+    // 1,r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
-    // r^-1, r^-2, r^-3
+    // 1,r^-1, r^-2, r^-3
     let r_inv = r_vec
         .par_iter()
         .map(|ri| ri.inverse().unwrap())
@@ -100,7 +106,7 @@ fn prove_tipp_mipp<E: Engine>(
     a: &[E::G1Affine],
     b: &[E::G2Affine],
     c: &[E::G1Affine],
-    wkey: &WKey<E>, // scaled key w^r-1
+    wkey: &WKey<E>, // scaled key w^r^-1
     r_vec: &[E::Fr],
 ) -> Result<TippMippProof<E>, SynthesisError> {
     if !a.len().is_power_of_two() || a.len() != b.len() {
@@ -121,6 +127,7 @@ fn prove_tipp_mipp<E: Engine>(
 
     // KZG challenge point
     let z = oracle!(
+        "randomz".to_string(),
         &challenges[0],
         &proof.final_vkey.0,
         &proof.final_vkey.1,
@@ -130,15 +137,14 @@ fn prove_tipp_mipp<E: Engine>(
 
     // Complete KZG proofs
     par! {
-        let vkey_opening = prove_commitment_key_kzg_opening(
+        let vkey_opening = prove_commitment_v(
             &srs.h_alpha_powers_table,
             &srs.h_beta_powers_table,
             srs.n,
             &challenges_inv,
-            &<E::Fr>::one(),
             &z,
         ),
-        let wkey_opening = prove_commitment_key_kzg_opening(
+        let wkey_opening = prove_commitment_w(
             &srs.g_alpha_powers_table,
             &srs.g_beta_powers_table,
             srs.n,
@@ -211,6 +217,7 @@ fn gipa_tipp_mipp<E: Engine>(
             // TIPP part
             let tab_l = commit::pair::<E>(&rvk_left, &rwk_right, &ra_right, &rb_left),
             let tab_r = commit::pair::<E>(&rvk_right, &rwk_left, &ra_left, &rb_right),
+            // \prod e(A_right,B_left)
             let zab_l = inner_product::pairing::<E>(&ra_right, &rb_left),
             let zab_r = inner_product::pairing::<E>(&ra_left, &rb_right),
 
@@ -231,20 +238,22 @@ fn gipa_tipp_mipp<E: Engine>(
 
         // combine both TIPP and MIPP transcript
         let c_inv = oracle!(
+            "randomgipa".to_string(),
             &transcript,
-            &tab_l.0,
-            &tab_l.1,
-            &tab_r.0,
-            &tab_r.1,
             &zab_l,
             &zab_r,
             &zc_l,
             &zc_r,
+            &tab_l.0,
+            &tab_l.1,
+            &tab_r.0,
+            &tab_r.1,
             &tuc_l.0,
             &tuc_l.1,
             &tuc_r.0,
             &tuc_r.1
         );
+
         // Optimization for multiexponentiation to rescale G2 elements with
         // 128-bit challenge Swap 'c' and 'c_inv' since can't control bit size
         // of c_inv
@@ -308,33 +317,90 @@ fn gipa_tipp_mipp<E: Engine>(
     )
 }
 
-/// Returns the KZG opening proof for the given commitment key. Specifically, it
-/// returns $g^{f(alpha) - f(z) / (alpha - z)}$ for $a$ and $b$.
-fn prove_commitment_key_kzg_opening<G: CurveAffine>(
+fn prove_commitment_v<G: CurveAffine>(
     srs_powers_alpha_table: &dyn MultiscalarPrecomp<G>,
     srs_powers_beta_table: &dyn MultiscalarPrecomp<G>,
-    srs_powers_len: usize,
+    n: usize,
+    transcript: &[G::Scalar],
+    kzg_challenge: &G::Scalar,
+) -> Result<KZGOpening<G>, SynthesisError> {
+    // f_v
+    let vkey_poly = DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(
+        transcript,
+        &G::Scalar::one(),
+    ));
+
+    // f_v(z)
+    let vkey_poly_z = polynomial_evaluation_product_form_from_transcript(
+        &transcript,
+        kzg_challenge,
+        &G::Scalar::one(),
+    );
+
+    create_kzg_opening(
+        srs_powers_alpha_table,
+        srs_powers_beta_table,
+        n,
+        vkey_poly,
+        vkey_poly_z,
+        kzg_challenge,
+    )
+}
+
+fn prove_commitment_w<G: CurveAffine>(
+    srs_powers_alpha_table: &dyn MultiscalarPrecomp<G>,
+    srs_powers_beta_table: &dyn MultiscalarPrecomp<G>,
+    n: usize,
     transcript: &[G::Scalar],
     r_shift: &G::Scalar,
     kzg_challenge: &G::Scalar,
 ) -> Result<KZGOpening<G>, SynthesisError> {
-    // f_v
-    let vkey_poly =
-        DensePolynomial::from_coeffs(polynomial_coefficients_from_transcript(transcript, r_shift));
+    // this computes f(X) = \prod (1 + x (rX)^{2^j})
+    let mut fcoeffs = polynomial_coefficients_from_transcript(transcript, r_shift);
+    // this computes f_w(X) = X^n * f(X) - it simply shifts all coefficients to by n
+    let mut fwcoeffs = vec![G::Scalar::zero(); n];
+    fwcoeffs.append(&mut fcoeffs);
+    let fw = DensePolynomial::from_coeffs(fwcoeffs);
 
-    if srs_powers_len != vkey_poly.coeffs().len() {
-        return Err(SynthesisError::MalformedSrs);
-    }
+    par! {
+        // this computes f(z)
+        let fz = polynomial_evaluation_product_form_from_transcript(&transcript, kzg_challenge, &r_shift),
+        // this computes the "shift" z^n
+        let zn = kzg_challenge.pow(&[n as u64])
+    };
+    // this computes f_w(z) by multiplying by zn
+    let mut fwz = fz;
+    fwz.mul_assign(&zn);
 
-    // f_v(z)
-    let vkey_poly_z =
-        polynomial_evaluation_product_form_from_transcript(&transcript, kzg_challenge, &r_shift);
+    create_kzg_opening(
+        srs_powers_alpha_table,
+        srs_powers_beta_table,
+        2 * n, // here we have twice the coefficients size
+        fw,
+        fwz,
+        kzg_challenge,
+    )
+}
 
+/// Returns the KZG opening proof for the given commitment key. Specifically, it
+/// returns $g^{f(alpha) - f(z) / (alpha - z)}$ for $a$ and $b$.
+fn create_kzg_opening<G: CurveAffine>(
+    srs_powers_alpha_table: &dyn MultiscalarPrecomp<G>, // h^alpha^i
+    srs_powers_beta_table: &dyn MultiscalarPrecomp<G>,  // h^beta^i
+    srs_powers_len: usize,
+    poly: DensePolynomial<G::Scalar>,
+    eval_poly: G::Scalar,
+    kzg_challenge: &G::Scalar,
+) -> Result<KZGOpening<G>, SynthesisError> {
     let mut neg_kzg_challenge = *kzg_challenge;
     neg_kzg_challenge.negate();
 
+    if poly.coeffs().len() != srs_powers_len {
+        return Err(SynthesisError::MalformedSrs);
+    }
+
     // f_v(X) - f_v(z) / (X - z)
-    let quotient_polynomial = &(&vkey_poly - &DensePolynomial::from_coeffs(vec![vkey_poly_z]))
+    let quotient_polynomial = &(&poly - &DensePolynomial::from_coeffs(vec![eval_poly]))
         / &(DensePolynomial::from_coeffs(vec![neg_kzg_challenge, G::Scalar::one()]));
 
     let quotient_polynomial_coeffs = quotient_polynomial.into_coeffs();
@@ -396,7 +462,6 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
         res.mul_assign(&add!(F::one(), &mul!(*x, &power_zr)));
         power_zr.mul_assign(&power_zr.clone());
     }
-
     res
 }
 
@@ -412,6 +477,7 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
 //
 // This method expects the coefficients in reverse order so transcript[i] =
 // x_{l-j}.
+// f(Y) = Y^n * \prod (1 + x_{l-j-1} (r_shiftY^{2^j}))
 fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: &F) -> Vec<F> {
     let mut coefficients = vec![F::one()];
     let mut power_2_r = *r_shift;

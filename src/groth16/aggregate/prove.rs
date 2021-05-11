@@ -20,6 +20,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     srs: &ProverSRS<E>,
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError> {
+    if proofs.len() < 2 {
+        return Err(SynthesisError::MalformedProofs(
+            "aggregating less than 2 proofs is not allowed".to_string(),
+        ));
+    }
     if !proofs.len().is_power_of_two() {
         return Err(SynthesisError::NonPowerOfTwo);
     }
@@ -41,7 +46,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let refa = &a;
     let refb = &b;
     let refc = &c;
-    par! {
+    try_par! {
         let com_ab = commit::pair::<E>(&srs.vkey, &srs.wkey, refa, refb),
         let com_c = commit::single_g1::<E>(&srs.vkey, refc)
     };
@@ -70,11 +75,11 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .collect::<Vec<_>>();
     let refb_r = &b_r;
     // w^{r^{-1}}
-    let wkey_r_inv = srs.wkey.scale(&r_inv);
+    let wkey_r_inv = srs.wkey.scale(&r_inv)?;
 
     // we prove tipp and mipp using the same recursive loop
     let proof = prove_tipp_mipp::<E>(&srs, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
-    par! {
+    try_par! {
         // compute A * B^r for the verifier
         let ip_ab = inner_product::pairing::<E>(&refa, &refb_r),
         // compute C^r for the verifier
@@ -82,7 +87,7 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     };
 
     debug_assert!({
-        let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r);
+        let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r).unwrap();
         com_ab == computed_com_ab
     });
 
@@ -109,13 +114,10 @@ fn prove_tipp_mipp<E: Engine>(
     wkey: &WKey<E>, // scaled key w^r^-1
     r_vec: &[E::Fr],
 ) -> Result<TippMippProof<E>, SynthesisError> {
-    if !a.len().is_power_of_two() || a.len() != b.len() {
-        return Err(SynthesisError::MalformedProofs);
-    }
     let r_shift = r_vec[1].clone();
     // Run GIPA
     let (proof, mut challenges, mut challenges_inv) =
-        gipa_tipp_mipp::<E>(a, b, c, &srs.vkey, &wkey, r_vec);
+        gipa_tipp_mipp::<E>(a, b, c, &srs.vkey, &wkey, r_vec)?;
 
     // Prove final commitment keys are wellformed
     // we reverse the transcript so the polynomial in kzg opening is constructed
@@ -172,7 +174,7 @@ fn gipa_tipp_mipp<E: Engine>(
     vkey: &VKey<E>,
     wkey: &WKey<E>, // scaled key w^r^-1
     r: &[E::Fr],
-) -> (GipaProof<E>, Vec<E::Fr>, Vec<E::Fr>) {
+) -> Result<(GipaProof<E>, Vec<E::Fr>, Vec<E::Fr>), SynthesisError> {
     // the values of vectors A and B rescaled at each step of the loop
     let (mut m_a, mut m_b) = (a.to_vec(), b.to_vec());
     // the values of vectors C and r rescaled at each step of the loop
@@ -213,7 +215,7 @@ fn gipa_tipp_mipp<E: Engine>(
         let (rc_left, rc_right) = (&c_left, &c_right);
         let (rr_left, rr_right) = (&r_left, &r_right);
         // See section 3.3 for paper version with equivalent names
-        par! {
+        try_par! {
             // TIPP part
             let tab_l = commit::pair::<E>(&rvk_left, &rwk_right, &ra_right, &rb_left),
             let tab_r = commit::pair::<E>(&rvk_right, &rwk_left, &ra_left, &rb_right),
@@ -279,9 +281,9 @@ fn gipa_tipp_mipp<E: Engine>(
         m_r.resize(len, E::Fr::zero()); // shrink to new size
 
         // v_left + v_right^x^-1
-        vkey = vk_left.compress(&vk_right, &c_inv);
+        vkey = vk_left.compress(&vk_right, &c_inv)?;
         // w_left + w_right^x
-        wkey = wk_left.compress(&wk_right, &c);
+        wkey = wk_left.compress(&wk_right, &c)?;
 
         comms_ab.push((tab_l, tab_r));
         comms_c.push((tuc_l, tuc_r));
@@ -298,7 +300,7 @@ fn gipa_tipp_mipp<E: Engine>(
 
     let (final_a, final_b, final_c, final_r) = (m_a[0], m_b[0], m_c[0], m_r[0]);
     let (final_vkey, final_wkey) = (vkey.first(), wkey.first());
-    (
+    Ok((
         GipaProof {
             nproofs: a.len() as u32, // TODO: ensure u32
             comms_ab,
@@ -314,7 +316,7 @@ fn gipa_tipp_mipp<E: Engine>(
         },
         challenges,
         challenges_inv,
-    )
+    ))
 }
 
 fn prove_commitment_v<G: CurveAffine>(

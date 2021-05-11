@@ -30,6 +30,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
     proof: &AggregateProof<E>,
 ) -> Result<bool, SynthesisError> {
     info!("verify_aggregate_proof");
+    proof.parsing_check()?;
 
     // Random linear combination of proofs
     let r = oracle!(
@@ -163,8 +164,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
 
     let res = pairing_checks.verify();
     info!("aggregate verify done");
-
-    Ok(res)
+    res
 }
 
 /// verify_tipp_mipp returns a pairing equation to check the tipp proof.  $r$ is
@@ -259,17 +259,20 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
         // U = e(A,v2)
         let _check_u = pairing_checks.merge_miller_inputs(&[(final_c,&fvkey.1)],final_uc)
     };
-
-    debug!(
-        "TIPP verify: parallel checks before merge: {}ms",
-        now.elapsed().as_millis(),
-    );
-
-    let b = final_z == final_res.zc;
-    // only check that doesn't require pairing so we can give a tuple that will
-    // render the equation wrong in case it's false
-    if !b {
-        pairing_checks.invalidate();
+    match final_z {
+        Err(e) => pairing_checks.report_err(e),
+        Ok(z) => {
+            debug!(
+                "TIPP verify: parallel checks before merge: {}ms",
+                now.elapsed().as_millis(),
+            );
+            let b = z == final_res.zc;
+            // only check that doesn't require pairing so we can give a tuple
+            // that will render the equation wrong in case it's false
+            if !b {
+                pairing_checks.invalidate();
+            }
+        }
     }
 }
 

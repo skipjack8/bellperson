@@ -6,6 +6,7 @@ macro_rules! oracle {
     // https://fromherotozero.dev/blog/introduction-to-rust-macros/
     ( $y:expr, $( $x:expr), * ) => { {
         let mut counter_nonce: usize = 0;
+        let one = E::Fr::one();
         let r = loop {
             counter_nonce += 1;
             let mut hash_input = Vec::new();
@@ -16,6 +17,9 @@ macro_rules! oracle {
             )*
             let d = &Sha256::digest(&hash_input);
             if let Some(c) = E::Fr::from_random_bytes(&d) {
+                if c == one {
+                    continue;
+                }
                 if let Some(_) = c.inverse() {
                     break c;
                 }
@@ -24,6 +28,25 @@ macro_rules! oracle {
         r
     }};
 }
+
+macro_rules! try_par {
+    ($(let $name:ident = $f:expr),+) => {
+        $(
+            let mut $name = None;
+        )+
+            rayon::scope(|s| {
+                $(
+                    let $name = &mut $name;
+                    s.spawn(move |_| {
+                        *$name = Some($f);
+                    });)+
+            });
+        $(
+            let $name = $name.unwrap()?;
+        )+
+    };
+}
+
 macro_rules! par {
     ($(let $name:ident = $f:expr),+) => {
         $(

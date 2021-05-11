@@ -5,7 +5,8 @@ use groupy::{CurveAffine, CurveProjective, EncodedPoint};
 use serde::{Deserialize, Serialize};
 
 use crate::bls::{Compress, Engine};
-use crate::groth16::aggregate::commit;
+use crate::groth16::aggregate::{commit, srs};
+use crate::SynthesisError;
 
 /// AggregateProof contains all elements to verify n aggregated Groth16 proofs
 /// using inner pairing product arguments. This proof can be created by any
@@ -47,6 +48,41 @@ impl<E: Engine> PartialEq for AggregateProof<E> {
 }
 
 impl<E: Engine> AggregateProof<E> {
+    /// Performs some high level checks on the length of vectors and others to
+    /// make sure all items in the proofs are consistent with each other.
+    pub fn parsing_check(&self) -> Result<(), SynthesisError> {
+        let gipa = &self.tmipp.gipa;
+        // 1. Check length of the proofs
+        if gipa.nproofs < 2 || gipa.nproofs as usize > srs::MAX_SRS_SIZE {
+            return Err(SynthesisError::MalformedProofs(
+                "invalid nproofs field".to_string(),
+            ));
+        }
+        // 2. Check if it's a power of two
+        if !gipa.nproofs.is_power_of_two() {
+            return Err(SynthesisError::MalformedProofs(
+                "number of proofs is not a power of two".to_string(),
+            ));
+        }
+        // 3. Check all vectors are of the same length and of the correct length
+        let ref_len = gipa.comms_ab.len();
+        let good_len = ref_len == (gipa.nproofs as f32).log2().ceil() as usize;
+        if !good_len {
+            return Err(SynthesisError::MalformedProofs(
+                "proof vectors have not indicated size".to_string(),
+            ));
+        }
+
+        let all_same = ref_len == gipa.comms_c.len()
+            && ref_len == gipa.z_ab.len()
+            && ref_len == gipa.z_c.len();
+        if !all_same {
+            return Err(SynthesisError::MalformedProofs(
+                "proofs vectors don't have the same size".to_string(),
+            ));
+        }
+        Ok(())
+    }
     /// Writes the agggregated proof into the provided buffer.
     pub fn write(&self, mut out: impl Write) -> std::io::Result<()> {
         // com_ab
@@ -234,6 +270,12 @@ impl<E: Engine> GipaProof<E> {
         let mut buffer = 0u32.to_le_bytes();
         source.read_exact(&mut buffer)?;
         let nproofs = u32::from_le_bytes(buffer);
+        if nproofs < 2 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "number of proofs is invalid",
+            ));
+        }
 
         let log_proofs = Self::log_proofs(nproofs as usize);
 
@@ -387,8 +429,7 @@ mod tests {
     use crate::bls::{Bls12, Fr, G1Affine, G1Projective, G2Affine, G2Projective};
     use ff::Field;
 
-    #[test]
-    fn test_read_write() {
+    fn fake_proof() -> AggregateProof<Bls12> {
         // create pairing, as pairing results can be compressed
         let p = G1Projective::one().into_affine();
         let q = G2Projective::one().into_affine();
@@ -420,12 +461,39 @@ mod tests {
                 wkey_opening: (G1Affine::one(), G1Affine::one()),
             },
         };
+        proof
+    }
 
+    #[test]
+    fn test_proof_io() {
+        let proof = fake_proof();
         let mut buffer = Vec::new();
         proof.write(&mut buffer).unwrap();
         assert_eq!(buffer.len(), 8_244);
 
         let out = AggregateProof::<Bls12>::read(std::io::Cursor::new(&buffer)).unwrap();
         assert_eq!(proof, out);
+    }
+
+    #[test]
+    fn test_proof_check() {
+        let p = G1Projective::one().into_affine();
+        let q = G2Projective::one().into_affine();
+        let a = Bls12::pairing(p, q);
+
+        let mut proof = fake_proof();
+        proof.parsing_check().expect("proof should be valid");
+
+        let oldn = proof.tmipp.gipa.nproofs;
+        proof.tmipp.gipa.nproofs = 14;
+        proof.parsing_check().expect_err("proof should be invalid");
+        proof.tmipp.gipa.nproofs = oldn;
+
+        proof
+            .tmipp
+            .gipa
+            .comms_ab
+            .append(&mut vec![((a, a), (a, a))]);
+        proof.parsing_check().expect_err("Proof should be invalid");
     }
 }

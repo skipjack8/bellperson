@@ -491,6 +491,7 @@ fn test_groth16_aggregation() {
     }
 
     // 1. Valid proofs
+    println!("Aggregating {} Groth16 proofs...", proofs.len());
     let mut aggregate_proof =
         aggregate_proofs::<Bls12>(&pk, &proofs).expect("failed to aggregate proofs");
     let result = verify_aggregate_proof(&vk, &pvk, &mut rng, &statements, &aggregate_proof)

@@ -13,6 +13,10 @@ use std::convert::TryFrom;
 use std::io::{self, Error, ErrorKind, Read, Write};
 use std::mem::size_of;
 
+/// Maximum size of the generic SRS constructed from Filecoin and Zcash power of
+/// taus.
+pub const MAX_SRS_SIZE: usize = 2 << 19;
+
 /// It contains the maximum number of raw elements of the SRS needed to aggregate and verify
 /// Groth16 proofs. One can derive specialized prover and verifier key for _specific_ size of
 /// aggregations by calling `srs.specialize(n)`. The specialized prover key also contains
@@ -203,6 +207,12 @@ impl<E: Engine> GenericSRS<E> {
         fn mmap_read_vec<G: CurveAffine>(mmap: &Mmap, offset: &mut usize) -> io::Result<Vec<G>> {
             let point_len = size_of::<G::Compressed>();
             let vec_len = read_length(mmap, offset)?;
+            if vec_len > MAX_SRS_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid SRS vector length {}", vec_len,),
+                ));
+            }
             let vec: Vec<G> = (0..vec_len)
                 .into_par_iter()
                 .map(|i| {
@@ -330,6 +340,12 @@ fn write_point<G: CurveAffine, W: Write>(w: &mut W, p: &G) -> io::Result<()> {
 
 fn read_vec<G: CurveAffine, R: Read>(r: &mut R) -> io::Result<Vec<G>> {
     let vector_len = r.read_u32::<BigEndian>()? as usize;
+    if vector_len > MAX_SRS_SIZE {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid SRS vector length {}", vector_len),
+        ));
+    }
     let mut data = vec![G::Compressed::empty(); vector_len];
     for encoded in &mut data {
         r.read_exact(encoded.as_mut())?;
@@ -342,4 +358,40 @@ fn read_vec<G: CurveAffine, R: Read>(r: &mut R) -> io::Result<Vec<G>> {
                 .and_then(|s| Ok(s))
         })
         .collect::<io::Result<Vec<_>>>()?)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::bls::Bls12;
+    use rand_core::SeedableRng;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_srs_invalid_length() {
+        let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);
+        let size = 8;
+        let srs = setup_fake_srs::<Bls12, _>(&mut rng, size);
+        let vec_len = srs.g_alpha_powers.len();
+        let mut buffer = Vec::new();
+        srs.write(&mut buffer).expect("writing to buffer failed");
+        // tryingout normal operations
+        GenericSRS::<Bls12>::read(&mut Cursor::new(&buffer)).expect("can't read the srs");
+
+        // trying to read the first size
+        let read_size = Cursor::new(&buffer).read_u32::<BigEndian>().unwrap() as usize;
+        assert_eq!(vec_len, read_size);
+
+        // remove the previous size from the bufer - u32 = 4 bytes
+        // and replace the size by appending the rest
+        let mut new_buffer = Vec::new();
+        let invalid_size = MAX_SRS_SIZE + 1;
+        new_buffer
+            .write_u32::<BigEndian>(invalid_size as u32)
+            .expect("failed to write invalid size");
+        buffer.drain(0..4);
+        new_buffer.append(&mut buffer);
+        GenericSRS::<Bls12>::read(&mut Cursor::new(&new_buffer))
+            .expect_err("this should have failed");
+    }
 }

@@ -60,7 +60,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     transcript.append(&tov!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1));
     transcript.append(&tov!(&public_inputs.iter().flatten().collect::<Vec<_>>()));
     let r: E::Fr = transcript.derive_challenge();
-
     // 1,r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
     // 1,r^-1, r^-2, r^-3
@@ -76,18 +75,20 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .map(|(bi, ri)| mul!(bi.into_projective(), ri.into_repr()).into_affine())
         .collect::<Vec<_>>();
     let refb_r = &b_r;
+    let refr_vec = &r_vec;
+    try_par! {
+        // compute A * B^r for the verifier
+        let ip_ab = inner_product::pairing::<E>(&refa, &refb_r),
+        // compute C^r for the verifier
+        let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&refc, &refr_vec)
+    };
+    transcript.append(&tov!(&ip_ab, &agg_c));
+
     // w^{r^{-1}}
     let wkey_r_inv = srs.wkey.scale(&r_inv)?;
 
     // we prove tipp and mipp using the same recursive loop
     let proof = prove_tipp_mipp::<E>(&srs, &mut transcript, &a, &b_r, &c, &wkey_r_inv, &r_vec)?;
-    try_par! {
-        // compute A * B^r for the verifier
-        let ip_ab = inner_product::pairing::<E>(&refa, &refb_r),
-        // compute C^r for the verifier
-        let agg_c = inner_product::multiexponentiation::<E::G1Affine>(&refc, &r_vec)
-    };
-
     debug_assert!({
         let computed_com_ab = commit::pair::<E>(&srs.vkey, &wkey_r_inv, &a, &b_r).unwrap();
         com_ab == computed_com_ab

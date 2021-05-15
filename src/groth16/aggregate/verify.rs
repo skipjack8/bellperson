@@ -50,6 +50,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
     transcript.append(&tov!(&public_inputs.iter().flatten().collect::<Vec<_>>()));
     let r: E::Fr = transcript.derive_challenge();
 
+    transcript.append(&tov!(&proof.ip_ab, &proof.agg_c));
+
     let pairing_checks = PairingChecks::new(rng);
     let pairing_checks_copy = &pairing_checks;
 

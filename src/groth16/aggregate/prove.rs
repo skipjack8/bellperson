@@ -35,7 +35,6 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     if !srs.has_correct_len(proofs.len()) {
         return Err(SynthesisError::MalformedSrs);
     }
-    let mut transcript = Transcript::new("snarkpack");
     // We first commit to A B and C - these commitments are what the verifier
     // will use later to verify the TIPP and MIPP proofs
     par! {
@@ -56,10 +55,16 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     };
 
     // Derive a random scalar to perform a linear combination of proofs
+    let mut transcript = Transcript::new("snarkpack");
     transcript.domain_sep("random-r");
-    transcript.append_vec(&[&com_ab.0, &com_ab.1, &com_c.0, &com_c.1])?;
-    transcript.append_vec(public_inputs.iter().flatten())?;
+    transcript.append(&tov!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1));
+
+    let i: E::Fr = transcript.derive_challenge();
+    println!("\t --> after commitments {:?}", i,);
+
+    transcript.append(&tov!(&public_inputs.iter().flatten().collect::<Vec<_>>()));
     let r: E::Fr = transcript.derive_challenge();
+    println!("PROVER CHALLENGE R {:?}", r);
 
     // 1,r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
@@ -132,10 +137,16 @@ fn prove_tipp_mipp<E: Engine>(
 
     // KZG challenge point
     transcript.domain_sep("random-z");
-    transcript.append(&challenges[0]);
-    transcript.append_vec(&[proof.final_vkey.0, &proof.final_vkey.1])?;
-    transcript.append_vec(&[proof.final_wkey.0, &proof.final_wkey.1])?;
+    let input = tov!(
+        &challenges[0],
+        &proof.final_vkey.0,
+        &proof.final_vkey.1,
+        &proof.final_wkey.0,
+        &proof.final_wkey.1
+    );
+    transcript.append(&input);
     let z: E::Fr = transcript.derive_challenge();
+    println!("PROVER CHALLENGER Z {:?}", z);
 
     // Complete KZG proofs
     par! {
@@ -238,12 +249,13 @@ fn gipa_tipp_mipp<E: Engine>(
 
         // Fiat-Shamir challenge
         // combine both TIPP and MIPP transcript
-        transcript.append_vec(&[&zab_l.0, &zab_l.1, &zab_r.0, &zab_r.1])?;
-        transcript.append_vec(&[&zc_l, &zc_r])?;
-        transcript.append_vec(&[
-            &tab_l.0, &tab_l.1, &tab_r.0, &tab_r.1, &tuc_l.0, &tuc_l.1, &tuc_r.0, &tuc_r.1,
-        ])?;
+        let input = tov!(
+            &zab_l, &zab_r, &zab_r, &zc_l, &zc_r, &tab_l.0, &tab_l.1, &tab_r.0, &tab_r.1, &tuc_l.0,
+            &tuc_l.1, &tuc_r.0, &tuc_r.1
+        );
+        transcript.append(&input);
         let c_inv: E::Fr = transcript.derive_challenge();
+        println!("PROVER CHALLENGE GIPA {:?}", c_inv);
 
         // Optimization for multiexponentiation to rescale G2 elements with
         // 128-bit challenge Swap 'c' and 'c_inv' since can't control bit size

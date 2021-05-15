@@ -37,13 +37,22 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
         }
     }
 
-    let mut transcript = Transcript::new("snarpack");
     // Random linear combination of proofs
+    let mut transcript = Transcript::new("snarpack");
     transcript.domain_sep("random-r");
-    transcript.append_vec(&[&proof.com_ab.0, &proof.com_ab.1])?;
-    transcript.append_vec(&[proof.com_c.0, &proof.com_c.1])?;
-    transcript.append_vec(&public_inputs.iter().flatten())?;
+    transcript.append(&tov!(
+        &proof.com_ab.0,
+        &proof.com_ab.1,
+        &proof.com_c.0,
+        &proof.com_c.1
+    ));
+
+    let i: E::Fr = transcript.derive_challenge();
+    println!("\t --> after commitments {:?}", i,);
+
+    transcript.append(&tov!(&public_inputs.iter().flatten().collect::<Vec<_>>()));
     let r: E::Fr = transcript.derive_challenge();
+    println!("VERIFIER CHALLENGE R {:?}", r);
 
     let pairing_checks = PairingChecks::new(rng);
     let pairing_checks_copy = &pairing_checks;
@@ -194,14 +203,16 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
     let fwkey = proof.tmipp.gipa.final_wkey;
     // KZG challenge point
     transcript.domain_sep("random-z");
-    transcript.append(&challenges.first().unwrap());
-    transcript
-        .append_vec(&[&fvkey.0, &fvkey.1])
-        .or_else(|e| pairing_checks.report_err(SynthesisError::IoError(e)));
-    transcript
-        .append_vec(&[&fwkey.0, &fwkey.1])
-        .or_else(|e| pairing_checks.report_err(SynthesisError::IoError(e)));
+    let input = tov!(
+        &challenges.first().unwrap(),
+        &fvkey.0,
+        &fvkey.1,
+        &fwkey.0,
+        &fwkey.1
+    );
+    transcript.append(&input);
     let c: E::Fr = transcript.derive_challenge();
+    println!("VERIFIER CHALLENGE Z {:?}", c);
 
     // we take reference so they are able to be copied in the par! macro
     let final_a = &proof.tmipp.gipa.final_a;
@@ -319,12 +330,13 @@ fn gipa_verify_tipp_mipp<E: Engine>(
         let (tc_l, tc_r) = comm_c;
         let (zc_l, zc_r) = z_c;
         // Fiat-Shamir challenge
-        transcript.append_vec(&[&zab_l.0, &zab_l.1, &zab_r, &zab_r.0, &zab_r.1])?;
-        transcript.append_vec(&[&zc_l, &zc_r])?;
-        transcript.append_vec(&[
-            &tab_l.0, &tab_l.1, &tab_r.0, &tab_r.1, &tc_l.0, &tc_l.1, &tc_r.0, &tc_r.1,
-        ])?;
+        let input = tov!(
+            &zab_l, &zab_r, &zc_l, &zc_r, &tab_l.0, &tab_l.1, &tab_r.0, &tab_r.1, &tc_l.0, &tc_l.1,
+            &tc_r.0, &tc_r.1
+        );
+        transcript.append(&input);
         let c_inv: E::Fr = transcript.derive_challenge();
+        println!("VERIFIER CHALLENGE GIPA {:?}", c_inv);
         let c = c_inv.inverse().unwrap();
         challenges.push(c);
         challenges_inv.push(c_inv);

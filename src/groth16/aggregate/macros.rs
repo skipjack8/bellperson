@@ -1,31 +1,11 @@
-/// returns an Fr element derived from sha256 hash of all elements that gets
-/// passed to the macro. It runs in a loop in case the Fr element doesn't have
-/// an inverse and prepends a monotically increasing counter before
-/// each hash input.
-macro_rules! oracle {
+macro_rules! tov {
     // https://fromherotozero.dev/blog/introduction-to-rust-macros/
-    ( $y:expr, $( $x:expr), * ) => { {
-        let mut counter_nonce: usize = 0;
-        let one = E::Fr::one();
-        let r = loop {
-            counter_nonce += 1;
+    ( $( $x:expr), * ) => {{
             let mut hash_input = Vec::new();
-            hash_input.append(&mut $y.as_bytes().to_vec());
-            hash_input.extend_from_slice(&counter_nonce.to_be_bytes()[..]);
             $(
                 bincode::serialize_into(&mut hash_input, $x).expect("vec");
             )*
-            let d = &Sha256::digest(&hash_input);
-            if let Some(c) = E::Fr::from_random_bytes(&d) {
-                if c == one {
-                    continue;
-                }
-                if let Some(_) = c.inverse() {
-                    break c;
-                }
-            }
-        };
-        r
+            hash_input
     }};
 }
 

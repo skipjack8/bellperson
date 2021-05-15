@@ -58,13 +58,8 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
     let mut transcript = Transcript::new("snarkpack");
     transcript.domain_sep("random-r");
     transcript.append(&tov!(&com_ab.0, &com_ab.1, &com_c.0, &com_c.1));
-
-    let i: E::Fr = transcript.derive_challenge();
-    println!("\t --> after commitments {:?}", i,);
-
     transcript.append(&tov!(&public_inputs.iter().flatten().collect::<Vec<_>>()));
     let r: E::Fr = transcript.derive_challenge();
-    println!("PROVER CHALLENGE R {:?}", r);
 
     // 1,r, r^2, r^3, r^4 ...
     let r_vec = structured_scalar_power(proofs.len(), &r);
@@ -146,7 +141,6 @@ fn prove_tipp_mipp<E: Engine>(
     );
     transcript.append(&input);
     let z: E::Fr = transcript.derive_challenge();
-    println!("PROVER CHALLENGER Z {:?}", z);
 
     // Complete KZG proofs
     par! {
@@ -202,6 +196,8 @@ fn gipa_tipp_mipp<E: Engine>(
     let mut challenges_inv: Vec<E::Fr> = Vec::new();
 
     transcript.domain_sep("gipa");
+    let i: E::Fr = transcript.derive_challenge();
+
     while m_a.len() > 1 {
         // recursive step
         // Recurse with problem of half size
@@ -250,12 +246,11 @@ fn gipa_tipp_mipp<E: Engine>(
         // Fiat-Shamir challenge
         // combine both TIPP and MIPP transcript
         let input = tov!(
-            &zab_l, &zab_r, &zab_r, &zc_l, &zc_r, &tab_l.0, &tab_l.1, &tab_r.0, &tab_r.1, &tuc_l.0,
+            &zab_l, &zab_r, &zc_l, &zc_r, &tab_l.0, &tab_l.1, &tab_r.0, &tab_r.1, &tuc_l.0,
             &tuc_l.1, &tuc_r.0, &tuc_r.1
         );
         transcript.append(&input);
         let c_inv: E::Fr = transcript.derive_challenge();
-        println!("PROVER CHALLENGE GIPA {:?}", c_inv);
 
         // Optimization for multiexponentiation to rescale G2 elements with
         // 128-bit challenge Swap 'c' and 'c_inv' since can't control bit size

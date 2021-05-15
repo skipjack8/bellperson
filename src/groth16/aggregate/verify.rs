@@ -38,7 +38,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
     }
 
     // Random linear combination of proofs
-    let mut transcript = Transcript::new("snarpack");
+    let mut transcript = Transcript::new("snarkpack");
     transcript.domain_sep("random-r");
     transcript.append(&tov!(
         &proof.com_ab.0,
@@ -47,12 +47,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
         &proof.com_c.1
     ));
 
-    let i: E::Fr = transcript.derive_challenge();
-    println!("\t --> after commitments {:?}", i,);
-
     transcript.append(&tov!(&public_inputs.iter().flatten().collect::<Vec<_>>()));
     let r: E::Fr = transcript.derive_challenge();
-    println!("VERIFIER CHALLENGE R {:?}", r);
 
     let pairing_checks = PairingChecks::new(rng);
     let pairing_checks_copy = &pairing_checks;
@@ -212,7 +208,6 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
     );
     transcript.append(&input);
     let c: E::Fr = transcript.derive_challenge();
-    println!("VERIFIER CHALLENGE Z {:?}", c);
 
     // we take reference so they are able to be copied in the par! macro
     let final_a = &proof.tmipp.gipa.final_a;
@@ -317,6 +312,7 @@ fn gipa_verify_tipp_mipp<E: Engine>(
     let mut challenges_inv = Vec::new();
 
     transcript.domain_sep("gipa");
+
     // We first generate all challenges as this is the only consecutive process
     // that can not be parallelized then we scale the commitments in a
     // parallelized way
@@ -336,7 +332,6 @@ fn gipa_verify_tipp_mipp<E: Engine>(
         );
         transcript.append(&input);
         let c_inv: E::Fr = transcript.derive_challenge();
-        println!("VERIFIER CHALLENGE GIPA {:?}", c_inv);
         let c = c_inv.inverse().unwrap();
         challenges.push(c);
         challenges_inv.push(c_inv);

@@ -68,5 +68,11 @@ mod test {
         t.domain_sep("testing domain2");
         let c2: Fr = t.derive_challenge();
         assert!(c1 != c2);
+
+        let mut t2 = Transcript::new("test");
+        t2.domain_sep("testing domain1");
+        t2.append(&input);
+        let c12 = t2.derive_challenge();
+        assert_eq!(c1, c12);
     }
 }

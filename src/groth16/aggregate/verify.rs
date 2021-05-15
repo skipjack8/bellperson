@@ -10,7 +10,7 @@ use sha2::Sha256;
 use super::{
     accumulator::PairingChecks, inner_product,
     prove::polynomial_evaluation_product_form_from_transcript, structured_scalar_power,
-    AggregateProof, KZGOpening, VerifierSRS,
+    transcript::Transcript, AggregateProof, KZGOpening, VerifierSRS,
 };
 use crate::bls::{Engine, PairingCurveAffine};
 use crate::groth16::{
@@ -31,21 +31,19 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
 ) -> Result<bool, SynthesisError> {
     info!("verify_aggregate_proof");
     proof.parsing_check()?;
-
-    // Random linear combination of proofs
-    let r = oracle!(
-        "randomr".to_string(),
-        &proof.com_ab.0,
-        &proof.com_ab.1,
-        &proof.com_c.0,
-        &proof.com_c.1
-    );
-
     for pub_input in public_inputs {
         if (pub_input.len() + 1) != pvk.ic.len() {
             return Err(SynthesisError::MalformedVerifyingKey);
         }
     }
+
+    let mut transcript = Transcript::new("snarpack");
+    // Random linear combination of proofs
+    transcript.domain_sep("random-r");
+    transcript.append_vec(&[&proof.com_ab.0, &proof.com_ab.1])?;
+    transcript.append_vec(&[proof.com_c.0, &proof.com_c.1])?;
+    transcript.append_vec(&public_inputs.iter().flatten())?;
+    let r: E::Fr = transcript.derive_challenge();
 
     let pairing_checks = PairingChecks::new(rng);
     let pairing_checks_copy = &pairing_checks;
@@ -56,6 +54,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
         s.spawn(move |_| {
             let now = Instant::now();
             verify_tipp_mipp::<E, R>(
+                &mut transcript,
                 ip_verifier_srs,
                 proof,
                 &r, // we give the extra r as it's not part of the proof itself - it is simply used on top for the groth16 aggregation
@@ -171,6 +170,7 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
 /// the randomness used to produce a random linear combination of A and B and
 /// used in the MIPP part with C
 fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
+    transcript: &mut Transcript,
     v_srs: &VerifierSRS<E>,
     proof: &AggregateProof<E>,
     r_shift: &E::Fr,
@@ -179,7 +179,7 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
     info!("verify with srs shift");
     let now = Instant::now();
     // (T,U), Z for TIPP and MIPP  and all challenges
-    let (final_res, mut challenges, mut challenges_inv) = gipa_verify_tipp_mipp(&proof);
+    let (final_res, mut challenges, mut challenges_inv) = gipa_verify_tipp_mipp(transcript, &proof);
     debug!(
         "TIPP verify: gipa verify tipp {}ms",
         now.elapsed().as_millis()
@@ -193,14 +193,15 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
     let fvkey = proof.tmipp.gipa.final_vkey;
     let fwkey = proof.tmipp.gipa.final_wkey;
     // KZG challenge point
-    let c = oracle!(
-        "randomz".to_string(),
-        &challenges.first().unwrap(),
-        &fvkey.0,
-        &fvkey.1,
-        &fwkey.0,
-        &fwkey.1
-    );
+    transcript.domain_sep("random-z");
+    transcript.append(&challenges.first().unwrap());
+    transcript
+        .append_vec(&[&fvkey.0, &fvkey.1])
+        .or_else(|e| pairing_checks.report_err(SynthesisError::IoError(e)));
+    transcript
+        .append_vec(&[&fwkey.0, &fwkey.1])
+        .or_else(|e| pairing_checks.report_err(SynthesisError::IoError(e)));
+    let c: E::Fr = transcript.derive_challenge();
 
     // we take reference so they are able to be copied in the par! macro
     let final_a = &proof.tmipp.gipa.final_a;
@@ -286,6 +287,7 @@ fn verify_tipp_mipp<E: Engine, R: rand::RngCore + Send>(
 /// MIPP share the same challenges however, enabling to re-use common operations
 /// between them, such as the KZG proof for commitment keys.
 fn gipa_verify_tipp_mipp<E: Engine>(
+    transcript: &mut Transcript,
     proof: &AggregateProof<E>,
 ) -> (GipaTUZ<E>, Vec<E::Fr>, Vec<E::Fr>) {
     info!("gipa verify TIPP");
@@ -303,8 +305,7 @@ fn gipa_verify_tipp_mipp<E: Engine>(
     let mut challenges = Vec::new();
     let mut challenges_inv = Vec::new();
 
-    let default_transcript = E::Fr::zero();
-
+    transcript.domain_sep("gipa");
     // We first generate all challenges as this is the only consecutive process
     // that can not be parallelized then we scale the commitments in a
     // parallelized way
@@ -318,23 +319,12 @@ fn gipa_verify_tipp_mipp<E: Engine>(
         let (tc_l, tc_r) = comm_c;
         let (zc_l, zc_r) = z_c;
         // Fiat-Shamir challenge
-        let transcript = challenges.last().unwrap_or(&default_transcript);
-        let c_inv = oracle!(
-            "randomgipa".to_string(),
-            &transcript,
-            &zab_l,
-            &zab_r,
-            &zc_l,
-            &zc_r,
-            &tab_l.0,
-            &tab_l.1,
-            &tab_r.0,
-            &tab_r.1,
-            &tc_l.0,
-            &tc_l.1,
-            &tc_r.0,
-            &tc_r.1
-        );
+        transcript.append_vec(&[&zab_l.0, &zab_l.1, &zab_r, &zab_r.0, &zab_r.1])?;
+        transcript.append_vec(&[&zc_l, &zc_r])?;
+        transcript.append_vec(&[
+            &tab_l.0, &tab_l.1, &tab_r.0, &tab_r.1, &tc_l.0, &tc_l.1, &tc_r.0, &tc_r.1,
+        ])?;
+        let c_inv: E::Fr = transcript.derive_challenge();
         let c = c_inv.inverse().unwrap();
         challenges.push(c);
         challenges_inv.push(c_inv);

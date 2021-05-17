@@ -309,8 +309,8 @@ fn test_groth16_bench() {
             // Aggregate proofs using inner product proofs
             let start = Instant::now();
             println!("\t-Aggregation...");
-            let aggregate_proof =
-                aggregate_proofs::<Bls12>(&pk, &proofs[..i]).expect("failed to aggregate proofs");
+            let aggregate_proof = aggregate_proofs::<Bls12>(&pk, &statements[..i], &proofs[..i])
+                .expect("failed to aggregate proofs");
             let prover_time = start.elapsed().as_millis();
             println!("\t-Aggregate Verification ...");
 
@@ -493,13 +493,13 @@ fn test_groth16_aggregation() {
     // 1. Valid proofs
     println!("Aggregating {} Groth16 proofs...", proofs.len());
     let mut aggregate_proof =
-        aggregate_proofs::<Bls12>(&pk, &proofs).expect("failed to aggregate proofs");
+        aggregate_proofs::<Bls12>(&pk, &statements, &proofs).expect("failed to aggregate proofs");
     let result = verify_aggregate_proof(&vk, &pvk, &mut rng, &statements, &aggregate_proof)
         .expect("these proofs should have been valid");
     assert!(result);
 
     // 2. Non power of two
-    let err = aggregate_proofs::<Bls12>(&pk, &proofs[0..NUM_PROOFS - 1]).unwrap_err();
+    let err = aggregate_proofs::<Bls12>(&pk, &statements, &proofs[0..NUM_PROOFS - 1]).unwrap_err();
     assert!(match err {
         SynthesisError::NonPowerOfTwo => true,
         _ => false,
@@ -508,8 +508,8 @@ fn test_groth16_aggregation() {
     // 3. aggregate invalid proof content (random A, B, and C)
     let old_a = proofs[0].a.clone();
     proofs[0].a = <Bls12 as Engine>::G1::random(&mut rng).into_affine();
-    let invalid_agg =
-        aggregate_proofs::<Bls12>(&pk, &proofs).expect("I should be able to aggregate");
+    let invalid_agg = aggregate_proofs::<Bls12>(&pk, &statements, &proofs)
+        .expect("I should be able to aggregate");
     let res = verify_aggregate_proof(&vk, &pvk, &mut rng, &statements, &invalid_agg)
         .expect("no synthesis");
     assert!(res == false);
@@ -517,8 +517,8 @@ fn test_groth16_aggregation() {
 
     let old_b = proofs[0].b.clone();
     proofs[0].b = <Bls12 as Engine>::G2::random(&mut rng).into_affine();
-    let invalid_agg =
-        aggregate_proofs::<Bls12>(&pk, &proofs).expect("I should be able to aggregate");
+    let invalid_agg = aggregate_proofs::<Bls12>(&pk, &statements, &proofs)
+        .expect("I should be able to aggregate");
     let res = verify_aggregate_proof(&vk, &pvk, &mut rng, &statements, &invalid_agg)
         .expect("no synthesis");
     assert!(res == false);
@@ -526,8 +526,8 @@ fn test_groth16_aggregation() {
 
     let old_c = proofs[0].c.clone();
     proofs[0].c = <Bls12 as Engine>::G1::random(&mut rng).into_affine();
-    let invalid_agg =
-        aggregate_proofs::<Bls12>(&pk, &proofs).expect("I should be able to aggregate");
+    let invalid_agg = aggregate_proofs::<Bls12>(&pk, &statements, &proofs)
+        .expect("I should be able to aggregate");
     let res = verify_aggregate_proof(&vk, &pvk, &mut rng, &statements, &invalid_agg)
         .expect("no synthesis");
     assert!(res == false);
@@ -622,7 +622,7 @@ fn test_groth16_aggregation_mimc() {
     let start = Instant::now();
     println!("Aggregating {} Groth16 proofs...", NUM_PROOFS_TO_AGGREGATE);
     let aggregate_proof =
-        aggregate_proofs::<Bls12>(&pk, &proofs).expect("failed to aggregate proofs");
+        aggregate_proofs::<Bls12>(&pk, &images, &proofs).expect("failed to aggregate proofs");
     let prover_time = start.elapsed().as_millis();
 
     println!("Verifying aggregated proof...");

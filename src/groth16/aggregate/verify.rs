@@ -20,6 +20,17 @@ use crate::SynthesisError;
 use std::default::Default;
 use std::time::Instant;
 
+/// Verifies the aggregated proofs thanks to the Groth16 verifying key, the
+/// verifier SRS from the aggregation scheme, all the public inputs of the
+/// proofs and the aggregated proof.
+/// WARNING: This implementation assumes that public inputs are fixed and
+/// constant **before** the aggregation of the proofs happens. In the case of
+/// Filecoin, these public inputs are fixed on chain before an aggregation can
+/// be submitted so this assumption is guaranteed. In the case this assumption
+/// is NOT guaranteed, this library is NOT to be used as is. The reason we
+/// removed this is because of performance issues, for 350 public inputs with
+/// some large number of individual proofs aggregated, it can quickly increase
+/// the verification time of 100ms more.
 pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Send>(
     ip_verifier_srs: &VerifierSRS<E>,
     pvk: &PreparedVerifyingKey<E>,
@@ -43,7 +54,8 @@ pub fn verify_aggregate_proof<E: Engine + std::fmt::Debug, R: rand::RngCore + Se
         .write(&proof.com_ab.1)
         .write(&proof.com_c.0)
         .write(&proof.com_c.1)
-        .write(&public_inputs)
+        // See function comments to see why it is safe
+        //.write(&public_inputs)
         .read_challenge();
 
     transcript.write(&proof.ip_ab).write(&proof.agg_c);

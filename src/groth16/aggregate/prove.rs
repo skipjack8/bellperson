@@ -60,7 +60,9 @@ pub fn aggregate_proofs<E: Engine + std::fmt::Debug>(
         .write(&com_ab.1)
         .write(&com_c.0)
         .write(&com_c.1)
-        .write(&public_inputs)
+        // See verify::verify_aggregate_proof comment to understand why it is
+        // safe.
+        //.write(&public_inputs)
         .read_challenge();
 
     // 1,r, r^2, r^3, r^4 ...

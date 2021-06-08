@@ -17,11 +17,10 @@ use groupy::CurveProjective;
 
 use super::multicore::Worker;
 use super::SynthesisError;
+#[cfg(feature = "gpu")]
 use scheduler_client::ResourceAlloc;
 
 use crate::gpu;
-
-use log::{info, warn};
 
 pub struct EvaluationDomain<E: ScalarEngine, G: Group<E>> {
     coeffs: Vec<G>,
@@ -560,6 +559,7 @@ fn parallel_fft_consistency() {
     test_consistency::<Bls12, _>(rng);
 }
 
+#[cfg(feature = "gpu")]
 pub fn create_fft_kernel<E>(
     _log_d: usize,
     alloc: Option<&ResourceAlloc>,
@@ -567,6 +567,7 @@ pub fn create_fft_kernel<E>(
 where
     E: Engine,
 {
+    use log::{info, warn};
     match gpu::FFTKernel::create(alloc) {
         Ok(k) => {
             info!("GPU FFT kernel instantiated!");

@@ -1,10 +1,9 @@
 use super::{create_proof_batch_priority, create_random_proof_batch_priority};
 use super::{ParameterSource, Proof};
 use crate::bls::Engine;
+use crate::groth16::BellTaskType;
 use crate::{Circuit, SynthesisError};
 use rand_core::RngCore;
-
-use scheduler_client::{Deadline, TaskType};
 
 // Winning/window and tree_builders/hashers use this library. as a general use case, we should pass to
 // the scheduler the deadlines and task types. The deadline is the priority, the sooner the task must be completed
@@ -23,14 +22,30 @@ pub fn create_random_proof_batch_with_type<E, C, R, P: ParameterSource<E>>(
     circuits: Vec<C>,
     params: P,
     rng: &mut R,
-    task_type: Option<TaskType>,
+    task_type: Option<BellTaskType>,
 ) -> Result<Vec<Proof<E>>, SynthesisError>
 where
     E: Engine,
     C: Circuit<E> + Send,
     R: RngCore,
 {
-    create_random_proof_batch_priority::<E, C, R, P>(circuits, params, rng, None, task_type)
+    create_random_proof_batch_priority::<E, C, R, P>(circuits, params, rng, task_type)
+}
+
+pub fn create_random_proof_with_type<E, C, R, P: ParameterSource<E>>(
+    circuit: C,
+    params: P,
+    rng: &mut R,
+    task_type: Option<BellTaskType>,
+) -> Result<Proof<E>, SynthesisError>
+where
+    E: Engine,
+    C: Circuit<E> + Send,
+    R: RngCore,
+{
+    let proofs =
+        create_random_proof_batch_priority::<E, C, R, P>(vec![circuit], params, rng, task_type)?;
+    Ok(proofs.into_iter().next().unwrap())
 }
 
 pub fn create_proof<E, C, P: ParameterSource<E>>(
@@ -43,14 +58,8 @@ where
     E: Engine,
     C: Circuit<E> + Send,
 {
-    let proofs = create_proof_batch_priority::<E, C, P>(
-        vec![circuit],
-        params,
-        vec![r],
-        vec![s],
-        None,
-        None,
-    )?;
+    let proofs =
+        create_proof_batch_priority::<E, C, P>(vec![circuit], params, vec![r], vec![s], None)?;
     Ok(proofs.into_iter().next().unwrap())
 }
 
@@ -65,7 +74,7 @@ where
     R: RngCore,
 {
     let proofs =
-        create_random_proof_batch_priority::<E, C, R, P>(vec![circuit], params, rng, None, None)?;
+        create_random_proof_batch_priority::<E, C, R, P>(vec![circuit], params, rng, None)?;
     Ok(proofs.into_iter().next().unwrap())
 }
 
@@ -79,7 +88,7 @@ where
     E: Engine,
     C: Circuit<E> + Send,
 {
-    create_proof_batch_priority::<E, C, P>(circuits, params, r, s, None, None)
+    create_proof_batch_priority::<E, C, P>(circuits, params, r, s, None)
 }
 
 pub fn create_random_proof_batch<E, C, R, P: ParameterSource<E>>(
@@ -92,85 +101,5 @@ where
     C: Circuit<E> + Send,
     R: RngCore,
 {
-    create_random_proof_batch_priority::<E, C, R, P>(circuits, params, rng, None, None)
-}
-
-pub fn create_proof_in_priority<E, C, P: ParameterSource<E>>(
-    circuit: C,
-    params: P,
-    r: E::Fr,
-    s: E::Fr,
-) -> Result<Proof<E>, SynthesisError>
-where
-    E: Engine,
-    C: Circuit<E> + Send,
-{
-    let proofs = create_proof_batch_priority::<E, C, P>(
-        vec![circuit],
-        params,
-        vec![r],
-        vec![s],
-        Some(Deadline::default_now()),
-        None,
-    )?;
-    Ok(proofs.into_iter().next().unwrap())
-}
-
-pub fn create_random_proof_in_priority<E, C, R, P: ParameterSource<E>>(
-    circuit: C,
-    params: P,
-    rng: &mut R,
-) -> Result<Proof<E>, SynthesisError>
-where
-    E: Engine,
-    C: Circuit<E> + Send,
-    R: RngCore,
-{
-    let proofs = create_random_proof_batch_priority::<E, C, R, P>(
-        vec![circuit],
-        params,
-        rng,
-        Some(Deadline::default_now()),
-        None,
-    )?;
-    Ok(proofs.into_iter().next().unwrap())
-}
-
-pub fn create_proof_batch_in_priority<E, C, P: ParameterSource<E>>(
-    circuits: Vec<C>,
-    params: P,
-    r: Vec<E::Fr>,
-    s: Vec<E::Fr>,
-) -> Result<Vec<Proof<E>>, SynthesisError>
-where
-    E: Engine,
-    C: Circuit<E> + Send,
-{
-    create_proof_batch_priority::<E, C, P>(
-        circuits,
-        params,
-        r,
-        s,
-        Some(Deadline::default_now()),
-        None,
-    )
-}
-
-pub fn create_random_proof_batch_in_priority<E, C, R, P: ParameterSource<E>>(
-    circuits: Vec<C>,
-    params: P,
-    rng: &mut R,
-) -> Result<Vec<Proof<E>>, SynthesisError>
-where
-    E: Engine,
-    C: Circuit<E> + Send,
-    R: RngCore,
-{
-    create_random_proof_batch_priority::<E, C, R, P>(
-        circuits,
-        params,
-        rng,
-        Some(Deadline::default_now()),
-        None,
-    )
+    create_random_proof_batch_priority::<E, C, R, P>(circuits, params, rng, None)
 }

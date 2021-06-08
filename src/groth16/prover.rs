@@ -1,3 +1,4 @@
+use super::BellTaskType;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,9 +22,6 @@ use crate::{
 };
 
 use log::info;
-use scheduler_client::{
-    resources_as_requirements, Deadline, ResourceMemory, ResourceType, TaskReqBuilder, TaskType,
-};
 
 use super::{FftSolver, MultiexpSolver};
 
@@ -265,8 +263,7 @@ pub fn create_random_proof_batch_priority<E, C, R, P: ParameterSource<E>>(
     circuits: Vec<C>,
     params: P,
     rng: &mut R,
-    deadline: Option<Deadline>,
-    task_type: Option<TaskType>,
+    task_type: Option<BellTaskType>,
 ) -> Result<Vec<Proof<E>>, SynthesisError>
 where
     E: Engine,
@@ -275,8 +272,7 @@ where
 {
     let r_s = (0..circuits.len()).map(|_| E::Fr::random(rng)).collect();
     let s_s = (0..circuits.len()).map(|_| E::Fr::random(rng)).collect();
-
-    create_proof_batch_priority::<E, C, P>(circuits, params, r_s, s_s, deadline, task_type)
+    create_proof_batch_priority::<E, C, P>(circuits, params, r_s, s_s, task_type)
 }
 
 pub fn create_proof_batch_priority<E, C, P: ParameterSource<E>>(
@@ -284,8 +280,7 @@ pub fn create_proof_batch_priority<E, C, P: ParameterSource<E>>(
     params: P,
     r_s: Vec<E::Fr>,
     s_s: Vec<E::Fr>,
-    deadline: Option<Deadline>,
-    task_type: Option<TaskType>,
+    task_type: Option<BellTaskType>,
 ) -> Result<Vec<Proof<E>>, SynthesisError>
 where
     E: Engine,
@@ -319,32 +314,6 @@ where
     while (1 << log_d) < n {
         log_d += 1;
     }
-
-    let requirements = if cfg!(feature = "gpu") {
-        // Retrieves the current resources on the system
-        // this also includes the ones that are in use.
-        // and construct a ResourceReq from it. Ideally
-        // we should have an average on how much memory
-        // this would take in order to optimize the GPUs memory
-        // usage. This is just a helper function and might be sweep out or modified.
-        let resource_req = resources_as_requirements()?;
-        // These time estimations are dumb and do not reflect the
-        // time per iteration or how long this proof would take.
-        // It is important information for the scheduler
-        // to handle priority tasks better.
-        let mut task_req = TaskReqBuilder::new().with_deadline(deadline);
-        if let Some(task_type) = task_type {
-            task_req = task_req.with_task_type(task_type);
-        }
-
-        for mut req in resource_req.into_iter() {
-            req.resource = ResourceType::Gpu(ResourceMemory::All);
-            task_req = task_req.resource_req(req);
-        }
-        Some(task_req.build())
-    } else {
-        None
-    };
 
     let as_call = |skip: usize,
                    fft_kern: &mut Option<LockedFFTKernel<E>>|
@@ -389,14 +358,8 @@ where
     };
 
     let mut as_solver = FftSolver::new(log_d, as_call);
-    let mut fft_requirements = requirements.clone();
-    // Fft runs only on 1 GPU
-    fft_requirements = fft_requirements.and_then(|mut r| {
-        r.req.iter_mut().for_each(|req| req.quantity = 1);
-        Some(r)
-    });
     as_solver
-        .solve(fft_requirements)
+        .solve(task_type)
         .map_err(|e| SynthesisError::Other(e.to_string()))?;
     let a_s = as_solver.accumulator;
 
@@ -423,7 +386,7 @@ where
 
     let mut hs_solver = MultiexpSolver::new(log_d, hs_call);
     hs_solver
-        .solve(requirements.clone())
+        .solve(task_type)
         .map_err(|e| SynthesisError::Other(e.to_string()))?;
     let h_s = hs_solver.accumulator;
 
@@ -452,7 +415,7 @@ where
     let mut ls_solver = MultiexpSolver::new(log_d, ls_call);
 
     ls_solver
-        .solve(requirements.clone())
+        .solve(task_type)
         .map_err(|e| SynthesisError::Other(e.to_string()))?;
 
     let l_s = ls_solver.accumulator;
@@ -545,7 +508,7 @@ where
     let mut inputs_solver = MultiexpSolver::new(log_d, inputs_call);
 
     inputs_solver
-        .solve(requirements)
+        .solve(task_type)
         .map_err(|e| SynthesisError::Other(e.to_string()))?;
 
     let inputs = inputs_solver.accumulator;

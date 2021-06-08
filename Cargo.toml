@@ -41,7 +41,7 @@ blstrs = { version = "0.3", optional = true }
 # pairing feature
 paired = { version = "0.22.0", optional = true }
 
-scheduler_client = {package = "client", git = "https://github.com/Zondax/filecoin-scheduling.git", branch = "integration"}
+scheduler_client = {package = "client", git = "https://github.com/Zondax/filecoin-scheduling.git", optional = true}
 
 # gpu feature 
 ff-cl-gen = { version = "0.3.0", optional = true }
@@ -60,7 +60,7 @@ tempfile = "3.1.0"
 
 [features]
 default = ["pairing"]
-gpu = ["rust-gpu-tools", "ff-cl-gen", "fs2"]
+gpu = ["rust-gpu-tools", "ff-cl-gen", "fs2", "scheduler_client"]
 groth16 = []
 
 blst = ["blstrs", "groth16"]

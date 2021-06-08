@@ -5,9 +5,9 @@ use std::sync::Arc;
 use bit_vec::{self, BitVec};
 use ff::{Field, PrimeField, PrimeFieldRepr, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
-use log::{info, warn};
 use rayon::prelude::*;
 
+#[cfg(feature = "gpu")]
 use scheduler_client::ResourceAlloc;
 
 use super::multicore::{Waiter, Worker};
@@ -395,6 +395,7 @@ fn test_with_bls12() {
     assert_eq!(naive, fast);
 }
 
+#[cfg(feature = "gpu")]
 pub fn create_multiexp_kernel<E>(
     _log_d: usize,
     alloc: Option<&ResourceAlloc>,
@@ -402,6 +403,8 @@ pub fn create_multiexp_kernel<E>(
 where
     E: crate::bls::Engine,
 {
+    use log::{info, warn};
+
     match gpu::MultiexpKernel::<E>::create(alloc) {
         Ok(k) => {
             info!("GPU Multiexp kernel instantiated!");

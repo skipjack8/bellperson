@@ -29,3 +29,10 @@ pub use self::prover::*;
 pub use self::prover_ext::*;
 pub use self::verifier::*;
 pub use self::verifying_key::*;
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+pub enum BellTaskType {
+    WinningPost,
+    WindowPost,
+    MerkleTree,
+}

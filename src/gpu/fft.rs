@@ -4,7 +4,7 @@ use crate::gpu::{
     sources,
 };
 use ff::Field;
-use log::info;
+use log::{info, warn};
 use rust_gpu_tools::*;
 use std::cmp;
 
@@ -29,16 +29,13 @@ where
 {
     pub fn create(alloc: Option<&ResourceAlloc>) -> GPUResult<FFTKernel<E>> {
         let device = if let Some(alloc) = alloc {
-            if alloc.devices.is_empty() {
-                return Err(GPUError::Simple("No working GPUs found!"));
-            }
             let devs = alloc
                 .devices
                 .iter()
-                .filter_map(|id| opencl::GPUSelector::Uuid(*id).get_device())
+                .filter_map(|id| id.get_device())
                 .collect::<Vec<_>>();
             if devs.is_empty() {
-                return Err(GPUError::Simple("No GPUs found!"));
+                return Err(GPUError::Simple("No working GPUs found!"));
             }
             devs[0].clone()
         } else {
@@ -95,7 +92,11 @@ where
             .arg(log_p)
             .arg(deg)
             .arg(max_deg)
-            .run()?;
+            .run()
+            .or_else(|e| {
+                warn!("FFT kernel error {}", e.to_string());
+                Err(e)
+            })?;
         Ok(())
     }
 

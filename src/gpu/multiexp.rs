@@ -6,7 +6,7 @@ use crate::multicore::Worker;
 use crate::multiexp::{multiexp as cpu_multiexp, FullDensity};
 use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
-use log::{error, info};
+use log::{error, info, warn};
 use rayon::prelude::*;
 use rust_gpu_tools::*;
 use std::any::TypeId;
@@ -182,7 +182,11 @@ where
             .arg(num_groups as u32)
             .arg(num_windows as u32)
             .arg(window_size as u32)
-            .run()?;
+            .run()
+            .or_else(|e| {
+                warn!("Multiexp kernel error {}", e.to_string());
+                Err(e)
+            })?;
 
         let mut results = vec![<G as CurveAffine>::Projective::zero(); num_groups * num_windows];
         result_buffer.read_into(0, &mut results)?;
@@ -220,9 +224,6 @@ where
 {
     pub fn create(alloc: Option<&ResourceAlloc>) -> GPUResult<MultiexpKernel<E>> {
         let kernels = if let Some(alloc) = alloc {
-            if alloc.devices.is_empty() {
-                return Err(GPUError::Simple("No working GPUs found!"));
-            }
             let mem = match alloc.requirement.resource {
                 ResourceType::Gpu(ResourceMemory::Mem(m)) => Some(m),
                 _ => None,
@@ -231,7 +232,7 @@ where
             alloc
                 .devices
                 .iter()
-                .filter_map(|id| opencl::GPUSelector::Uuid(*id).get_device())
+                .filter_map(|id| id.get_device())
                 .map(|d| (d.clone(), SingleMultiexpKernel::<E>::create(d.clone(), mem)))
                 .filter_map(|(device, res)| {
                     if let Err(ref e) = res {

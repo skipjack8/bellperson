@@ -101,6 +101,10 @@ macro_rules! solver {
                         warn!("WinningPost timeout error -> falling back to CPU");
                         self.use_cpu()
                     }
+                    Err(SynthesisError::Scheduler(ClientError::NoGpuResources)) => {
+                        warn!("No supported GPU resources -> falling back to CPU");
+                        self.use_cpu()
+                    }
                     Err(e) => Err(e),
                 }
             }

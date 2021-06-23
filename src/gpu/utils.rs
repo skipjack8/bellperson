@@ -1,5 +1,6 @@
 use log::{info, warn};
-use rust_gpu_tools::*;
+use rust_gpu_tools::device::Device;
+use rust_gpu_tools::opencl;
 use std::collections::HashMap;
 use std::env;
 
@@ -79,7 +80,7 @@ pub fn get_core_count_by_name(name: &str) -> usize {
 }
 
 pub fn dump_device_list() {
-    for d in opencl::Device::all() {
+    for d in Device::all() {
         info!("Device: {:?}", d);
     }
 }

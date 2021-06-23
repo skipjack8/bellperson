@@ -1,13 +1,13 @@
 #[cfg(feature = "gpu")]
-use rust_gpu_tools::{cuda, opencl};
+use rust_gpu_tools::error::GPUError as GpuToolsError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum GPUError {
     #[error("GPUError: {0}")]
     Simple(&'static str),
     #[cfg(feature = "gpu")]
-    #[error("OpenCL Error: {0}")]
-    OpenCL(#[from] opencl::GPUError),
+    #[error("rust-gpu-tools error: {0}")]
+    GpuTools(#[from] GpuToolsError),
     #[cfg(feature = "gpu")]
     #[error("GPU taken by a high priority process!")]
     GPUTaken,
@@ -16,8 +16,6 @@ pub enum GPUError {
     KernelUninitialized,
     #[error("GPU accelerator is disabled!")]
     GPUDisabled,
-    #[error("Cuda Error: {0}")]
-    Cuda(#[from] cuda::GPUError),
 }
 
 pub type GPUResult<T> = std::result::Result<T, GPUError>;

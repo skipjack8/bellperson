@@ -9,7 +9,8 @@ use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
 use log::{error, info, warn};
 use rayon::prelude::*;
-use rust_gpu_tools::{call_kernel, cuda, opencl};
+use rust_gpu_tools::{cuda, opencl};
+use rust_gpu_tools::device::{Brand, Device};
 use std::any::TypeId;
 use std::sync::Arc;
 
@@ -104,7 +105,7 @@ where
     E: Engine,
 {
     pub fn create(d: opencl::Device, priority: bool) -> GPUResult<SingleMultiexpKernel<E>> {
-        let src = sources::kernel::<E>(d.brand() == opencl::Brand::Nvidia);
+        let src = sources::kernel::<E>(d.brand() == Brand::Nvidia);
 
         let exp_bits = exp_size::<E>() * 8;
         let core_count = utils::get_core_count(&d);
@@ -114,7 +115,7 @@ where
         let n = std::cmp::min(max_n, best_n);
 
         Ok(SingleMultiexpKernel {
-            program: opencl::Program::from_opencl(d, &src)?,
+            program: opencl::Program::from_opencl(&d, &src)?,
             core_count,
             n,
             priority,
@@ -147,23 +148,23 @@ where
 
         let results = self
             .program
-            .run(|| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
-                let base_buffer = self.program.create_buffer::<G>(n)?;
-                self.program.write_from_buffer(&base_buffer, 0, bases)?;
-                let exp_buffer = self
-                    .program
+            .run(|program| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
+                let mut base_buffer = program.create_buffer::<G>(n)?;
+                program.write_from_buffer(&mut base_buffer, 0, bases)?;
+                let mut exp_buffer =
+                    program
                     .create_buffer::<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>(
                     n,
                 )?;
-                self.program.write_from_buffer(&exp_buffer, 0, exps)?;
+                program.write_from_buffer(&mut exp_buffer, 0, exps)?;
 
-                let bucket_buffer = self
-                    .program
+                let bucket_buffer =
+                    program
                     .create_buffer::<<G as CurveAffine>::Projective>(
                         2 * self.core_count * bucket_len,
                     )?;
-                let result_buffer = self
-                    .program
+                let result_buffer =
+                    program
                     .create_buffer::<<G as CurveAffine>::Projective>(2 * self.core_count)?;
 
                 // Make global work size divisible by `LOCAL_WORK_SIZE`
@@ -171,7 +172,7 @@ where
                 global_work_size +=
                     (LOCAL_WORK_SIZE - (global_work_size % LOCAL_WORK_SIZE)) % LOCAL_WORK_SIZE;
 
-                let kernel = self.program.create_kernel(
+                let kernel = program.create_kernel(
                     if TypeId::of::<G>() == TypeId::of::<E::G1Affine>() {
                         "G1_bellman_multiexp"
                     } else if TypeId::of::<G>() == TypeId::of::<E::G2Affine>() {
@@ -180,8 +181,8 @@ where
                         return Err(GPUError::Simple("Only E::G1 and E::G2 are supported!"));
                     },
                     global_work_size,
-                    None,
-                );
+                    LOCAL_WORK_SIZE,
+                )?;
 
                 kernel
                     .arg(&base_buffer)
@@ -196,7 +197,7 @@ where
 
                 let mut results =
                     vec![<G as CurveAffine>::Projective::zero(); num_groups * num_windows];
-                self.program
+                program
                     .read_into_buffer(&result_buffer, 0, &mut results)?;
 
                 Ok(results)
@@ -296,15 +297,15 @@ where
 
         let results = self
             .program
-            .run(|| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
-                let mut base_buffer = self.program.create_buffer::<G>(n)?;
-                self.program.write_from_buffer(&mut base_buffer, 0, bases)?;
+            .run(|program| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
+                let mut base_buffer = program.create_buffer::<G>(n)?;
+                program.write_from_buffer(&mut base_buffer, 0, bases)?;
                 let mut exp_buffer = self
                     .program
                     .create_buffer::<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>(
                     n,
                 )?;
-                self.program.write_from_buffer(&mut exp_buffer, 0, exps)?;
+                program.write_from_buffer(&mut exp_buffer, 0, exps)?;
 
                 let bucket_buffer = self
                     .program
@@ -319,7 +320,7 @@ where
                 let global_work_size =
                     (num_windows * num_groups + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
 
-                let kernel = self.program.create_kernel(
+                let kernel = program.create_kernel(
                     if TypeId::of::<G>() == TypeId::of::<E::G1Affine>() {
                         "G1_bellman_multiexp"
                     } else if TypeId::of::<G>() == TypeId::of::<E::G2Affine>() {
@@ -328,8 +329,8 @@ where
                         return Err(GPUError::Simple("Only E::G1 and E::G2 are supported!"));
                     },
                     global_work_size,
-                    Some(LOCAL_WORK_SIZE),
-                );
+                    LOCAL_WORK_SIZE,
+                )?;
 
                 kernel
                     .arg(&base_buffer)
@@ -384,7 +385,7 @@ where
     pub fn create(priority: bool) -> GPUResult<MultiexpKernel<E>> {
         let lock = locks::GPULock::lock();
 
-        let devices = cuda::Device::all();
+        let devices = Device::all().iter().filter_map(|device| device.cuda_device().ok()).collect::<Vec<_>>();
         let kernels: Vec<_> = devices
             .into_iter()
             .map(|d| {

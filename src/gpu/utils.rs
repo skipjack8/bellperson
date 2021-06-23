@@ -1,6 +1,6 @@
 use log::{info, warn};
-use rust_gpu_tools::device::Device;
 use rust_gpu_tools::opencl;
+use rust_gpu_tools::opencl::Device;
 use std::collections::HashMap;
 use std::env;
 

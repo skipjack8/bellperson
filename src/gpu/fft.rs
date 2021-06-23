@@ -6,8 +6,8 @@ use crate::gpu::{
 };
 use ff::Field;
 use log::info;
-use rust_gpu_tools::{opencl, cuda};
-use rust_gpu_tools::device::{Brand, Device};
+use rust_gpu_tools::opencl::{Brand, Device};
+use rust_gpu_tools::{cuda, opencl};
 use std::cmp;
 
 const LOG2_MAX_ELEMENTS: usize = 32; // At most 2^32 elements is supported.
@@ -32,7 +32,8 @@ where
     pub fn create(priority: bool) -> GPUResult<FFTKernel<E>> {
         let lock = locks::GPULock::lock();
 
-        let devices = Device::all().iter().filter_map(|device| device.opencl_device().ok()).collect::<Vec<_>>();
+        //let devices = Device::all().iter().filter_map(|device| device.opencl_device().ok()).collect::<Vec<_>>();
+        let devices = Device::all();
         if devices.is_empty() {
             return Err(GPUError::Simple("No working GPUs found!"));
         }
@@ -113,7 +114,8 @@ where
                 pq[i].mul_assign(&twiddle);
             }
         }
-        self.program.write_from_buffer(&mut self.pq_buffer, 0, &pq)?;
+        self.program
+            .write_from_buffer(&mut self.pq_buffer, 0, &pq)?;
 
         // Precalculate [omega, omega^2, omega^4, omega^8, ..., omega^(2^31)]
         let mut omegas = vec![E::Fr::zero(); 32];

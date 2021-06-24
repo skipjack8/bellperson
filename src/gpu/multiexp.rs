@@ -146,33 +146,28 @@ where
         // be `num_groups` * `num_windows` threads in total.
         // Each thread will use `num_groups` * `num_windows` * `bucket_len` buckets.
 
-        let results = self
-            .program
-            .run(|| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
-                let mut base_buffer = self.program.create_buffer::<G>(n)?;
-                self.program.write_from_buffer(&mut base_buffer, 0, bases)?;
-                let mut exp_buffer = self
-                    .program
+        let results = self.program.run(
+            |program: &opencl::Program| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
+                let mut base_buffer = program.create_buffer::<G>(n)?;
+                program.write_from_buffer(&mut base_buffer, 0, bases)?;
+                let mut exp_buffer = program
                     .create_buffer::<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>(
                     n,
                 )?;
                 self.program.write_from_buffer(&mut exp_buffer, 0, exps)?;
 
-                let bucket_buffer = self
-                    .program
-                    .create_buffer::<<G as CurveAffine>::Projective>(
-                        2 * self.core_count * bucket_len,
-                    )?;
-                let result_buffer = self
-                    .program
-                    .create_buffer::<<G as CurveAffine>::Projective>(2 * self.core_count)?;
+                let bucket_buffer = program.create_buffer::<<G as CurveAffine>::Projective>(
+                    2 * self.core_count * bucket_len,
+                )?;
+                let result_buffer =
+                    program.create_buffer::<<G as CurveAffine>::Projective>(2 * self.core_count)?;
 
                 // Make global work size divisible by `LOCAL_WORK_SIZE`
                 let mut global_work_size = num_windows * num_groups;
                 global_work_size +=
                     (LOCAL_WORK_SIZE - (global_work_size % LOCAL_WORK_SIZE)) % LOCAL_WORK_SIZE;
 
-                let kernel = self.program.create_kernel(
+                let kernel = program.create_kernel(
                     if TypeId::of::<G>() == TypeId::of::<E::G1Affine>() {
                         "G1_bellman_multiexp"
                     } else if TypeId::of::<G>() == TypeId::of::<E::G2Affine>() {
@@ -197,11 +192,11 @@ where
 
                 let mut results =
                     vec![<G as CurveAffine>::Projective::zero(); num_groups * num_windows];
-                self.program
-                    .read_into_buffer(&result_buffer, 0, &mut results)?;
+                program.read_into_buffer(&result_buffer, 0, &mut results)?;
 
                 Ok(results)
-            })?;
+            },
+        )?;
 
         // Using the algorithm below, we can calculate the final result by accumulating the results
         // of those `NUM_GROUPS` * `NUM_WINDOWS` threads.
@@ -295,32 +290,27 @@ where
 
         assert_eq!(n, bases.len(), "n and bases missmatch");
 
-        let results = self
-            .program
-            .run(|| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
-                let mut base_buffer = self.program.create_buffer::<G>(n)?;
+        let results = self.program.run(
+            |program: &cuda::Program| -> GPUResult<Vec<<G as CurveAffine>::Projective>> {
+                let mut base_buffer = program.create_buffer::<G>(n)?;
                 self.program.write_from_buffer(&mut base_buffer, 0, bases)?;
-                let mut exp_buffer = self
-                    .program
+                let mut exp_buffer = program
                     .create_buffer::<<<G::Engine as ScalarEngine>::Fr as PrimeField>::Repr>(
                     n,
                 )?;
-                self.program.write_from_buffer(&mut exp_buffer, 0, exps)?;
+                program.write_from_buffer(&mut exp_buffer, 0, exps)?;
 
-                let bucket_buffer = self
-                    .program
-                    .create_buffer::<<G as CurveAffine>::Projective>(
-                        2 * self.core_count * bucket_len,
-                    )?;
-                let result_buffer = self
-                    .program
-                    .create_buffer::<<G as CurveAffine>::Projective>(2 * self.core_count)?;
+                let bucket_buffer = program.create_buffer::<<G as CurveAffine>::Projective>(
+                    2 * self.core_count * bucket_len,
+                )?;
+                let result_buffer =
+                    program.create_buffer::<<G as CurveAffine>::Projective>(2 * self.core_count)?;
 
                 // Make global work size divisible by `LOCAL_WORK_SIZE`
                 let global_work_size =
                     (num_windows * num_groups + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
 
-                let kernel = self.program.create_kernel(
+                let kernel = program.create_kernel(
                     if TypeId::of::<G>() == TypeId::of::<E::G1Affine>() {
                         "G1_bellman_multiexp"
                     } else if TypeId::of::<G>() == TypeId::of::<E::G2Affine>() {
@@ -344,11 +334,11 @@ where
                     .run()?;
 
                 let mut results = vec![<G as CurveAffine>::Projective::zero(); 2 * self.core_count];
-                self.program
-                    .read_into_buffer(&result_buffer, 0, &mut results)?;
+                program.read_into_buffer(&result_buffer, 0, &mut results)?;
 
                 Ok(results)
-            })?;
+            },
+        )?;
 
         // Using the algorithm below, we can calculate the final result by accumulating the results
         // of those `NUM_GROUPS` * `NUM_WINDOWS` threads.

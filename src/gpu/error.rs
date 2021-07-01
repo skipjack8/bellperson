@@ -1,7 +1,7 @@
 #![allow(clippy::upper_case_acronyms)]
 
 #[cfg(feature = "gpu")]
-use rust_gpu_tools::opencl;
+use rust_gpu_tools::GPUError as GpuToolsError;
 
 #[derive(thiserror::Error, Debug)]
 pub enum GPUError {
@@ -9,7 +9,7 @@ pub enum GPUError {
     Simple(&'static str),
     #[cfg(feature = "gpu")]
     #[error("OpenCL Error: {0}")]
-    OpenCL(#[from] opencl::GPUError),
+    GpuTools(#[from] GpuToolsError),
     #[cfg(feature = "gpu")]
     #[error("GPU taken by a high priority process!")]
     GPUTaken,

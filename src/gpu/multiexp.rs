@@ -9,7 +9,7 @@ use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
 use log::{error, info};
 use rayon::prelude::*;
-use rust_gpu_tools::*;
+use rust_gpu_tools::{opencl, Device, Vendor};
 use std::any::TypeId;
 use std::sync::Arc;
 
@@ -101,7 +101,7 @@ where
     E: Engine,
 {
     pub fn create(d: opencl::Device, priority: bool) -> GPUResult<SingleMultiexpKernel<E>> {
-        let src = sources::kernel::<E>(d.brand() == opencl::Brand::Nvidia);
+        let src = sources::kernel::<E>(d.vendor() == Vendor::Nvidia);
 
         let exp_bits = exp_size::<E>() * 8;
         let core_count = utils::get_core_count(&d);
@@ -156,10 +156,9 @@ where
             .program
             .create_buffer::<<G as CurveAffine>::Projective>(2 * self.core_count)?;
 
-        // Make global work size divisible by `LOCAL_WORK_SIZE`
-        let mut global_work_size = num_windows * num_groups;
-        global_work_size +=
-            (LOCAL_WORK_SIZE - (global_work_size % LOCAL_WORK_SIZE)) % LOCAL_WORK_SIZE;
+        // The global work size follows CUDA's definition and is the number of `LOCAL_WORK_SIZE`
+        // sized thread groups.
+        let global_work_size = (num_windows * num_groups + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
 
         let kernel = self.program.create_kernel(
             if TypeId::of::<G>() == TypeId::of::<E::G1Affine>() {
@@ -184,7 +183,7 @@ where
             .arg(&(window_size as u32))
             .run()?;
 
-        let mut results = vec![<G as CurveAffine>::Projective::zero(); num_groups * num_windows];
+        let mut results = vec![<G as CurveAffine>::Projective::zero(); 2 * self.core_count];
         self.program
             .read_into_buffer(&result_buffer, 0, &mut results)?;
 
@@ -223,20 +222,21 @@ where
     pub fn create(priority: bool) -> GPUResult<MultiexpKernel<E>> {
         let lock = locks::GPULock::lock();
 
-        let devices = opencl::Device::all();
-
-        let kernels: Vec<_> = devices
-            .into_iter()
-            .map(|d| (d, SingleMultiexpKernel::<E>::create(d.clone(), priority)))
-            .filter_map(|(device, res)| {
-                if let Err(ref e) = res {
-                    error!(
-                        "Cannot initialize kernel for device '{}'! Error: {}",
-                        device.name(),
-                        e
-                    );
-                }
-                res.ok()
+        let kernels: Vec<_> = Device::all()
+            .iter()
+            .filter_map(|device| {
+                // Only use devices that run on OpenCL
+                device.opencl_device().and_then(|opencl_device| {
+                    let kernel = SingleMultiexpKernel::<E>::create(opencl_device.clone(), priority);
+                    if let Err(ref e) = kernel {
+                        error!(
+                            "Cannot initialize kernel for device '{}'! Error: {}",
+                            opencl_device.name(),
+                            e
+                        );
+                    }
+                    kernel.ok()
+                })
             })
             .collect();
 

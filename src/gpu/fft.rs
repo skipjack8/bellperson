@@ -5,7 +5,7 @@ use crate::gpu::{
 };
 use ff::Field;
 use log::info;
-use rust_gpu_tools::*;
+use rust_gpu_tools::{opencl, Device, Vendor};
 use std::cmp;
 
 const LOG2_MAX_ELEMENTS: usize = 32; // At most 2^32 elements is supported.
@@ -31,7 +31,10 @@ where
     pub fn create(priority: bool) -> GPUResult<FFTKernel<E>> {
         let lock = locks::GPULock::lock();
 
-        let devices = opencl::Device::all();
+        let devices = Device::all()
+            .iter()
+            .filter_map(|device| device.opencl_device())
+            .collect::<Vec<_>>();
         if devices.is_empty() {
             return Err(GPUError::Simple("No working GPUs found!"));
         }
@@ -39,7 +42,7 @@ where
         // Select the first device for FFT
         let device = devices[0];
 
-        let src = sources::kernel::<E>(device.brand() == opencl::Brand::Nvidia);
+        let src = sources::kernel::<E>(device.vendor() == Vendor::Nvidia);
 
         let program = opencl::Program::from_opencl(&device, &src)?;
         let pq_buffer = program.create_buffer::<E::Fr>(1 << MAX_LOG2_RADIX >> 1)?;
@@ -77,7 +80,7 @@ where
 
         let n = 1u32 << log_n;
         let local_work_size = 1 << cmp::min(deg - 1, MAX_LOG2_LOCAL_WORK_SIZE);
-        let global_work_size = (n >> deg) * local_work_size;
+        let global_work_size = n >> deg;
         let kernel = self.program.create_kernel(
             "radix_fft",
             global_work_size as usize,

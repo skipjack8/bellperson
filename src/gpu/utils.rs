@@ -1,5 +1,5 @@
 use log::{info, warn};
-use rust_gpu_tools::*;
+use rust_gpu_tools::Device;
 use std::collections::HashMap;
 use std::env;
 
@@ -56,9 +56,8 @@ lazy_static::lazy_static! {
 }
 
 const DEFAULT_CORE_COUNT: usize = 2560;
-pub fn get_core_count(d: &opencl::Device) -> usize {
-    let name = d.name();
-    match CORE_COUNTS.get(&name[..]) {
+pub fn get_core_count(name: &str) -> usize {
+    match CORE_COUNTS.get(name) {
         Some(&cores) => cores,
         None => {
             warn!(
@@ -74,7 +73,7 @@ pub fn get_core_count(d: &opencl::Device) -> usize {
 }
 
 pub fn dump_device_list() {
-    for d in opencl::Device::all() {
+    for d in Device::all() {
         info!("Device: {:?}", d);
     }
 }

@@ -65,6 +65,15 @@ The gpu extension contains some env vars that may be set externally to this libr
     env::set_var("BELLMAN_CPU_UTILIZATION", "0.5");
     ```
 
+ - `BELLMAN_GPU_FRAMEWORK`
+
+     Bellman can be compiled with both, OpenCL and CUDA support. When both are available, `BELLMAN_GPU_FRAMEWORK` can be used to set it to a specific one, either `cuda` or `opencl`.
+
+    ```rust
+    // Example
+    env::set_var("BELLMAN_GPU_FRAMEWORK", "opencl");
+    ```
+
 #### Supported / Tested Cards
 
 Depending on the size of the proof being passed to the gpu for work, certain cards will not be able to allocate enough memory to either the FFT or Multiexp kernel. Below are a list of devices that work for small sets. In the future we will add the cuttoff point at which a given card will not be able to allocate enough memory to utilize the GPU.

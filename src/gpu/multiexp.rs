@@ -6,7 +6,7 @@ use crate::multicore::Worker;
 use crate::multiexp::{multiexp as cpu_multiexp, FullDensity};
 use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use rayon::prelude::*;
 use rust_gpu_tools::*;
 use std::any::TypeId;
@@ -348,6 +348,7 @@ where
         }
 
         acc.add_assign(&cpu_acc.wait().unwrap());
+        trace!("Done awaiting results from kernels");
 
         Ok(acc)
     }

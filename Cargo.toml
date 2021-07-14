@@ -41,7 +41,7 @@ blstrs = { version = "0.3", optional = true }
 # pairing feature
 paired = { version = "0.22.0", optional = true }
 
-scheduler_client = {package = "client", git = "https://github.com/Zondax/filecoin-scheduling.git", optional = true}
+scheduler_client = {package = "client", git = "https://github.com/Zondax/filecoin-scheduling.git", branch = "dev", optional = true}
 
 # gpu feature 
 ff-cl-gen = { version = "0.3.0", optional = true }

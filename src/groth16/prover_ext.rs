@@ -32,6 +32,7 @@ macro_rules! solver {
             kernel: Option<$kern<E>>,
             index: usize,
             _log_d: usize,
+            _context: Option<String>,
             call: F,
         }
 
@@ -40,12 +41,13 @@ macro_rules! solver {
             for<'a> F: FnMut(usize, &'a mut Option<$kern<E>>) -> Option<Result<R, SynthesisError>>,
             E: Engine,
         {
-            pub fn new(log_d: usize, call: F) -> Self {
+            pub fn new(log_d: usize, call: F, context: Option<String>) -> Self {
                 $class::<E, F, R> {
                     accumulator: vec![],
                     kernel: None,
                     index: 0,
                     _log_d: log_d,
+                    _context: context,
                     call,
                 }
             }
@@ -58,7 +60,7 @@ macro_rules! solver {
                 let mut rng = rand::thread_rng();
                 // use a random number as client id.
                 let id = rng.gen::<u32>();
-                let client = register::<SynthesisError>(id, id as _)?;
+                let client = register::<SynthesisError>(id, id as _, self._context.clone())?;
                 let task_type = task_type.map(|t| match t {
                     BellTaskType::WinningPost => TaskType::WinningPost,
                     BellTaskType::WindowPost => TaskType::WindowPost,
@@ -78,14 +80,12 @@ macro_rules! solver {
                     let resouce_req = ResourceReq {
                         resource: ResourceType::Gpu(ResourceMemory::All),
                         quantity,
-                        preemptible: true, // not relevant at the moment
+                        preemptible: true,
                     };
-                    let mut task_req = TaskReqBuilder::new()
+                    let task_req = TaskReqBuilder::new()
                         .with_task_type(TaskType::MerkleProof)
-                        .resource_req(resouce_req);
-                    if let Some(task_type) = task_type {
-                        task_req = task_req.with_task_type(task_type);
-                    }
+                        .resource_req(resouce_req)
+                        .with_task_type(task_type.unwrap_or(TaskType::MerkleProof));
                     task_req.build()
                 };
 

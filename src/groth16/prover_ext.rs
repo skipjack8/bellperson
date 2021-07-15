@@ -33,6 +33,7 @@ macro_rules! solver {
             index: usize,
             _log_d: usize,
             _context: Option<String>,
+            _name: Option<String>,
             call: F,
         }
 
@@ -41,26 +42,29 @@ macro_rules! solver {
             for<'a> F: FnMut(usize, &'a mut Option<$kern<E>>) -> Option<Result<R, SynthesisError>>,
             E: Engine,
         {
-            pub fn new(log_d: usize, call: F, context: Option<String>) -> Self {
+            pub fn new(
+                log_d: usize,
+                call: F,
+                name: Option<String>,
+                context: Option<String>,
+            ) -> Self {
                 $class::<E, F, R> {
                     accumulator: vec![],
                     kernel: None,
                     index: 0,
                     _log_d: log_d,
                     _context: context,
+                    _name: name,
                     call,
                 }
             }
 
             #[cfg(feature = "gpu")]
             pub fn solve(&mut self, task_type: Option<BellTaskType>) -> Result<(), SynthesisError> {
-                use rand::Rng;
                 use std::time::Duration;
 
-                let mut rng = rand::thread_rng();
                 // use a random number as client id.
-                let id = rng.gen::<u32>();
-                let client = register::<SynthesisError>(id, id as _, self._context.clone())?;
+                let client = register::<SynthesisError>(self._name.take(), self._context.clone())?;
                 let task_type = task_type.map(|t| match t {
                     BellTaskType::WinningPost => TaskType::WinningPost,
                     BellTaskType::WindowPost => TaskType::WindowPost,

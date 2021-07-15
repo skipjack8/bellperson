@@ -357,7 +357,12 @@ where
             .next()
     };
 
-    let mut as_solver = FftSolver::new(log_d, as_call, Some(format!("{}:{}", file!(), line!())));
+    let mut as_solver = FftSolver::new(
+        log_d,
+        as_call,
+        Some("as_solver".to_string()),
+        Some(format!("{}:{}", file!(), line!())),
+    );
 
     as_solver
         .solve(task_type)
@@ -385,8 +390,12 @@ where
             .next()
     };
 
-    let mut hs_solver =
-        MultiexpSolver::new(log_d, hs_call, Some(format!("{}:{}", file!(), line!())));
+    let mut hs_solver = MultiexpSolver::new(
+        log_d,
+        hs_call,
+        Some("hs_solver".to_string()),
+        Some(format!("{}:{}", file!(), line!())),
+    );
 
     hs_solver
         .solve(task_type)
@@ -415,8 +424,12 @@ where
             .next()
     };
 
-    let mut ls_solver =
-        MultiexpSolver::new(log_d, ls_call, Some(format!("{}:{}", file!(), line!())));
+    let mut ls_solver = MultiexpSolver::new(
+        log_d,
+        ls_call,
+        Some("ls_solver".to_string()),
+        Some(format!("{}:{}", file!(), line!())),
+    );
 
     ls_solver
         .solve(task_type)
@@ -509,8 +522,12 @@ where
             .next()
     };
 
-    let mut inputs_solver =
-        MultiexpSolver::new(log_d, inputs_call, Some(format!("{}:{}", file!(), line!())));
+    let mut inputs_solver = MultiexpSolver::new(
+        log_d,
+        inputs_call,
+        Some("inputs_solver".to_string()),
+        Some(format!("{}:{}", file!(), line!())),
+    );
 
     inputs_solver
         .solve(task_type)

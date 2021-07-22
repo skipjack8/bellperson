@@ -26,14 +26,8 @@ lazy_static! {
     };
     // See Worker::compute below for a description of this.
     static ref WORKER_SPAWN_MAX_COUNT: usize = *NUM_CPUS * 4;
-    pub static ref THREAD_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-        .num_threads(*NUM_CPUS)
-        .build()
-        .unwrap();
-    pub static ref VERIFIER_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-        .num_threads(NUM_CPUS.max(6))
-        .build()
-        .unwrap();
+    pub static ref THREAD_POOL: yastl::Pool = yastl::Pool::new(*NUM_CPUS);
+    pub static ref VERIFIER_POOL: yastl::Pool = yastl::Pool::new(NUM_CPUS.max(6));
 }
 
 #[derive(Clone)]
@@ -54,7 +48,12 @@ impl Worker {
         R: Send + 'static,
     {
         let (sender, receiver) = bounded(1);
+        THREAD_POOL.spawn(move || {
+            let res = f();
+            sender.send(res).unwrap();
+        });
 
+        /*
         let thread_index = if THREAD_POOL.current_thread_index().is_some() {
             THREAD_POOL.current_thread_index().unwrap()
         } else {
@@ -92,15 +91,14 @@ impl Worker {
                 sender.send(res).unwrap();
                 WORKER_SPAWN_COUNTER.fetch_sub(1, Ordering::SeqCst);
             });
-        }
+        }*/
 
         Waiter { receiver }
     }
 
     pub fn scope<'a, F, R>(&self, elements: usize, f: F) -> R
     where
-        F: FnOnce(&rayon::Scope<'a>, usize) -> R + Send,
-        R: Send,
+        F: FnOnce(&yastl::Scope<'a>, usize) -> R,
     {
         let chunk_size = if elements < *NUM_CPUS {
             1
@@ -108,7 +106,7 @@ impl Worker {
             elements / *NUM_CPUS
         };
 
-        THREAD_POOL.scope(|scope| f(scope, chunk_size))
+        THREAD_POOL.scoped(|scope| f(scope, chunk_size))
     }
 }
 
@@ -119,11 +117,11 @@ pub struct Waiter<T> {
 impl<T> Waiter<T> {
     /// Wait for the result.
     pub fn wait(&self) -> T {
-        if THREAD_POOL.current_thread_index().is_some() {
+        /*if THREAD_POOL.current_thread_index().is_some() {
             // Calling `wait()` from within the worker thread pool can lead to dead logs
             error!("The wait call should never be done inside the worker thread pool");
             debug_assert!(false);
-        }
+        }*/
         self.receiver.recv().unwrap()
     }
 

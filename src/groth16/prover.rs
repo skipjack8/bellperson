@@ -291,7 +291,7 @@ where
     // Preparing things for the proofs is done a lot in parallel with the help of Rayon. Make
     // sure that those things run on the correct thread pool.
     let (start, mut provers, input_assignments, aux_assignments) =
-        THREAD_POOL.install(|| create_proof_batch_priority_inner(circuits))?;
+        create_proof_batch_priority_inner(circuits)?;
 
     // The rest of the proving also has parallelism, but not on the outer loops, but within e.g. the
     // multiexp calculations. This is what the `Worker` is used for. It is important that calling

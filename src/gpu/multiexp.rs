@@ -308,11 +308,11 @@ where
 
                             Ok(acc)
                         })
-                        .try_fold(|| <G as CurveAffine>::Projective::zero(), |mut acc, part| -> Result<_, GPUError> {
+                        .try_fold(<G as CurveAffine>::Projective::zero, |mut acc, part| -> Result<_, GPUError> {
                             acc.add_assign(&part?);
                             Ok(acc)
                         })
-                        .try_reduce(|| <G as CurveAffine>::Projective::zero(), |mut acc, part| -> Result<_, GPUError> {
+                        .try_reduce(<G as CurveAffine>::Projective::zero, |mut acc, part| -> Result<_, GPUError> {
                             acc.add_assign(&part);
                             Ok(acc)
                         })

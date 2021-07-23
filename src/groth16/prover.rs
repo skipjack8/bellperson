@@ -4,8 +4,6 @@ use std::time::Instant;
 use ff::{Field, PrimeField};
 use groupy::{CurveAffine, CurveProjective};
 use log::info;
-#[cfg(feature = "gpu")]
-use log::trace;
 use rand_core::RngCore;
 use rayon::prelude::*;
 
@@ -321,7 +319,7 @@ where
     // multiexp calculations. This is what the `Worker` is used for. It is important that calling
     // `wait()` on the worker happens *outside* the thread pool, else deadlocks can happen.
     let worker = Worker::new();
-    let input_len = input_assignments[0].len();
+    let input_len = provers[0].input_assignment.len();
     let vk = params.get_vk(input_len)?.clone();
     let n = provers[0].a.len();
     let a_aux_density_total = provers[0].a_aux_density.get_total_density();

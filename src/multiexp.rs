@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use super::SynthesisError;
 use crate::gpu;
-use crate::multicore::THREAD_POOL;
+use crate::multicore::RAYON_THREAD_POOL;
 
 /// An object that builds a source of bases.
 pub trait SourceBuilder<G: CurveAffine>: Send + Sync + 'static + Clone {
@@ -311,7 +311,7 @@ where
             }
 
             let (bss, skip) = bases.clone().get();
-            k.multiexp(bss, Arc::new(exps.clone()), skip, n)
+            k.multiexp(bss, Arc::new(exps), skip, n)
         }) {
             return Ok(p);
         }
@@ -329,7 +329,7 @@ where
         assert!(query_size == exponents.len());
     }
 
-    THREAD_POOL.install(|| multiexp_inner(bases, density_map, exponents, c))
+    RAYON_THREAD_POOL.install(|| multiexp_inner(bases, density_map, exponents, c))
 }
 
 #[cfg(any(feature = "pairing", feature = "blst"))]

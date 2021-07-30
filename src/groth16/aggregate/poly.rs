@@ -74,7 +74,7 @@ impl<'a, 'b, F: Field> Sub<&'a DensePolynomial<F>> for &'b DensePolynomial<F> {
         let mut result = if self.is_zero() {
             let mut result = other.clone();
             for coeff in &mut result.coeffs {
-                coeff.negate();
+                *coeff = -*coeff;
             }
             result
         } else if other.is_zero() {
@@ -113,7 +113,7 @@ impl<'a, 'b, F: Field> Div<&'a DensePolynomial<F>> for &'b DensePolynomial<F> {
             let mut quotient = vec![F::zero(); self.degree() - divisor.degree() + 1];
             let mut remainder: DensePolynomial<F> = self.clone();
             // Can unwrap here because we know self is not zero.
-            let divisor_leading_inv = divisor.coeffs.last().unwrap().inverse().unwrap();
+            let divisor_leading_inv = divisor.coeffs.last().unwrap().invert().unwrap();
             while !remainder.is_zero() && remainder.degree() >= divisor.degree() {
                 let mut cur_q_coeff = *remainder.coeffs.last().unwrap();
                 cur_q_coeff.mul_assign(&divisor_leading_inv);

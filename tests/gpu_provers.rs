@@ -1,5 +1,6 @@
-use bellperson::{bls::Engine, Circuit, ConstraintSystem, SynthesisError};
+use bellperson::{Circuit, ConstraintSystem, SynthesisError};
 use ff::{Field, PrimeField};
+use pairing::Engine;
 
 #[derive(Clone)]
 pub struct DummyDemo {
@@ -14,7 +15,7 @@ impl<E: Engine> Circuit<E> for DummyDemo {
         for _ in 0..self.interations {
             // Allocate: x * x = x2
             let x2_val = x_val.map(|mut e| {
-                e.square();
+                e = e.square();
                 e
             });
             let x2 = cs.alloc(|| "", || x2_val.ok_or(SynthesisError::AssignmentMissing))?;

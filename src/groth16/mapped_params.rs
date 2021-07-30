@@ -1,5 +1,5 @@
-use crate::bls::Engine;
-use groupy::{CurveAffine, EncodedPoint};
+use group::{prime::PrimeCurveAffine, UncompressedEncoding};
+use pairing::{Engine, MultiMillerLoop};
 
 use crate::SynthesisError;
 
@@ -14,7 +14,11 @@ use std::sync::Arc;
 
 use super::{ParameterSource, PreparedVerifyingKey, VerifyingKey};
 
-pub struct MappedParameters<E: Engine> {
+pub struct MappedParameters<E: Engine + MultiMillerLoop>
+where
+    E: Engine + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+{
     /// The parameter file we're reading from.  
     pub param_file_path: PathBuf,
     /// The file descriptor we have mmaped.
@@ -49,7 +53,11 @@ pub struct MappedParameters<E: Engine> {
     pub checked: bool,
 }
 
-impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
+impl<'a, E> ParameterSource<E> for &'a MappedParameters<E>
+where
+    E: Engine + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt> + Send + Sync,
+{
     type G1Builder = (Arc<Vec<E::G1Affine>>, usize);
     type G2Builder = (Arc<Vec<E::G2Affine>>, usize);
 
@@ -134,7 +142,7 @@ impl<'a, E: Engine> ParameterSource<E> for &'a MappedParameters<E> {
 // A re-usable method for parameter loading via mmap.  Unlike the
 // internal ones used elsewhere, this one does not update offset state
 // and simply does the cast and transform needed.
-pub fn read_g1<E: Engine>(
+pub fn read_g1<E: Engine + MultiMillerLoop>(
     mmap: &Mmap,
     range: Range<usize>,
     checked: bool,
@@ -143,31 +151,36 @@ pub fn read_g1<E: Engine>(
     // Safety: this operation is safe, because it's simply
     // casting to a known struct at the correct offset, given
     // the structure of the on-disk data.
-    let repr =
-        unsafe { *(ptr as *const [u8] as *const <E::G1Affine as CurveAffine>::Uncompressed) };
+    let repr = unsafe {
+        &*(ptr as *const [u8] as *const <E::G1Affine as UncompressedEncoding>::Uncompressed)
+    };
 
-    if checked {
-        repr.into_affine()
-    } else {
-        repr.into_affine_unchecked()
-    }
-    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    .and_then(|e| {
-        if e.is_zero() {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "point at infinity",
-            ))
+    let affine = {
+        let affine_opt = if checked {
+            E::G1Affine::from_uncompressed(&repr)
         } else {
-            Ok(e)
+            E::G1Affine::from_uncompressed_unchecked(&repr)
+        };
+        if affine_opt.is_none().into() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
         }
-    })
+        affine_opt.unwrap()
+    };
+
+    if affine.is_identity().into() {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "point at infinity",
+        ))
+    } else {
+        Ok(affine)
+    }
 }
 
 // A re-usable method for parameter loading via mmap.  Unlike the
 // internal ones used elsewhere, this one does not update offset state
 // and simply does the cast and transform needed.
-pub fn read_g2<E: Engine>(
+pub fn read_g2<E: Engine + MultiMillerLoop>(
     mmap: &Mmap,
     range: Range<usize>,
     checked: bool,
@@ -176,23 +189,28 @@ pub fn read_g2<E: Engine>(
     // Safety: this operation is safe, because it's simply
     // casting to a known struct at the correct offset, given
     // the structure of the on-disk data.
-    let repr =
-        unsafe { *(ptr as *const [u8] as *const <E::G2Affine as CurveAffine>::Uncompressed) };
+    let repr = unsafe {
+        &*(ptr as *const [u8] as *const <E::G2Affine as UncompressedEncoding>::Uncompressed)
+    };
 
-    if checked {
-        repr.into_affine()
-    } else {
-        repr.into_affine_unchecked()
-    }
-    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    .and_then(|e| {
-        if e.is_zero() {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "point at infinity",
-            ))
+    let affine = {
+        let affine_opt = if checked {
+            E::G2Affine::from_uncompressed(&repr)
         } else {
-            Ok(e)
+            E::G2Affine::from_uncompressed_unchecked(&repr)
+        };
+        if affine_opt.is_none().into() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
         }
-    })
+        affine_opt.unwrap()
+    };
+
+    if affine.is_identity().into() {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "point at infinity",
+        ))
+    } else {
+        Ok(affine)
+    }
 }

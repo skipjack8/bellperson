@@ -6,7 +6,7 @@
 
 use super::{boolean::Boolean, multieq::MultiEq, uint32::UInt32};
 use crate::{ConstraintSystem, SynthesisError};
-use ff::ScalarEngine;
+use pairing::Engine;
 
 /*
 2.1.  Parameters
@@ -82,7 +82,7 @@ const SIGMA: [[usize; 16]; 10] = [
 */
 
 #[allow(clippy::too_many_arguments)]
-fn mixing_g<E: ScalarEngine, CS: ConstraintSystem<E>, M>(
+fn mixing_g<E: Engine + Send, CS: ConstraintSystem<E>, M>(
     mut cs: M,
     v: &mut [UInt32],
     a: usize,
@@ -93,6 +93,7 @@ fn mixing_g<E: ScalarEngine, CS: ConstraintSystem<E>, M>(
     y: &UInt32,
 ) -> Result<(), SynthesisError>
 where
+    E: Send,
     M: ConstraintSystem<E, Root = MultiEq<E, CS>>,
 {
     v[a] = UInt32::addmany(
@@ -167,7 +168,7 @@ where
        END FUNCTION.
 */
 
-fn blake2s_compression<E: ScalarEngine, CS: ConstraintSystem<E>>(
+fn blake2s_compression<E: Engine + Send, CS: ConstraintSystem<E>>(
     mut cs: CS,
     h: &mut [UInt32],
     m: &[UInt32],
@@ -340,7 +341,7 @@ fn blake2s_compression<E: ScalarEngine, CS: ConstraintSystem<E>>(
         END FUNCTION.
 */
 
-pub fn blake2s<E: ScalarEngine, CS: ConstraintSystem<E>>(
+pub fn blake2s<E: Engine + Send, CS: ConstraintSystem<E>>(
     mut cs: CS,
     input: &[Boolean],
     personalization: &[u8],

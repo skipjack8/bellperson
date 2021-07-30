@@ -1,7 +1,8 @@
 use super::{create_proof_batch_priority, create_random_proof_batch_priority};
 use super::{ParameterSource, Proof};
-use crate::bls::Engine;
-use crate::{Circuit, SynthesisError};
+use crate::{Circuit, EngineExt, SynthesisError};
+use ff::PrimeField;
+use pairing::{Engine, MultiMillerLoop};
 use rand_core::RngCore;
 
 pub fn create_proof<E, C, P: ParameterSource<E>>(
@@ -11,7 +12,9 @@ pub fn create_proof<E, C, P: ParameterSource<E>>(
     s: E::Fr,
 ) -> Result<Proof<E>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
 {
     let proofs =
@@ -25,7 +28,9 @@ pub fn create_random_proof<E, C, R, P: ParameterSource<E>>(
     rng: &mut R,
 ) -> Result<Proof<E>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
     R: RngCore,
 {
@@ -41,7 +46,9 @@ pub fn create_proof_batch<E, C, P: ParameterSource<E>>(
     s: Vec<E::Fr>,
 ) -> Result<Vec<Proof<E>>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
 {
     create_proof_batch_priority::<E, C, P>(circuits, params, r, s, false)
@@ -53,7 +60,9 @@ pub fn create_random_proof_batch<E, C, R, P: ParameterSource<E>>(
     rng: &mut R,
 ) -> Result<Vec<Proof<E>>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
     R: RngCore,
 {
@@ -67,7 +76,9 @@ pub fn create_proof_in_priority<E, C, P: ParameterSource<E>>(
     s: E::Fr,
 ) -> Result<Proof<E>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
 {
     let proofs =
@@ -81,7 +92,9 @@ pub fn create_random_proof_in_priority<E, C, R, P: ParameterSource<E>>(
     rng: &mut R,
 ) -> Result<Proof<E>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
     R: RngCore,
 {
@@ -97,7 +110,9 @@ pub fn create_proof_batch_in_priority<E, C, P: ParameterSource<E>>(
     s: Vec<E::Fr>,
 ) -> Result<Vec<Proof<E>>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
 {
     create_proof_batch_priority::<E, C, P>(circuits, params, r, s, true)
@@ -109,7 +124,9 @@ pub fn create_random_proof_batch_in_priority<E, C, R, P: ParameterSource<E>>(
     rng: &mut R,
 ) -> Result<Vec<Proof<E>>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    <<E as Engine>::Fr as PrimeField>::Repr: Copy + Sync + Send,
     C: Circuit<E> + Send,
     R: RngCore,
 {

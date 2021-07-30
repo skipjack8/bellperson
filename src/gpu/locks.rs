@@ -79,16 +79,16 @@ impl Drop for PriorityLock {
 use super::error::{GPUError, GPUResult};
 use super::fft::FFTKernel;
 use super::multiexp::MultiexpKernel;
-use crate::bls::Engine;
 use crate::domain::create_fft_kernel;
 use crate::multiexp::create_multiexp_kernel;
+use crate::EngineExt;
 
 macro_rules! locked_kernel {
     ($class:ident, $kern:ident, $func:ident, $name:expr) => {
         #[allow(clippy::upper_case_acronyms)]
         pub struct $class<E>
         where
-            E: Engine,
+            E: EngineExt,
         {
             log_d: usize,
             priority: bool,
@@ -97,7 +97,7 @@ macro_rules! locked_kernel {
 
         impl<E> $class<E>
         where
-            E: Engine,
+            E: EngineExt,
         {
             pub fn new(log_d: usize, priority: bool) -> $class<E> {
                 $class::<E> {

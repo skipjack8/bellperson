@@ -1,5 +1,6 @@
-use crate::bls::Engine;
 use ff_cl_gen as ffgen;
+
+use crate::EngineExt;
 
 // Instead of having a very large OpenCL program written for a specific curve, with a lot of
 // rudandant codes (As OpenCL doesn't have generic types or templates), this module will dynamically
@@ -20,9 +21,6 @@ fn fft(field: &str) -> String {
     String::from(FFT_SRC).replace("FIELD", field)
 }
 
-#[cfg(not(feature = "blstrs"))]
-const BLSTRS_DEF: &str = "";
-#[cfg(feature = "blstrs")]
 const BLSTRS_DEF: &str = "#define BLSTRS";
 
 fn ec(field: &str, point: &str) -> String {
@@ -41,7 +39,7 @@ fn multiexp(point: &str, exp: &str) -> String {
 // WARNING: This function works only with Short Weierstrass Jacobian curves with Fq2 extension field.
 pub fn kernel<E>(limb64: bool) -> String
 where
-    E: Engine,
+    E: EngineExt,
 {
     vec![
         if limb64 {

@@ -1,16 +1,18 @@
-use rand_core::RngCore;
+use std::ops::{AddAssign, Mul, MulAssign};
 
 use std::sync::Arc;
 
-use crate::bls::Engine;
-use ff::{Field, PrimeField};
-use groupy::{CurveAffine, CurveProjective, Wnaf};
+use ff::Field;
+use group::{Curve, Group, Wnaf, WnafGroup};
+use pairing::{Engine, MultiMillerLoop};
+use rand_core::RngCore;
 
 use super::{Parameters, VerifyingKey};
 
-use crate::{Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
-
 use crate::domain::{EvaluationDomain, Scalar};
+use crate::{
+    Circuit, ConstraintSystem, EngineExt, Index, LinearCombination, SynthesisError, Variable,
+};
 
 use crate::multicore::Worker;
 
@@ -21,17 +23,20 @@ pub fn generate_random_parameters<E, C, R>(
     rng: &mut R,
 ) -> Result<Parameters<E>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as Engine>::G1: WnafGroup,
+    <E as Engine>::G2: WnafGroup,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
     C: Circuit<E>,
     R: RngCore,
 {
-    let g1 = E::G1::random(rng);
-    let g2 = E::G2::random(rng);
-    let alpha = E::Fr::random(rng);
-    let beta = E::Fr::random(rng);
-    let gamma = E::Fr::random(rng);
-    let delta = E::Fr::random(rng);
-    let tau = E::Fr::random(rng);
+    let g1 = E::G1::random(&mut *rng);
+    let g2 = E::G2::random(&mut *rng);
+    let alpha = E::Fr::random(&mut *rng);
+    let beta = E::Fr::random(&mut *rng);
+    let gamma = E::Fr::random(&mut *rng);
+    let delta = E::Fr::random(&mut *rng);
+    let tau = E::Fr::random(&mut *rng);
 
     generate_parameters::<E, C>(circuit, g1, g2, alpha, beta, gamma, delta, tau)
 }
@@ -189,7 +194,10 @@ pub fn generate_parameters<E, C>(
     tau: E::Fr,
 ) -> Result<Parameters<E>, SynthesisError>
 where
-    E: Engine,
+    E: EngineExt + MultiMillerLoop,
+    <E as Engine>::G1: WnafGroup,
+    <E as Engine>::G2: WnafGroup,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
     C: Circuit<E>,
 {
     let mut assembly = KeypairAssembly::new();
@@ -208,7 +216,7 @@ where
 
     // Create bases for blind evaluation of polynomials at tau
     let powers_of_tau = vec![Scalar::<E>(E::Fr::zero()); assembly.num_constraints];
-    let mut powers_of_tau = EvaluationDomain::from_coeffs(powers_of_tau)?;
+    let mut powers_of_tau = EvaluationDomain::<E, _>::from_coeffs(powers_of_tau)?;
 
     // Compute G1 window table
     let mut g1_wnaf = Wnaf::new();
@@ -230,12 +238,17 @@ where
         assembly.num_inputs + assembly.num_aux
     });
 
-    let gamma_inverse = gamma.inverse().ok_or(SynthesisError::UnexpectedIdentity)?;
-    let delta_inverse = delta.inverse().ok_or(SynthesisError::UnexpectedIdentity)?;
+    let gamma_inverse = gamma.invert();
+    let delta_inverse = delta.invert();
+    if (gamma_inverse.is_none() | delta_inverse.is_none()).into() {
+        return Err(SynthesisError::UnexpectedIdentity);
+    }
+    let gamma_inverse = gamma_inverse.unwrap();
+    let delta_inverse = delta_inverse.unwrap();
 
     let worker = Worker::new();
 
-    let mut h = vec![E::G1::zero(); powers_of_tau.as_ref().len() - 1];
+    let mut h = vec![E::G1::identity(); powers_of_tau.as_ref().len() - 1];
     {
         // Compute powers of tau
         {
@@ -243,7 +256,7 @@ where
             worker.scope(powers_of_tau.len(), |scope, chunk| {
                 for (i, powers_of_tau) in powers_of_tau.chunks_mut(chunk).enumerate() {
                     scope.execute(move || {
-                        let mut current_tau_power = tau.pow(&[(i * chunk) as u64]);
+                        let mut current_tau_power = tau.pow_vartime(&[(i * chunk) as u64]);
 
                         for p in powers_of_tau {
                             p.0 = current_tau_power;
@@ -274,11 +287,11 @@ where
                         exp.mul_assign(&coeff);
 
                         // Exponentiate
-                        *h = g1_wnaf.scalar(exp.into_repr());
+                        *h = g1_wnaf.scalar(&exp);
                     }
 
                     // Batch normalize
-                    E::G1::batch_normalization(h);
+                    // E::G1::batch_normalization(h);
                 });
             }
         });
@@ -288,11 +301,11 @@ where
     powers_of_tau.ifft(&worker, &mut None)?;
     let powers_of_tau = powers_of_tau.into_coeffs();
 
-    let mut a = vec![E::G1::zero(); assembly.num_inputs + assembly.num_aux];
-    let mut b_g1 = vec![E::G1::zero(); assembly.num_inputs + assembly.num_aux];
-    let mut b_g2 = vec![E::G2::zero(); assembly.num_inputs + assembly.num_aux];
-    let mut ic = vec![E::G1::zero(); assembly.num_inputs];
-    let mut l = vec![E::G1::zero(); assembly.num_aux];
+    let mut a = vec![E::G1::identity(); assembly.num_inputs + assembly.num_aux];
+    let mut b_g1 = vec![E::G1::identity(); assembly.num_inputs + assembly.num_aux];
+    let mut b_g2 = vec![E::G2::identity(); assembly.num_inputs + assembly.num_aux];
+    let mut ic = vec![E::G1::identity(); assembly.num_inputs];
+    let mut l = vec![E::G1::identity(); assembly.num_aux];
 
     #[allow(clippy::too_many_arguments)]
     fn eval<E: Engine>(
@@ -378,32 +391,31 @@ where
 
                         // Compute A query (in G1)
                         if !at.is_zero() {
-                            *a = g1_wnaf.scalar(at.into_repr());
+                            *a = g1_wnaf.scalar(&at);
                         }
 
                         // Compute B query (in G1/G2)
                         if !bt.is_zero() {
-                            let bt_repr = bt.into_repr();
-                            *b_g1 = g1_wnaf.scalar(bt_repr);
-                            *b_g2 = g2_wnaf.scalar(bt_repr);
+                            *b_g1 = g1_wnaf.scalar(&bt);
+                            *b_g2 = g2_wnaf.scalar(&bt);
                         }
 
-                        at.mul_assign(&beta);
-                        bt.mul_assign(&alpha);
+                        at.mul_assign(beta);
+                        bt.mul_assign(alpha);
 
                         let mut e = at;
                         e.add_assign(&bt);
                         e.add_assign(&ct);
                         e.mul_assign(inv);
 
-                        *ext = g1_wnaf.scalar(e.into_repr());
+                        *ext = g1_wnaf.scalar(&e);
                     }
 
                     // Batch normalize
-                    E::G1::batch_normalization(a);
-                    E::G1::batch_normalization(b_g1);
-                    E::G2::batch_normalization(b_g2);
-                    E::G1::batch_normalization(ext);
+                    // E::G1::batch_normalization(a);
+                    // E::G1::batch_normalization(b_g1);
+                    // E::G2::batch_normalization(b_g2);
+                    // E::G1::batch_normalization(ext);
                 });
             }
         });
@@ -448,46 +460,61 @@ where
     // Don't allow any elements be unconstrained, so that
     // the L query is always fully dense.
     for e in l.iter() {
-        if e.is_zero() {
+        if e.is_identity().into() {
             return Err(SynthesisError::UnconstrainedVariable);
         }
     }
 
-    let g1 = g1.into_affine();
-    let g2 = g2.into_affine();
+    let g1 = g1.to_affine();
+    let g2 = g2.to_affine();
 
     let vk = VerifyingKey::<E> {
-        alpha_g1: g1.mul(alpha).into_affine(),
-        beta_g1: g1.mul(beta).into_affine(),
-        beta_g2: g2.mul(beta).into_affine(),
-        gamma_g2: g2.mul(gamma).into_affine(),
-        delta_g1: g1.mul(delta).into_affine(),
-        delta_g2: g2.mul(delta).into_affine(),
-        ic: ic.into_iter().map(|e| e.into_affine()).collect(),
+        alpha_g1: g1.mul(alpha).to_affine(),
+        beta_g1: g1.mul(beta).to_affine(),
+        beta_g2: g2.mul(beta).to_affine(),
+        gamma_g2: g2.mul(gamma).to_affine(),
+        delta_g1: g1.mul(delta).to_affine(),
+        delta_g2: g2.mul(delta).to_affine(),
+        ic: ic.into_iter().map(|e| e.to_affine()).collect(),
     };
 
     Ok(Parameters {
         vk,
-        h: Arc::new(h.into_iter().map(|e| e.into_affine()).collect()),
-        l: Arc::new(l.into_iter().map(|e| e.into_affine()).collect()),
+        h: Arc::new(h.into_iter().map(|e| e.to_affine()).collect()),
+        l: Arc::new(l.into_iter().map(|e| e.to_affine()).collect()),
 
         // Filter points at infinity away from A/B queries
         a: Arc::new(
             a.into_iter()
-                .filter(|e| !e.is_zero())
-                .map(|e| e.into_affine())
+                .filter_map(|e| {
+                    if e.is_identity().into() {
+                        None
+                    } else {
+                        Some(e.to_affine())
+                    }
+                })
                 .collect(),
         ),
         b_g1: Arc::new(
             b_g1.into_iter()
-                .filter(|e| !e.is_zero())
-                .map(|e| e.into_affine())
+                .filter_map(|e| {
+                    if e.is_identity().into() {
+                        None
+                    } else {
+                        Some(e.to_affine())
+                    }
+                })
                 .collect(),
         ),
         b_g2: Arc::new(
             b_g2.into_iter()
-                .filter(|e| !e.is_zero())
-                .map(|e| e.into_affine())
+                .filter_map(|e| {
+                    if e.is_identity().into() {
+                        None
+                    } else {
+                        Some(e.to_affine())
+                    }
+                })
                 .collect(),
         ),
     })

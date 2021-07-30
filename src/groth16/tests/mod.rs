@@ -1,6 +1,7 @@
-use crate::bls::Engine;
+use pairing::Engine;
 
 use ff::{Field, PrimeField};
+use group::{Curve, Group};
 use rand_core::SeedableRng;
 use rand_xorshift::XorShiftRng;
 
@@ -8,6 +9,7 @@ mod dummy_engine;
 use self::dummy_engine::*;
 
 use std::marker::PhantomData;
+use std::ops::{AddAssign, Mul, MulAssign, SubAssign};
 
 use super::{
     create_proof, create_proof_batch, generate_parameters, prepare_verifying_key, verify_proof,
@@ -131,22 +133,22 @@ fn test_xordemo() {
     let mut root_of_unity = Fr::root_of_unity();
 
     // We expect this to be a 2^10 root of unity
-    assert_eq!(Fr::one(), root_of_unity.pow(&[1 << 10]));
+    assert_eq!(Fr::one(), root_of_unity.pow_vartime(&[1 << 10]));
 
     // Let's turn it into a 2^3 root of unity.
-    root_of_unity = root_of_unity.pow(&[1 << 7]);
-    assert_eq!(Fr::one(), root_of_unity.pow(&[1 << 3]));
+    root_of_unity = root_of_unity.pow_vartime(&[1 << 7]);
+    assert_eq!(Fr::one(), root_of_unity.pow_vartime(&[1 << 3]));
     assert_eq!(Fr::from_str("20201").unwrap(), root_of_unity);
 
     // Let's compute all the points in our evaluation domain.
     let mut points = Vec::with_capacity(8);
     for i in 0..8 {
-        points.push(root_of_unity.pow(&[i]));
+        points.push(root_of_unity.pow_vartime(&[i]));
     }
 
     // Let's compute t(tau) = (tau - p_0)(tau - p_1)...
     //                      = tau^8 - 1
-    let mut t_at_tau = tau.pow(&[8]);
+    let mut t_at_tau = tau.pow_vartime(&[8]);
     t_at_tau.sub_assign(&Fr::one());
     {
         let mut tmp = Fr::one();
@@ -160,8 +162,8 @@ fn test_xordemo() {
 
     // We expect our H query to be 7 elements of the form...
     // {tau^i t(tau) / delta}
-    let delta_inverse = delta.inverse().unwrap();
-    let gamma_inverse = gamma.inverse().unwrap();
+    let delta_inverse = delta.invert().unwrap();
+    let gamma_inverse = gamma.invert().unwrap();
     {
         let mut coeff = delta_inverse;
         coeff.mul_assign(&t_at_tau);
@@ -445,7 +447,6 @@ fn test_create_batch_single() {
 fn test_verify_random_single() {
     use crate::bls::{Bls12, Fr, G1Projective, G2Projective};
     use crate::groth16::{create_random_proof, generate_random_parameters, Proof};
-    use groupy::{CurveAffine, CurveProjective};
 
     let mut rng = XorShiftRng::from_seed([
         0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06, 0xbc,
@@ -484,19 +485,19 @@ fn test_verify_random_single() {
         // mess up the proof a little bit
         {
             let mut fake_proof = proof.clone();
-            fake_proof.a = fake_proof.a.mul(Fr::random(&mut rng)).into_affine();
+            fake_proof.a = fake_proof.a.mul(Fr::random(&mut rng)).to_affine();
             assert!(!verify_proof(&pvk, &fake_proof, &[Fr::one()]).unwrap());
         }
 
         {
             let mut fake_proof = proof.clone();
-            fake_proof.b = fake_proof.b.mul(Fr::random(&mut rng)).into_affine();
+            fake_proof.b = fake_proof.b.mul(Fr::random(&mut rng)).to_affine();
             assert!(!verify_proof(&pvk, &fake_proof, &[Fr::one()]).unwrap());
         }
 
         {
             let mut fake_proof = proof.clone();
-            fake_proof.c = fake_proof.c.mul(Fr::random(&mut rng)).into_affine();
+            fake_proof.c = fake_proof.c.mul(Fr::random(&mut rng)).to_affine();
             assert!(!verify_proof(&pvk, &fake_proof, &[Fr::one()]).unwrap());
         }
 
@@ -511,9 +512,9 @@ fn test_verify_random_single() {
         // entirely random proofs
         {
             let random_proof = Proof {
-                a: G1Projective::random(&mut rng).into_affine(),
-                b: G2Projective::random(&mut rng).into_affine(),
-                c: G1Projective::random(&mut rng).into_affine(),
+                a: G1Projective::random(&mut rng).to_affine(),
+                b: G2Projective::random(&mut rng).to_affine(),
+                c: G1Projective::random(&mut rng).to_affine(),
             };
             assert!(!verify_proof(&pvk, &random_proof, &[Fr::one()]).unwrap());
         }
@@ -526,7 +527,6 @@ fn test_verify_random_batch() {
     use crate::groth16::{
         create_random_proof_batch, generate_random_parameters, verify_proofs_batch, Proof,
     };
-    use groupy::{CurveAffine, CurveProjective};
 
     let mut rng = XorShiftRng::from_seed([
         0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06, 0xbc,
@@ -578,7 +578,7 @@ fn test_verify_random_batch() {
         // mess up the proof a little bit
         {
             let mut fake_proof = proof.clone();
-            fake_proof[0].a = fake_proof[0].a.mul(Fr::random(&mut rng)).into_affine();
+            fake_proof[0].a = fake_proof[0].a.mul(Fr::random(&mut rng)).to_affine();
             assert!(!verify_proofs_batch(
                 &pvk,
                 &mut rng,
@@ -590,7 +590,7 @@ fn test_verify_random_batch() {
 
         {
             let mut fake_proof = proof.clone();
-            fake_proof[1].b = fake_proof[1].b.mul(Fr::random(&mut rng)).into_affine();
+            fake_proof[1].b = fake_proof[1].b.mul(Fr::random(&mut rng)).to_affine();
             assert!(!verify_proofs_batch(
                 &pvk,
                 &mut rng,
@@ -602,7 +602,7 @@ fn test_verify_random_batch() {
 
         {
             let mut fake_proof = proof.clone();
-            fake_proof[2].c = fake_proof[2].c.mul(Fr::random(&mut rng)).into_affine();
+            fake_proof[2].c = fake_proof[2].c.mul(Fr::random(&mut rng)).to_affine();
             assert!(!verify_proofs_batch(
                 &pvk,
                 &mut rng,
@@ -630,19 +630,19 @@ fn test_verify_random_batch() {
         {
             let random_proof = [
                 Proof {
-                    a: G1Projective::random(&mut rng).into_affine(),
-                    b: G2Projective::random(&mut rng).into_affine(),
-                    c: G1Projective::random(&mut rng).into_affine(),
+                    a: G1Projective::random(&mut rng).to_affine(),
+                    b: G2Projective::random(&mut rng).to_affine(),
+                    c: G1Projective::random(&mut rng).to_affine(),
                 },
                 Proof {
-                    a: G1Projective::random(&mut rng).into_affine(),
-                    b: G2Projective::random(&mut rng).into_affine(),
-                    c: G1Projective::random(&mut rng).into_affine(),
+                    a: G1Projective::random(&mut rng).to_affine(),
+                    b: G2Projective::random(&mut rng).to_affine(),
+                    c: G1Projective::random(&mut rng).to_affine(),
                 },
                 Proof {
-                    a: G1Projective::random(&mut rng).into_affine(),
-                    b: G2Projective::random(&mut rng).into_affine(),
-                    c: G1Projective::random(&mut rng).into_affine(),
+                    a: G1Projective::random(&mut rng).to_affine(),
+                    b: G2Projective::random(&mut rng).to_affine(),
+                    c: G1Projective::random(&mut rng).to_affine(),
                 },
             ];
             assert!(!verify_proofs_batch(

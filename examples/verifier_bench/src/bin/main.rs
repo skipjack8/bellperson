@@ -15,12 +15,13 @@ use bellperson::groth16::{
     verify_proofs_batch, Parameters, Proof, VerifyingKey,
 };
 use bellperson::{
-    bls::{Bls12, Engine, Fr},
+    bls::{Bls12, Fr},
     Circuit, ConstraintSystem, SynthesisError,
 };
-use fff::{Field, PrimeField, ScalarEngine};
-use groupy::CurveProjective;
-use rand::Rng;
+use ff::{Field, PrimeField};
+use group::{Curve, Group};
+use pairing::{Engine, MultiMillerLoop};
+use rand::RngCore;
 use structopt::StructOpt;
 
 macro_rules! timer {
@@ -50,7 +51,7 @@ impl<E: Engine> Circuit<E> for DummyDemo {
         for _ in 0..self.private + self.public - 1 {
             // Allocate: x * x = x2
             let x2_val = x_val.map(|mut e| {
-                e.square();
+                e = e.square();
                 e
             });
 
@@ -79,12 +80,17 @@ impl<E: Engine> Circuit<E> for DummyDemo {
     }
 }
 
-fn random_points<C: CurveProjective, R: Rng>(count: usize, rng: &mut R) -> Vec<C::Affine> {
+fn random_points<C, R>(count: usize, rng: &mut R) -> Vec<C::AffineRepr>
+where
+    C: Curve,
+    <C as Curve>::AffineRepr: Clone,
+    R: RngCore,
+{
     // Number of distinct points is limited because generating random points is very time
     // consuming, so it's better to just repeat them.
     const DISTINT_POINTS: usize = 100;
     (0..DISTINT_POINTS)
-        .map(|_| C::random(rng).into_affine())
+        .map(|_| C::random(&mut *rng).to_affine())
         .collect::<Vec<_>>()
         .into_iter()
         .cycle()
@@ -92,35 +98,43 @@ fn random_points<C: CurveProjective, R: Rng>(count: usize, rng: &mut R) -> Vec<C
         .collect()
 }
 
-fn dummy_proofs<E: Engine, R: Rng>(count: usize, rng: &mut R) -> Vec<Proof<E>> {
+fn dummy_proofs<E: Engine, R: RngCore>(count: usize, rng: &mut R) -> Vec<Proof<E>> {
     (0..count)
         .map(|_| Proof {
-            a: E::G1::random(rng).into_affine(),
-            b: E::G2::random(rng).into_affine(),
-            c: E::G1::random(rng).into_affine(),
+            a: E::G1::random(&mut *rng).to_affine(),
+            b: E::G2::random(&mut *rng).to_affine(),
+            c: E::G1::random(&mut *rng).to_affine(),
         })
         .collect()
 }
 
-fn dummy_inputs<E: Engine, R: Rng>(count: usize, rng: &mut R) -> Vec<<E as ScalarEngine>::Fr> {
+fn dummy_inputs<E: Engine, R: RngCore>(count: usize, rng: &mut R) -> Vec<<E as Engine>::Fr> {
     (0..count)
-        .map(|_| <E as ScalarEngine>::Fr::random(rng))
+        .map(|_| <E as Engine>::Fr::random(&mut *rng))
         .collect()
 }
 
-fn dummy_vk<E: Engine, R: Rng>(public: usize, rng: &mut R) -> VerifyingKey<E> {
+fn dummy_vk<E: Engine + MultiMillerLoop, R: RngCore>(
+    public: usize,
+    rng: &mut R,
+) -> VerifyingKey<E> {
     VerifyingKey {
-        alpha_g1: E::G1::random(rng).into_affine(),
-        beta_g1: E::G1::random(rng).into_affine(),
-        beta_g2: E::G2::random(rng).into_affine(),
-        gamma_g2: E::G2::random(rng).into_affine(),
-        delta_g1: E::G1::random(rng).into_affine(),
-        delta_g2: E::G2::random(rng).into_affine(),
-        ic: random_points::<E::G1, _>(public + 1, rng),
+        alpha_g1: E::G1::random(&mut *rng).to_affine(),
+        beta_g1: E::G1::random(&mut *rng).to_affine(),
+        beta_g2: E::G2::random(&mut *rng).to_affine(),
+        gamma_g2: E::G2::random(&mut *rng).to_affine(),
+        delta_g1: E::G1::random(&mut *rng).to_affine(),
+        delta_g2: E::G2::random(&mut *rng).to_affine(),
+        ic: random_points::<E::G1, _>(public + 1, &mut *rng),
     }
 }
 
-fn dummy_params<E: Engine, R: Rng>(public: usize, private: usize, rng: &mut R) -> Parameters<E> {
+fn dummy_params<E, R>(public: usize, private: usize, rng: &mut R) -> Parameters<E>
+where
+    E: Engine + MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    R: RngCore,
+{
     let count = public + private;
     let hlen = (1 << (((count + public + 1) as f64).log2().ceil() as usize)) - 1;
     Parameters {
@@ -177,7 +191,7 @@ fn main() {
         dummy_params::<Bls12, _>(opts.public, opts.private, &mut rng)
     } else {
         println!("Generating params... (You can skip this by passing `--dummy` flag)");
-        generate_random_parameters(circuit.clone(), &mut rng).unwrap()
+        generate_random_parameters(circuit, &mut rng).unwrap()
     };
     let pvk = prepare_verifying_key(&params.vk);
 
@@ -206,7 +220,7 @@ fn main() {
         let (inputs, proofs, agg_proof) = if opts.dummy {
             let proofs = dummy_proofs::<Bls12, _>(opts.proofs, &mut rng);
             let inputs = dummy_inputs::<Bls12, _>(opts.public, &mut rng);
-            let pis = vec![inputs.clone(); opts.proofs];
+            let pis = vec![inputs; opts.proofs];
 
             let agg_proof = srs.as_ref().map(|srs| {
                 let (agg, took) =
@@ -219,17 +233,17 @@ fn main() {
         } else {
             let mut inputs = Vec::new();
             let mut num = Fr::one();
-            num.double();
+            num = num.double();
             for _ in 0..opts.public {
                 inputs.push(num);
-                num.square();
+                num = num.square();
             }
             println!("(Generating valid proofs...)");
             let (proofs, took) =
-                timer!(create_random_proof_batch(circuits.clone(), &params, &mut rng).unwrap());
+                timer!(create_random_proof_batch(circuits, &params, &mut rng).unwrap());
             println!("Proof generation finished in {}ms", took);
 
-            let pis = vec![inputs.clone(); opts.proofs];
+            let pis = vec![inputs; opts.proofs];
 
             let agg_proof = srs.as_ref().map(|srs| {
                 let (agg, took) =

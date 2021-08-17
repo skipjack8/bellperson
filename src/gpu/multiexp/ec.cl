@@ -9,9 +9,9 @@ typedef struct {
   FIELD y;
   #ifndef BLSTRS
     bool inf;
-  #endif
-  #if FIELD_LIMB_BITS == 32
-    uint _padding;
+    #if FIELD_LIMB_BITS == 32
+      uint _padding;
+    #endif
   #endif
 } POINT_affine;
 

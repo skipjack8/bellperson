@@ -104,8 +104,8 @@ where
         omega: &E::Fr,
         n: usize,
         max_deg: u32,
-        pq_buffer: &opencl::Buffer<E::Fr>,
-        omegas_buffer: &opencl::Buffer<E::Fr>,
+        pq_buffer: &mut opencl::Buffer<E::Fr>,
+        omegas_buffer: &mut opencl::Buffer<E::Fr>,
     ) -> GPUResult<()> {
         // Precalculate:
         // [omega^(0/(2^(deg-1))), omega^(1/(2^(deg-1))), ..., omega^((2^(deg-1)-1)/(2^(deg-1)))]
@@ -141,15 +141,15 @@ where
         // before they are read.
         let mut src_buffer = unsafe { self.program.create_buffer::<E::Fr>(n)? };
         let mut dst_buffer = unsafe { self.program.create_buffer::<E::Fr>(n)? };
-        let pq_buffer = unsafe {
+        let mut pq_buffer = unsafe {
             self.program
                 .create_buffer::<E::Fr>(1 << MAX_LOG2_RADIX >> 1)?
         };
-        let omegas_buffer = unsafe { self.program.create_buffer::<E::Fr>(LOG2_MAX_ELEMENTS)? };
+        let mut omegas_buffer = unsafe { self.program.create_buffer::<E::Fr>(LOG2_MAX_ELEMENTS)? };
         let max_deg = cmp::min(MAX_LOG2_RADIX, log_n);
-        self.setup_pq_omegas(omega, n, max_deg, &pq_buffer, &omegas_buffer)?;
+        self.setup_pq_omegas(omega, n, max_deg, &mut pq_buffer, &mut omegas_buffer)?;
 
-        self.program.write_from_buffer(&src_buffer, 0, &*a)?;
+        self.program.write_from_buffer(&mut src_buffer, 0, &*a)?;
         let mut log_p = 0u32;
         while log_p < log_n {
             let deg = cmp::min(max_deg, log_n - log_p);

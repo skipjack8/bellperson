@@ -307,11 +307,10 @@ where
 }
 
 fn mul_if_not_one_ml<M: MillerLoopResult>(left: &mut M, right: &M) {
-    let one = M::default();
-    if left == &one {
+    if left.is_identity() {
         *left = *right;
         return;
-    } else if right == &one {
+    } else if right.is_identity() {
         // nothing to do here
         return;
     }

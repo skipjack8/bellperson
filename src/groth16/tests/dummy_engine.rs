@@ -365,6 +365,10 @@ impl MillerLoopResult for Fr {
     fn final_exponentiation(&self) -> Self::Gt {
         *self
     }
+
+    fn is_identity(&self) -> bool {
+        self == &Fr::one()
+    }
 }
 
 impl MultiMillerLoop for DummyEngine {

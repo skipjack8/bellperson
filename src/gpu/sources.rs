@@ -44,17 +44,9 @@ where
     E: Engine,
 {
     vec![
-        if limb64 {
-            ffgen::field::<E::Fr, ffgen::Limb64>("Fr")
-        } else {
-            ffgen::field::<E::Fr, ffgen::Limb32>("Fr")
-        },
+        ffgen::field::<E::Fr, ffgen::Limb32>("Fr"),
         fft("Fr"),
-        if limb64 {
-            ffgen::field::<E::Fq, ffgen::Limb64>("Fq")
-        } else {
-            ffgen::field::<E::Fq, ffgen::Limb32>("Fq")
-        },
+        ffgen::field::<E::Fq, ffgen::Limb32>("Fq"),
         ec("Fq", "G1"),
         multiexp("G1", "Fr"),
         field2("Fq2", "Fq"),

@@ -1,12 +1,12 @@
 use crossbeam_channel::{bounded, Receiver, Sender};
-use ff::{Field, PrimeField};
-use group::Curve;
+use ff::Field;
+use group::{Curve, Group};
 use pairing::{Engine, MillerLoopResult, MultiMillerLoop};
 use rand_core::RngCore;
 use rayon::prelude::*;
 
-use crate::{le_bytes_to_u64s, SynthesisError};
-use std::ops::{Mul, MulAssign};
+use crate::SynthesisError;
+use std::ops::Mul;
 use std::sync::{
     atomic::{AtomicBool, Ordering::SeqCst},
     Arc, Mutex,
@@ -24,8 +24,7 @@ use std::thread;
 #[derive(Debug)]
 pub struct PairingChecks<E, R>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
     R: RngCore + Send,
 {
     /// Circuit breaker to allow canceling all checks and marking the whole check as failed.
@@ -40,8 +39,7 @@ where
 
 impl<E, R> PairingChecks<E, R>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
     R: RngCore + Send,
 {
     #[allow(clippy::type_complexity)]
@@ -105,7 +103,7 @@ where
     fn merge_pair(
         &self,
         result: <E as MultiMillerLoop>::Result,
-        exp: <E as MultiMillerLoop>::Result,
+        exp: <E as Engine>::Gt,
         must_randomize: bool,
     ) {
         self.merge(PairingCheck::from_pair(result, exp), must_randomize);
@@ -127,7 +125,7 @@ where
     pub fn merge_nonrandom(
         &self,
         left: Vec<<E as MultiMillerLoop>::Result>,
-        right: <E as MultiMillerLoop>::Result,
+        right: <E as Engine>::Gt,
     ) {
         let randomize = self.non_random_check_done.load(SeqCst);
         self.merge_pair(left[0], right, randomize);
@@ -146,7 +144,7 @@ where
     pub fn merge_miller_inputs<'a>(
         &self,
         it: &[(&'a E::G1Affine, &'a E::G2Affine)],
-        out: &'a <E as MultiMillerLoop>::Result,
+        out: &'a <E as Engine>::Gt,
     ) {
         let must_randomize = self.non_random_check_done.load(SeqCst);
         let coeff = {
@@ -208,23 +206,21 @@ where
 #[derive(Debug)]
 struct PairingCheck<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     left: <E as MultiMillerLoop>::Result,
-    right: <E as MultiMillerLoop>::Result,
+    right: <E as Engine>::Gt,
     randomized: bool,
 }
 
 impl<E> PairingCheck<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     fn new() -> PairingCheck<E> {
         Self {
-            left: <E as MultiMillerLoop>::Result::one(),
-            right: <E as MultiMillerLoop>::Result::one(),
+            left: <E as MultiMillerLoop>::Result::default(),
+            right: <E as Engine>::Gt::generator(),
             randomized: false,
         }
     }
@@ -239,7 +235,7 @@ where
     /// be randomized when merging.
     fn from_pair(
         result: <E as MultiMillerLoop>::Result,
-        exp: <E as MultiMillerLoop>::Result,
+        exp: <E as Engine>::Gt,
     ) -> PairingCheck<E> {
         Self {
             left: result,
@@ -251,7 +247,7 @@ where
     fn from_miller_one(result: <E as MultiMillerLoop>::Result) -> PairingCheck<E> {
         Self {
             left: result,
-            right: <E as MultiMillerLoop>::Result::one(),
+            right: <E as Engine>::Gt::generator(),
             randomized: false,
         }
     }
@@ -267,7 +263,7 @@ where
     pub fn new_random_from_miller_inputs<'a>(
         coeff: E::Fr,
         it: &[(&'a E::G1Affine, &'a E::G2Affine)],
-        out: &'a <E as MultiMillerLoop>::Result,
+        out: &'a <E as Engine>::Gt,
     ) -> PairingCheck<E> {
         let miller_out = it
             .into_par_iter()
@@ -276,19 +272,17 @@ where
                 (na, (**b).into())
             })
             .map(|(a, b)| E::multi_miller_loop(&[(&a, &b)]))
-            .fold(<E as MultiMillerLoop>::Result::one, |mut acc, res| {
-                acc.mul_assign(&res);
-                acc
+            .fold(<E as MultiMillerLoop>::Result::default, |acc, res| {
+                acc + res
             })
-            .reduce(<E as MultiMillerLoop>::Result::one, |mut acc, res| {
-                acc.mul_assign(&res);
-                acc
+            .reduce(<E as MultiMillerLoop>::Result::default, |acc, res| {
+                acc + res
             });
         let mut outt = *out;
-        if out != &<E as MultiMillerLoop>::Result::one() {
+        if out != &<E as Engine>::Gt::generator() {
             // we only need to make this expensive operation is the output is
             // not one since 1^r = 1
-            outt = outt.pow_vartime(&le_bytes_to_u64s(coeff.to_repr().as_ref()));
+            outt *= coeff;
         }
         PairingCheck {
             left: miller_out,
@@ -300,26 +294,20 @@ where
     /// takes another pairing tuple and combine both sides together. Note the checks are not
     /// randomized when merged, the checks must have been randomized before.
     pub fn merge(&mut self, p2: &PairingCheck<E>) {
-        mul_if_not_one::<E>(&mut self.left, &p2.left);
-        mul_if_not_one::<E>(&mut self.right, &p2.right);
+        mul_if_not_one_ml(&mut self.left, &p2.left);
+        mul_if_not_one_gt::<E>(&mut self.right, &p2.right);
         // A merged PairingCheck is only randomized if both of its contributors are.
         self.randomized = self.randomized && p2.randomized;
     }
 
     fn verify(&self) -> bool {
-        let left: <E as MultiMillerLoop>::Result = self.left.final_exponentiation().into();
+        let left = self.left.final_exponentiation();
         left == self.right
     }
 }
 
-fn mul_if_not_one<E>(
-    left: &mut <E as MultiMillerLoop>::Result,
-    right: &<E as MultiMillerLoop>::Result,
-) where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
-{
-    let one = <E as MultiMillerLoop>::Result::one();
+fn mul_if_not_one_ml<M: MillerLoopResult>(left: &mut M, right: &M) {
+    let one = M::default();
     if left == &one {
         *left = *right;
         return;
@@ -327,7 +315,19 @@ fn mul_if_not_one<E>(
         // nothing to do here
         return;
     }
-    left.mul_assign(right);
+    *left += right
+}
+
+fn mul_if_not_one_gt<E: Engine>(left: &mut E::Gt, right: &E::Gt) {
+    let one = E::Gt::generator();
+    if left == &one {
+        *left = *right;
+        return;
+    } else if right == &one {
+        // nothing to do here
+        return;
+    }
+    *left += right
 }
 
 fn derive_non_zero<E: Engine, R: rand_core::RngCore>(rng: &mut R) -> E::Fr {
@@ -342,7 +342,7 @@ fn derive_non_zero<E: Engine, R: rand_core::RngCore>(rng: &mut R) -> E::Fr {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::bls::{Bls12, Fq12, G1Projective, G2Projective};
+    use crate::bls::{Bls12, G1Projective, G2Projective};
     use group::Group;
     use rand_core::RngCore;
     use rand_core::SeedableRng;
@@ -350,7 +350,7 @@ mod test {
     fn gen_pairing_check<R: RngCore>(r: &mut R) -> PairingCheck<Bls12> {
         let g1r = G1Projective::random(&mut *r).to_affine();
         let g2r = G2Projective::random(&mut *r).to_affine();
-        let exp: Fq12 = Bls12::pairing(&g1r, &g2r).into();
+        let exp = Bls12::pairing(&g1r, &g2r);
         let coeff = derive_non_zero::<Bls12, _>(r);
         let tuple =
             PairingCheck::<Bls12>::new_random_from_miller_inputs(coeff, &[(&g1r, &g2r)], &exp);

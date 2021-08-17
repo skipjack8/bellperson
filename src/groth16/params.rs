@@ -1,5 +1,5 @@
 use group::{prime::PrimeCurveAffine, UncompressedEncoding};
-use pairing::{Engine, MultiMillerLoop};
+use pairing::MultiMillerLoop;
 
 use crate::multiexp::SourceBuilder;
 use crate::SynthesisError;
@@ -18,8 +18,7 @@ use super::{MappedParameters, VerifyingKey};
 #[derive(Clone)]
 pub struct Parameters<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     pub vk: VerifyingKey<E>,
 
@@ -46,8 +45,7 @@ where
 
 impl<E> PartialEq for Parameters<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     fn eq(&self, other: &Self) -> bool {
         self.vk == other.vk
@@ -61,8 +59,7 @@ where
 
 impl<E> Parameters<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         self.vk.write(&mut writer)?;
@@ -408,8 +405,7 @@ where
 
 pub trait ParameterSource<E>: Send + Sync
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     type G1Builder: SourceBuilder<E::G1Affine>;
     type G2Builder: SourceBuilder<E::G2Affine>;
@@ -436,8 +432,7 @@ where
 
 impl<'a, E> ParameterSource<E> for &'a Parameters<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     type G1Builder = (Arc<Vec<E::G1Affine>>, usize);
     type G2Builder = (Arc<Vec<E::G2Affine>>, usize);

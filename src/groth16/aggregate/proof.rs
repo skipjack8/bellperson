@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 
-use ff::Field;
 use group::{prime::PrimeCurveAffine, Curve, GroupEncoding};
 use pairing::{Engine, MultiMillerLoop};
 use serde::{Deserialize, Serialize};
@@ -15,8 +14,9 @@ use crate::SynthesisError;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AggregateProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + Compress,
+    E: MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: Compress,
+    <E as Engine>::Gt: Compress,
 {
     /// commitment to A and B using the pair commitment scheme needed to verify
     /// TIPP relation.
@@ -33,10 +33,10 @@ where
     pub com_c: commit::Output<E>,
     /// $A^r * B = Z$ is the left value on the aggregated Groth16 equation
     #[serde(bound(
-        serialize = "<E as pairing::MultiMillerLoop>::Result: Serialize",
-        deserialize = "<E as pairing::MultiMillerLoop>::Result: Deserialize<'de>",
+        serialize = "<E as pairing::Engine>::Gt: Serialize",
+        deserialize = "<E as pairing::Engine>::Gt: Deserialize<'de>",
     ))]
-    pub ip_ab: <E as MultiMillerLoop>::Result,
+    pub ip_ab: <E as Engine>::Gt,
     /// $C^r$ is used on the right side of the aggregated Groth16 equation
     pub agg_c: E::G1,
     #[serde(bound(
@@ -48,8 +48,9 @@ where
 
 impl<E> PartialEq for AggregateProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + Compress,
+    E: MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: Compress,
+    <E as Engine>::Gt: Compress,
 {
     fn eq(&self, other: &Self) -> bool {
         self.com_ab == other.com_ab
@@ -62,8 +63,9 @@ where
 
 impl<E> AggregateProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + Compress,
+    E: MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: Compress,
+    <E as Engine>::Gt: Compress,
 {
     /// Performs some high level checks on the length of vectors and others to
     /// make sure all items in the proofs are consistent with each other.
@@ -134,16 +136,16 @@ where
 
     pub fn read(mut source: impl Read) -> std::io::Result<Self> {
         let com_ab = (
-            <<E as MultiMillerLoop>::Result as Compress>::read_compressed(&mut source)?,
-            <<E as MultiMillerLoop>::Result as Compress>::read_compressed(&mut source)?,
+            <<E as Engine>::Gt as Compress>::read_compressed(&mut source)?,
+            <<E as Engine>::Gt as Compress>::read_compressed(&mut source)?,
         );
 
         let com_c = (
-            <<E as MultiMillerLoop>::Result as Compress>::read_compressed(&mut source)?,
-            <<E as MultiMillerLoop>::Result as Compress>::read_compressed(&mut source)?,
+            <<E as Engine>::Gt as Compress>::read_compressed(&mut source)?,
+            <<E as Engine>::Gt as Compress>::read_compressed(&mut source)?,
         );
 
-        let ip_ab = <<E as MultiMillerLoop>::Result as Compress>::read_compressed(&mut source)?;
+        let ip_ab = <<E as Engine>::Gt as Compress>::read_compressed(&mut source)?;
         let agg_c = read_affine::<E::G1Affine, _>(&mut source)?.to_curve();
 
         let tmipp = TippMippProof::read(&mut source)?;
@@ -163,28 +165,24 @@ where
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GipaProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field,
+    E: MultiMillerLoop,
 {
     pub nproofs: u32,
     #[serde(bound(
-        serialize = "<E as pairing::MultiMillerLoop>::Result: Serialize",
-        deserialize = "<E as pairing::MultiMillerLoop>::Result: Deserialize<'de>",
+        serialize = "<E as pairing::Engine>::Gt: Serialize",
+        deserialize = "<E as pairing::Engine>::Gt: Deserialize<'de>",
     ))]
     pub comms_ab: Vec<(commit::Output<E>, commit::Output<E>)>,
     #[serde(bound(
-        serialize = "<E as pairing::MultiMillerLoop>::Result: Serialize",
-        deserialize = "<E as pairing::MultiMillerLoop>::Result: Deserialize<'de>",
+        serialize = "<E as pairing::Engine>::Gt: Serialize",
+        deserialize = "<E as pairing::Engine>::Gt: Deserialize<'de>",
     ))]
     pub comms_c: Vec<(commit::Output<E>, commit::Output<E>)>,
     #[serde(bound(
-        serialize = "<E as pairing::MultiMillerLoop>::Result: Serialize",
-        deserialize = "<E as pairing::MultiMillerLoop>::Result: Deserialize<'de>",
+        serialize = "<E as pairing::Engine>::Gt: Serialize",
+        deserialize = "<E as pairing::Engine>::Gt: Deserialize<'de>",
     ))]
-    pub z_ab: Vec<(
-        <E as MultiMillerLoop>::Result,
-        <E as MultiMillerLoop>::Result,
-    )>,
+    pub z_ab: Vec<(<E as Engine>::Gt, <E as Engine>::Gt)>,
     #[serde(bound(
         serialize = "E::G1: Serialize",
         deserialize = "E::G1: Deserialize<'de>",
@@ -221,8 +219,7 @@ where
 
 impl<E> PartialEq for GipaProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field,
+    E: MultiMillerLoop,
 {
     fn eq(&self, other: &Self) -> bool {
         self.nproofs == other.nproofs
@@ -240,8 +237,9 @@ where
 
 impl<E> GipaProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + Compress,
+    E: MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: Compress,
+    <E as Engine>::Gt: Compress,
 {
     fn log_proofs(nproofs: usize) -> usize {
         (nproofs as f32).log2().ceil() as usize
@@ -320,12 +318,13 @@ where
 
         fn read_output<E, R>(mut source: R) -> std::io::Result<commit::Output<E>>
         where
-            E: Engine + MultiMillerLoop,
+            E: MultiMillerLoop,
             <E as MultiMillerLoop>::Result: Compress,
+            <E as Engine>::Gt: Compress,
             R: Read,
         {
-            let a = <<E as MultiMillerLoop>::Result as Compress>::read_compressed(&mut source)?;
-            let b = <<E as MultiMillerLoop>::Result as Compress>::read_compressed(&mut source)?;
+            let a = <<E as Engine>::Gt as Compress>::read_compressed(&mut source)?;
+            let b = <<E as Engine>::Gt as Compress>::read_compressed(&mut source)?;
             Ok((a, b))
         }
 
@@ -385,8 +384,8 @@ where
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TippMippProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + Compress,
+    E: MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: Compress,
 {
     #[serde(bound(
         serialize = "GipaProof<E>: Serialize",
@@ -407,8 +406,8 @@ where
 
 impl<E> PartialEq for TippMippProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + Compress,
+    E: MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: Compress,
 {
     fn eq(&self, other: &Self) -> bool {
         self.gipa == other.gipa
@@ -419,8 +418,9 @@ where
 
 impl<E> TippMippProof<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + Compress,
+    E: MultiMillerLoop,
+    <E as MultiMillerLoop>::Result: Compress,
+    <E as Engine>::Gt: Compress,
 {
     /// Writes the  proof into the provided buffer.
     pub fn write(&self, mut out: impl Write) -> std::io::Result<()> {
@@ -484,13 +484,13 @@ mod tests {
 
     use group::Group;
 
-    use crate::bls::{Bls12, Fq12, G1Affine, G1Projective, G2Affine, G2Projective};
+    use crate::bls::{Bls12, G1Affine, G1Projective, G2Affine, G2Projective};
 
     fn fake_proof() -> AggregateProof<Bls12> {
         // create pairing, as pairing results can be compressed
         let p = G1Projective::generator().to_affine();
         let q = G2Projective::generator().to_affine();
-        let a: Fq12 = Bls12::pairing(&p, &q).into();
+        let a = Bls12::pairing(&p, &q);
 
         AggregateProof::<Bls12> {
             com_ab: (a, a),
@@ -538,7 +538,7 @@ mod tests {
     fn test_proof_check() {
         let p = G1Projective::generator().to_affine();
         let q = G2Projective::generator().to_affine();
-        let a: Fq12 = Bls12::pairing(&p, &q).into();
+        let a = Bls12::pairing(&p, &q);
 
         let mut proof = fake_proof();
         proof.parsing_check().expect("proof should be valid");

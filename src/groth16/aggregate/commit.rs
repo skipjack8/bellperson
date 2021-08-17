@@ -27,7 +27,6 @@
 /// one commitment.
 use std::ops::{AddAssign, MulAssign};
 
-use ff::Field;
 use group::{prime::PrimeCurveAffine, Curve};
 use rayon::prelude::*;
 
@@ -142,28 +141,21 @@ where
 }
 
 /// Both commitment outputs a pair of $F_q^k$ element.
-pub type Output<E> = (
-    <E as MultiMillerLoop>::Result,
-    <E as MultiMillerLoop>::Result,
-);
+pub type Output<E> = (<E as Engine>::Gt, <E as Engine>::Gt);
 
 /// Commits to a single vector of G1 elements in the following way:
 /// $T = \prod_{i=0}^n e(A_i, v_{1,i})$
 /// $U = \prod_{i=0}^n e(A_i, v_{2,i})$
 /// Output is $(T,U)$
-pub fn single_g1<E: Engine + MultiMillerLoop>(
-    vkey: &VKey<E>,
-    a_vec: &[E::G1Affine],
-) -> Result<Output<E>, SynthesisError>
+pub fn single_g1<E>(vkey: &VKey<E>, a_vec: &[E::G1Affine]) -> Result<Output<E>, SynthesisError>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt> + Field,
+    E: MultiMillerLoop,
 {
     try_par! {
         let a = inner_product::pairing::<E>(a_vec, &vkey.a),
         let b = inner_product::pairing::<E>(a_vec, &vkey.b)
     };
-    Ok((a.into(), b.into()))
+    Ok((a, b))
 }
 
 /// Commits to a tuple of G1 vector and G2 vector in the following way:
@@ -177,8 +169,7 @@ pub fn pair<E>(
     b: &[E::G2Affine],
 ) -> Result<Output<E>, SynthesisError>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt> + Field,
+    E: MultiMillerLoop,
 {
     try_par! {
         // (A * v)
@@ -188,14 +179,9 @@ where
         let u1 = inner_product::pairing::<E>(a, &vkey.b),
         let u2 = inner_product::pairing::<E>(&wkey.b, b)
     };
-    let mut t1: <E as MultiMillerLoop>::Result = t1.into();
-    let t2: <E as MultiMillerLoop>::Result = t2.into();
-    let mut u1: <E as MultiMillerLoop>::Result = u1.into();
-    let u2: <E as MultiMillerLoop>::Result = u2.into();
+
     // (A * v)(w * B)
-    t1.mul_assign(&t2);
-    u1.mul_assign(&u2);
-    Ok((t1, u1))
+    Ok((t1 + t2, u1 + u2))
 }
 
 #[allow(clippy::many_single_char_names)]

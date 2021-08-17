@@ -245,11 +245,10 @@ impl<E: Engine + MultiMillerLoop> VerifyingKey<E> {
 
 pub struct PreparedVerifyingKey<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     /// Pairing result of alpha*beta
-    pub(crate) alpha_g1_beta_g2: <E as MultiMillerLoop>::Result,
+    pub(crate) alpha_g1_beta_g2: <E as Engine>::Gt,
     /// -gamma in G2 (used for single)
     pub(crate) neg_gamma_g2: <E as MultiMillerLoop>::G2Prepared,
     /// -delta in G2 (used for single)

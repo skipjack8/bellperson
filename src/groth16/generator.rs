@@ -26,7 +26,6 @@ where
     E: EngineExt + MultiMillerLoop,
     <E as Engine>::G1: WnafGroup,
     <E as Engine>::G2: WnafGroup,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
     C: Circuit<E>,
     R: RngCore,
 {
@@ -197,7 +196,6 @@ where
     E: EngineExt + MultiMillerLoop,
     <E as Engine>::G1: WnafGroup,
     <E as Engine>::G2: WnafGroup,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
     C: Circuit<E>,
 {
     let mut assembly = KeypairAssembly::new();

@@ -1,7 +1,7 @@
 use std::ops::{AddAssign, Mul, MulAssign};
 
 use ff::{Field, PrimeField};
-use group::{prime::PrimeCurveAffine, Curve};
+use group::{prime::PrimeCurveAffine, Curve, Group};
 use pairing::{Engine, MillerLoopResult, MultiMillerLoop};
 use rayon::prelude::*;
 
@@ -14,8 +14,7 @@ pub fn prepare_verifying_key<E: Engine + MultiMillerLoop>(
     vk: &VerifyingKey<E>,
 ) -> PreparedVerifyingKey<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     let neg_gamma = -vk.gamma_g2;
     let neg_delta = -vk.delta_g2;
@@ -23,7 +22,7 @@ where
     let multiscalar = multiscalar::precompute_fixed_window(&vk.ic, multiscalar::WINDOW_SIZE);
 
     PreparedVerifyingKey {
-        alpha_g1_beta_g2: E::pairing(&vk.alpha_g1, &vk.beta_g2).into(),
+        alpha_g1_beta_g2: E::pairing(&vk.alpha_g1, &vk.beta_g2),
         neg_gamma_g2: neg_gamma.into(),
         neg_delta_g2: neg_delta.into(),
         gamma_g2: vk.gamma_g2.into(),
@@ -43,8 +42,7 @@ pub fn verify_proof<'a, E>(
     public_inputs: &[E::Fr],
 ) -> Result<bool, SynthesisError>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt> + Field,
+    E: MultiMillerLoop,
     <<E as Engine>::Fr as PrimeField>::Repr: Sync,
 {
     use multiscalar::MultiscalarPrecomp;
@@ -62,23 +60,23 @@ where
     // which allows us to do a single final exponentiation.
 
     // Miller Loop for alpha * beta
-    let mut ml_a_b = <E as MultiMillerLoop>::Result::zero();
+    let mut ml_a_b = Default::default();
     // Miller Loop for C * (-delta)
-    let mut ml_all = <E as MultiMillerLoop>::Result::zero();
+    let mut ml_all = <E as MultiMillerLoop>::Result::default();
     // Miller Loop for inputs * (-gamma)
-    let mut ml_acc = <E as MultiMillerLoop>::Result::zero();
+    let mut ml_acc = <E as MultiMillerLoop>::Result::default();
 
     // Start the two independent miller loops
     POOL.scoped(|s| {
         // - Thread 1: Calculate ML alpha * beta
-        let ml_a_b = &mut ml_a_b;
+        let ml_a_b_ref = &mut ml_a_b;
         s.execute(move || {
-            *ml_a_b = E::multi_miller_loop(&[(&proof.a, &proof.b.into())]);
+            *ml_a_b_ref = E::multi_miller_loop(&[(&proof.a, &proof.b.into())]);
         });
 
         // - Thread 2: Calculate ML C * (-delta)
-        let ml_all = &mut ml_all;
-        s.execute(move || *ml_all = E::multi_miller_loop(&[(&proof.c, &pvk.neg_delta_g2)]));
+        let ml_all_ref = &mut ml_all;
+        s.execute(move || *ml_all_ref = E::multi_miller_loop(&[(&proof.c, &pvk.neg_delta_g2)]));
 
         // - Accumulate inputs (on the current thread)
         let subset = pvk.multiscalar.at_point(1);
@@ -101,11 +99,11 @@ where
     // Wait for the threaded miller loops to finish
 
     // Combine the results.
-    ml_all.mul_assign(&ml_a_b);
-    ml_all.mul_assign(&ml_acc);
+    ml_all += ml_a_b;
+    ml_all += ml_acc;
 
     // Calculate the final exponentiation
-    let actual: <E as MultiMillerLoop>::Result = ml_all.final_exponentiation().into();
+    let actual = ml_all.final_exponentiation();
 
     Ok(actual == pvk.alpha_g1_beta_g2)
 }
@@ -118,8 +116,7 @@ pub fn verify_proofs_batch<'a, E, R>(
     public_inputs: &[Vec<E::Fr>],
 ) -> Result<bool, SynthesisError>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt> + Field,
+    E: MultiMillerLoop,
     <E::Fr as PrimeField>::Repr: Sync + Copy,
     R: rand::RngCore,
 {
@@ -175,13 +172,13 @@ where
     }
 
     // MillerLoop(\sum Accum_Gamma)
-    let mut ml_g = <E as MultiMillerLoop>::Result::zero();
+    let mut ml_g = <E as MultiMillerLoop>::Result::default();
     // MillerLoop(Accum_Delta)
-    let mut ml_d = <E as MultiMillerLoop>::Result::zero();
+    let mut ml_d = <E as MultiMillerLoop>::Result::default();
     // MillerLoop(Accum_AB)
-    let mut acc_ab = <E as MultiMillerLoop>::Result::zero();
+    let mut acc_ab = <E as MultiMillerLoop>::Result::default();
     // Y^-Accum_Y
-    let mut y = <E as MultiMillerLoop>::Result::zero();
+    let mut y = <E as Engine>::Gt::identity();
 
     let accum_y = &accum_y;
     let rand_z_repr = &rand_z_repr;
@@ -261,7 +258,7 @@ where
             // Accum_AB = mul_j(ml((zj*proof_aj), -proof_bj))
             *acc_ab = accum_ab_mls[0];
             for accum in accum_ab_mls.iter().skip(1).take(num_proofs) {
-                acc_ab.mul_assign(accum);
+                *acc_ab += accum;
             }
         });
 
@@ -272,16 +269,14 @@ where
             let accum_y_neg = -*accum_y;
 
             // Y^-Accum_Y
-            *y = pvk
-                .alpha_g1_beta_g2
-                .pow_vartime(&le_bytes_to_u64s(accum_y_neg.to_repr().as_ref()));
+            *y = pvk.alpha_g1_beta_g2 * accum_y_neg;
         });
     });
 
     let mut ml_all = acc_ab;
-    ml_all.mul_assign(&ml_d);
-    ml_all.mul_assign(&ml_g);
+    ml_all += ml_d;
+    ml_all += ml_g;
 
-    let actual: <E as MultiMillerLoop>::Result = ml_all.final_exponentiation().into();
+    let actual = ml_all.final_exponentiation();
     Ok(actual == y)
 }

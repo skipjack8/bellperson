@@ -20,7 +20,7 @@ use crate::groth16::{
     multiscalar::{par_multiscalar, MultiscalarPrecomp, ScalarList},
     PreparedVerifyingKey,
 };
-use crate::{le_bytes_to_u64s, SynthesisError};
+use crate::SynthesisError;
 
 use std::default::Default;
 use std::ops::{AddAssign, MulAssign, SubAssign};
@@ -49,10 +49,11 @@ pub fn verify_aggregate_proof<E, R>(
     transcript_include: &[u8],
 ) -> Result<bool, SynthesisError>
 where
-    E: Engine + MultiMillerLoop + std::fmt::Debug,
+    E: MultiMillerLoop + std::fmt::Debug,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Clone + Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Field + From<<E as Engine>::Gt> + Serialize,
+    <E as MultiMillerLoop>::Result: Compress + Serialize,
+    <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
     E::G2Affine: Serialize,
@@ -210,10 +211,11 @@ fn verify_tipp_mipp<E, R>(
     pairing_checks: &PairingChecks<E, R>,
     hcom: &Challenge<E>,
 ) where
-    E: Engine + MultiMillerLoop,
+    E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Clone + Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Field + From<<E as Engine>::Gt> + Serialize,
+    <E as MultiMillerLoop>::Result: Compress + Serialize,
+    <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
     E::G2Affine: Serialize,
@@ -293,9 +295,9 @@ fn verify_tipp_mipp<E, R>(
             &[final_r]),
         // Check commiment correctness
         // T = e(C,v1)
-        let _check_t = pairing_checks.merge_miller_inputs(&[(final_c,&fvkey.0)],final_tc),
+        let _check_t = pairing_checks.merge_miller_inputs(&[(final_c,&fvkey.0)], final_tc),
         // U = e(A,v2)
-        let _check_u = pairing_checks.merge_miller_inputs(&[(final_c,&fvkey.1)],final_uc)
+        let _check_u = pairing_checks.merge_miller_inputs(&[(final_c,&fvkey.1)], final_uc)
     };
     match final_z {
         Err(e) => pairing_checks.report_err(e),
@@ -330,10 +332,11 @@ fn gipa_verify_tipp_mipp<E>(
     hcom: &E::Fr,
 ) -> (GipaTUZ<E>, E::Fr, Vec<E::Fr>, Vec<E::Fr>)
 where
-    E: Engine + MultiMillerLoop,
+    E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Clone + Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Field + Serialize,
+    <E as MultiMillerLoop>::Result: Compress + Serialize,
+    <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
 {
     info!("gipa verify TIPP");
@@ -429,29 +432,13 @@ where
     #[allow(clippy::upper_case_acronyms)]
     enum Op<'a, E>
     where
-        E: Engine + MultiMillerLoop,
-        <E as MultiMillerLoop>::Result: Field,
+        E: MultiMillerLoop,
     {
-        TAB(
-            &'a <E as MultiMillerLoop>::Result,
-            <E::Fr as PrimeField>::Repr,
-        ),
-        UAB(
-            &'a <E as MultiMillerLoop>::Result,
-            <E::Fr as PrimeField>::Repr,
-        ),
-        ZAB(
-            &'a <E as MultiMillerLoop>::Result,
-            <E::Fr as PrimeField>::Repr,
-        ),
-        TC(
-            &'a <E as MultiMillerLoop>::Result,
-            <E::Fr as PrimeField>::Repr,
-        ),
-        UC(
-            &'a <E as MultiMillerLoop>::Result,
-            <E::Fr as PrimeField>::Repr,
-        ),
+        TAB(&'a <E as Engine>::Gt, &'a E::Fr),
+        UAB(&'a <E as Engine>::Gt, &'a E::Fr),
+        ZAB(&'a <E as Engine>::Gt, &'a E::Fr),
+        TC(&'a <E as Engine>::Gt, &'a E::Fr),
+        UC(&'a <E as Engine>::Gt, &'a E::Fr),
         ZC(&'a E::G1, <E::Fr as PrimeField>::Repr),
     }
 
@@ -468,51 +455,43 @@ where
             let ((tc_l, uc_l), (tc_r, uc_r)) = comm_c;
             let (zc_l, zc_r) = z_c;
 
-            let c_repr = c.to_repr();
-            let c_inv_repr = c_inv.to_repr();
-
             // we multiple left side by x and right side by x^-1
             vec![
-                Op::TAB::<E>(tab_l, c_repr.clone()),
-                Op::TAB(tab_r, c_inv_repr.clone()),
-                Op::UAB(uab_l, c_repr.clone()),
-                Op::UAB(uab_r, c_inv_repr.clone()),
-                Op::ZAB(zab_l, c_repr.clone()),
-                Op::ZAB(zab_r, c_inv_repr.clone()),
-                Op::TC::<E>(tc_l, c_repr.clone()),
-                Op::TC(tc_r, c_inv_repr.clone()),
-                Op::UC(uc_l, c_repr.clone()),
-                Op::UC(uc_r, c_inv_repr.clone()),
-                Op::ZC(zc_l, c_repr),
-                Op::ZC(zc_r, c_inv_repr),
+                Op::TAB::<E>(tab_l, c),
+                Op::TAB(tab_r, c_inv),
+                Op::UAB(uab_l, c),
+                Op::UAB(uab_r, c_inv),
+                Op::ZAB(zab_l, c),
+                Op::ZAB(zab_r, c_inv),
+                Op::TC::<E>(tc_l, c),
+                Op::TC(tc_r, c_inv),
+                Op::UC(uc_l, c),
+                Op::UC(uc_r, c_inv),
+                Op::ZC(zc_l, c.to_repr()),
+                Op::ZC(zc_r, c_inv.to_repr()),
             ]
         })
         .fold(GipaTUZ::<E>::default, |mut res, op: Op<E>| {
             match op {
                 Op::TAB(tx, c) => {
-                    let tx: <E as MultiMillerLoop>::Result =
-                        tx.pow_vartime(&le_bytes_to_u64s(c.as_ref()));
-                    res.tab.mul_assign(&tx);
+                    let tx = *tx * c;
+                    res.tab += tx;
                 }
                 Op::UAB(ux, c) => {
-                    let ux: <E as MultiMillerLoop>::Result =
-                        ux.pow_vartime(&le_bytes_to_u64s(c.as_ref()));
-                    res.uab.mul_assign(&ux);
+                    let ux = *ux * c;
+                    res.uab += ux;
                 }
                 Op::ZAB(zx, c) => {
-                    let zx: <E as MultiMillerLoop>::Result =
-                        zx.pow_vartime(&le_bytes_to_u64s(c.as_ref()));
-                    res.zab.mul_assign(&zx);
+                    let zx = *zx * c;
+                    res.zab += zx;
                 }
                 Op::TC(tx, c) => {
-                    let tx: <E as MultiMillerLoop>::Result =
-                        tx.pow_vartime(&le_bytes_to_u64s(c.as_ref()));
-                    res.tc.mul_assign(&tx);
+                    let tx = *tx * c;
+                    res.tc += tx;
                 }
                 Op::UC(ux, c) => {
-                    let ux: <E as MultiMillerLoop>::Result =
-                        ux.pow_vartime(&le_bytes_to_u64s(c.as_ref()));
-                    res.uc.mul_assign(&ux);
+                    let ux = *ux * c;
+                    res.uc += ux;
                 }
                 Op::ZC(zx, c) => {
                     let mut zx = *zx;
@@ -560,8 +539,7 @@ pub fn verify_kzg_v<E, R>(
     kzg_challenge: &E::Fr,
     pairing_checks: &PairingChecks<E, R>,
 ) where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
     R: rand_core::RngCore + Send,
 {
     // f_v(z)
@@ -614,8 +592,7 @@ fn kzg_check_v<E, R>(
     pi: E::G2Affine,
     pairing_checks: &PairingChecks<E, R>,
 ) where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
     R: rand_core::RngCore + Send,
 {
     // KZG Check: e(g, C_f * h^{-y}) = e(vk * g^{-x}, \pi)
@@ -628,10 +605,7 @@ fn kzg_check_v<E, R>(
     // vk - (g * x)
     let c = sub!(vk, &mul!(v_srs.g, x)).to_affine();
 
-    pairing_checks.merge_miller_inputs(
-        &[(&ng, &b), (&c, &pi)],
-        &<E as MultiMillerLoop>::Result::one(),
-    );
+    pairing_checks.merge_miller_inputs(&[(&ng, &b), (&c, &pi)], &<E as Engine>::Gt::generator());
 }
 
 /// Similar to verify_kzg_opening_g2 but for g1.
@@ -644,8 +618,7 @@ pub fn verify_kzg_w<E, R>(
     kzg_challenge: &E::Fr,
     pairing_checks: &PairingChecks<E, R>,
 ) where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
     R: rand_core::RngCore + Send,
 {
     // compute in parallel f(z) and z^n and then combines into f_w(z) = z^n * f(z)
@@ -698,8 +671,7 @@ fn kzg_check_w<E, R>(
     pi: E::G1Affine,
     pairing_checks: &PairingChecks<E, R>,
 ) where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
     R: rand_core::RngCore + Send,
 {
     // KZG Check: e(C_f * g^{-y}, h) = e(\pi, wk * h^{-x})
@@ -712,10 +684,7 @@ fn kzg_check_w<E, R>(
     // wk - (x * h)
     let d = sub!(wk, &mul!(v_srs.h, x)).to_affine();
 
-    pairing_checks.merge_miller_inputs(
-        &[(&a, &nh), (&pi, &d)],
-        &<E as MultiMillerLoop>::Result::one(),
-    );
+    pairing_checks.merge_miller_inputs(&[(&a, &nh), (&pi, &d)], &<E as Engine>::Gt::generator());
 }
 
 /// Keeps track of the variables that have been sent by the prover and must
@@ -724,29 +693,27 @@ fn kzg_check_w<E, R>(
 #[allow(clippy::upper_case_acronyms)]
 struct GipaTUZ<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field,
+    E: MultiMillerLoop,
 {
-    pub tab: <E as MultiMillerLoop>::Result,
-    pub uab: <E as MultiMillerLoop>::Result,
-    pub zab: <E as MultiMillerLoop>::Result,
-    pub tc: <E as MultiMillerLoop>::Result,
-    pub uc: <E as MultiMillerLoop>::Result,
+    pub tab: <E as Engine>::Gt,
+    pub uab: <E as Engine>::Gt,
+    pub zab: <E as Engine>::Gt,
+    pub tc: <E as Engine>::Gt,
+    pub uc: <E as Engine>::Gt,
     pub zc: E::G1,
 }
 
 impl<E> Default for GipaTUZ<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field,
+    E: MultiMillerLoop,
 {
     fn default() -> Self {
         Self {
-            tab: <E as MultiMillerLoop>::Result::one(),
-            uab: <E as MultiMillerLoop>::Result::one(),
-            zab: <E as MultiMillerLoop>::Result::one(),
-            tc: <E as MultiMillerLoop>::Result::one(),
-            uc: <E as MultiMillerLoop>::Result::one(),
+            tab: <E as Engine>::Gt::generator(),
+            uab: <E as Engine>::Gt::generator(),
+            zab: <E as Engine>::Gt::generator(),
+            tc: <E as Engine>::Gt::generator(),
+            uc: <E as Engine>::Gt::generator(),
             zc: E::G1::identity(),
         }
     }
@@ -754,15 +721,14 @@ where
 
 impl<E> GipaTUZ<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Field,
+    E: MultiMillerLoop,
 {
     fn merge(&mut self, other: &Self) {
-        self.tab.mul_assign(&other.tab);
-        self.uab.mul_assign(&other.uab);
-        self.zab.mul_assign(&other.zab);
-        self.tc.mul_assign(&other.tc);
-        self.uc.mul_assign(&other.uc);
+        self.tab += &other.tab;
+        self.uab += &other.uab;
+        self.zab += &other.zab;
+        self.tc += &other.tc;
+        self.uc += &other.uc;
         self.zc.add_assign(&other.zc);
     }
 }

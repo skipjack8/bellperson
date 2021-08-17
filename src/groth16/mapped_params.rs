@@ -1,5 +1,5 @@
 use group::{prime::PrimeCurveAffine, UncompressedEncoding};
-use pairing::{Engine, MultiMillerLoop};
+use pairing::MultiMillerLoop;
 
 use crate::SynthesisError;
 
@@ -14,10 +14,9 @@ use std::sync::Arc;
 
 use super::{ParameterSource, PreparedVerifyingKey, VerifyingKey};
 
-pub struct MappedParameters<E: Engine + MultiMillerLoop>
+pub struct MappedParameters<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
 {
     /// The parameter file we're reading from.  
     pub param_file_path: PathBuf,
@@ -55,8 +54,7 @@ where
 
 impl<'a, E> ParameterSource<E> for &'a MappedParameters<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt> + Send + Sync,
+    E: MultiMillerLoop,
 {
     type G1Builder = (Arc<Vec<E::G1Affine>>, usize);
     type G2Builder = (Arc<Vec<E::G2Affine>>, usize);
@@ -142,7 +140,7 @@ where
 // A re-usable method for parameter loading via mmap.  Unlike the
 // internal ones used elsewhere, this one does not update offset state
 // and simply does the cast and transform needed.
-pub fn read_g1<E: Engine + MultiMillerLoop>(
+pub fn read_g1<E: MultiMillerLoop>(
     mmap: &Mmap,
     range: Range<usize>,
     checked: bool,
@@ -180,7 +178,7 @@ pub fn read_g1<E: Engine + MultiMillerLoop>(
 // A re-usable method for parameter loading via mmap.  Unlike the
 // internal ones used elsewhere, this one does not update offset state
 // and simply does the cast and transform needed.
-pub fn read_g2<E: Engine + MultiMillerLoop>(
+pub fn read_g2<E: MultiMillerLoop>(
     mmap: &Mmap,
     range: Range<usize>,
     checked: bool,

@@ -119,10 +119,9 @@ mod test {
         let mut t = Transcript::<Bls12>::new("test");
         let g1 = G1Affine::generator();
         let g2 = G2Affine::generator();
-        let gt: <Bls12 as MultiMillerLoop>::Result =
-            <Bls12 as MultiMillerLoop>::multi_miller_loop(&[(&g1, &g2.into())])
-                .final_exponentiation()
-                .into();
+        let gt = <Bls12 as MultiMillerLoop>::multi_miller_loop(&[(&g1, &g2.into())])
+            .final_exponentiation();
+
         t = t.write(&g1).write(&g2).write(&gt).write(&Fr::one());
 
         let c1 = t.into_challenge();

@@ -36,10 +36,11 @@ pub fn aggregate_proofs<E>(
     proofs: &[Proof<E>],
 ) -> Result<AggregateProof<E>, SynthesisError>
 where
-    E: Engine + MultiMillerLoop + std::fmt::Debug,
+    E: MultiMillerLoop + std::fmt::Debug,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Send + Sync,
-    <E as MultiMillerLoop>::Result: Field + Compress + From<<E as Engine>::Gt> + Serialize,
+    <E as MultiMillerLoop>::Result: Compress + Serialize,
+    <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
     E::G2Affine: Serialize,
@@ -120,7 +121,7 @@ where
         &c,
         &wkey_r_inv,
         &r_vec,
-        &ip_ab.into(),
+        &ip_ab,
         &agg_c,
         &hcom,
     )?;
@@ -152,15 +153,16 @@ fn prove_tipp_mipp<E>(
     c: &[E::G1Affine],
     wkey: &WKey<E>, // scaled key w^r^-1
     r_vec: &[E::Fr],
-    ip_ab: &<E as MultiMillerLoop>::Result,
+    ip_ab: &<E as Engine>::Gt,
     agg_c: &E::G1,
     hcom: &E::Fr,
 ) -> Result<TippMippProof<E>, SynthesisError>
 where
-    E: Engine + MultiMillerLoop,
+    E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Send + Sync,
-    <E as MultiMillerLoop>::Result: Field + Compress + From<<E as Engine>::Gt> + Serialize,
+    <E as MultiMillerLoop>::Result: Compress + Serialize,
+    <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
     E::G2Affine: Serialize,
@@ -229,15 +231,16 @@ fn gipa_tipp_mipp<E>(
     vkey: &VKey<E>,
     wkey: &WKey<E>, // scaled key w^r^-1
     r: &[E::Fr],
-    ip_ab: &<E as MultiMillerLoop>::Result,
+    ip_ab: &<E as Engine>::Gt,
     agg_c: &E::G1,
     hcom: &E::Fr,
 ) -> Result<(GipaProof<E>, Vec<E::Fr>, Vec<E::Fr>), SynthesisError>
 where
-    E: Engine + MultiMillerLoop,
+    E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Sync,
-    <E as MultiMillerLoop>::Result: Field + From<<E as Engine>::Gt> + Serialize,
+    <E as MultiMillerLoop>::Result: Serialize,
+    <E as Engine>::Gt: Serialize,
     E::G1: Serialize,
 {
     // the values of vectors A and B rescaled at each step of the loop
@@ -309,9 +312,6 @@ where
             // u_r = c[:n'] * v[n':]
             let tuc_r = commit::single_g1::<E>(&rvk_right, rc_left)
         };
-
-        let zab_l: <E as MultiMillerLoop>::Result = zab_l.into();
-        let zab_r: <E as MultiMillerLoop>::Result = zab_r.into();
 
         // Fiat-Shamir challenge
         // combine both TIPP and MIPP transcript

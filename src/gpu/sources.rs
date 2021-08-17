@@ -4,7 +4,7 @@ use ff_cl_gen as ffgen;
 use log::info;
 #[cfg(feature = "cuda")]
 use rust_gpu_tools::cuda;
-use rust_gpu_tools::{opencl, Device, Framework, GPUError as GpuToolsError, Program, Vendor};
+use rust_gpu_tools::{opencl, Device, Framework, GPUError as GpuToolsError, Program};
 
 use crate::bls::Engine;
 #[cfg(not(feature = "cuda"))]
@@ -49,22 +49,14 @@ fn multiexp(point: &str, exp: &str) -> String {
 }
 
 // WARNING: This function works only with Short Weierstrass Jacobian curves with Fq2 extension field.
-pub fn kernel<E>(limb64: bool) -> String
+pub fn kernel<E>() -> String
 where
     E: Engine,
 {
     vec![
-        if limb64 {
-            ffgen::field::<E::Fr, ffgen::Limb64>("Fr")
-        } else {
-            ffgen::field::<E::Fr, ffgen::Limb32>("Fr")
-        },
+        ffgen::field::<E::Fr>("Fr"),
         fft("Fr"),
-        if limb64 {
-            ffgen::field::<E::Fq, ffgen::Limb64>("Fq")
-        } else {
-            ffgen::field::<E::Fq, ffgen::Limb32>("Fq")
-        },
+        ffgen::field::<E::Fq>("Fq"),
         ec("Fq", "G1"),
         multiexp("G1", "Fr"),
         field2("Fq2", "Fq"),
@@ -117,7 +109,8 @@ where
         }
         Framework::Opencl => {
             info!("Using kernel on OpenCL.");
-            let src = kernel::<E>(device.vendor() == Vendor::Nvidia);
+            let src = kernel::<E>();
+            println!("vmx: src:\n\n\n{}\n\n\n\n", src);
             let opencl_device = device
                 .opencl_device()
                 .ok_or(GpuToolsError::DeviceNotFound)?;

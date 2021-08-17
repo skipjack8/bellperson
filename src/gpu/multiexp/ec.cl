@@ -2,17 +2,9 @@
 
 #define POINT_ZERO ((POINT_projective){FIELD_ZERO, FIELD_ONE, FIELD_ZERO})
 
-__BLSTRS__ // Affine points in `blstrs` library do not have `inf` field.
-
 typedef struct {
   FIELD x;
   FIELD y;
-  #ifndef BLSTRS
-    bool inf;
-    #if FIELD_LIMB_BITS == 32
-      uint _padding;
-    #endif
-  #endif
 } POINT_affine;
 
 typedef struct {
@@ -22,7 +14,7 @@ typedef struct {
 } POINT_projective;
 
 // http://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#doubling-dbl-2009-l
-POINT_projective POINT_double(POINT_projective inp) {
+DEVICE POINT_projective POINT_double(POINT_projective inp) {
   const FIELD local_zero = FIELD_ZERO;
   if(FIELD_eq(inp.z, local_zero)) {
       return inp;
@@ -51,12 +43,6 @@ POINT_projective POINT_double(POINT_projective inp) {
 
 // http://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-madd-2007-bl
 POINT_projective POINT_add_mixed(POINT_projective a, POINT_affine b) {
-  #ifndef BLSTRS
-    if(b.inf) {
-        return a;
-    }
-  #endif
-
   const FIELD local_zero = FIELD_ZERO;
   if(FIELD_eq(a.z, local_zero)) {
     const FIELD local_one = FIELD_ONE;
@@ -96,7 +82,7 @@ POINT_projective POINT_add_mixed(POINT_projective a, POINT_affine b) {
 }
 
 // http://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-add-2007-bl
-POINT_projective POINT_add(POINT_projective a, POINT_projective b) {
+DEVICE POINT_projective POINT_add(POINT_projective a, POINT_projective b) {
 
   const FIELD local_zero = FIELD_ZERO;
   if(FIELD_eq(a.z, local_zero)) return b;

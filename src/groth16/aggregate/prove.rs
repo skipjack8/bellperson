@@ -114,7 +114,7 @@ where
     let wkey_r_inv = srs.wkey.scale(&r_inv)?;
 
     // we prove tipp and mipp using the same recursive loop
-    let proof = prove_tipp_mipp::<E>(
+    let tmipp = prove_tipp_mipp::<E>(
         &srs,
         &a,
         &b_r,
@@ -133,9 +133,9 @@ where
     Ok(AggregateProof {
         com_ab,
         com_c,
-        ip_ab: ip_ab.into(),
+        ip_ab,
         agg_c,
-        tmipp: proof,
+        tmipp,
     })
 }
 

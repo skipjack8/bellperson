@@ -284,7 +284,7 @@ fn test_xordemo() {
     assert_eq!(delta, params.vk.delta_g1);
     assert_eq!(delta, params.vk.delta_g2);
 
-    let _pvk = prepare_verifying_key(&params.vk);
+    let pvk = prepare_verifying_key(&params.vk);
 
     let r = Fr::from_str("27134").unwrap();
     let s = Fr::from_str("17146").unwrap();
@@ -384,10 +384,7 @@ fn test_xordemo() {
         assert_eq!(expected_c, proof.c);
     }
 
-    // FIXME(dignifiedquire): The dummy engine does not correctly implement accumulation of the
-    // miller loops through mutliplication, which breaks this test.
-    // Need to figure out how to correctly update this test.
-    // assert!(verify_proof(&pvk, &proof, &[Fr::one()]).unwrap());
+    assert!(verify_proof(&pvk, &proof, &[Fr::one()]).unwrap());
 }
 
 #[test]
@@ -411,7 +408,7 @@ fn test_create_batch_single() {
         generate_parameters(c, g1, g2, alpha, beta, gamma, delta, tau).unwrap()
     };
 
-    let _pvk = prepare_verifying_key(&params.vk);
+    let pvk = prepare_verifying_key(&params.vk);
 
     let r1 = Fr::from_str("27134").unwrap();
     let s1 = Fr::from_str("17146").unwrap();
@@ -433,14 +430,11 @@ fn test_create_batch_single() {
     assert_eq!(proof_batch[0], proof_single_1);
     assert_eq!(proof_batch[1], proof_single_2);
 
-    // FIXME(dignifiedquire): The dummy engine does not correctly implement accumulation of the
-    // miller loops through mutliplication, which breaks this test.
-    // Need to figure out how to correctly update this test.
-    // assert!(verify_proof(&pvk, &proof_single_1, &[Fr::one()]).unwrap());
-    // assert!(verify_proof(&pvk, &proof_single_2, &[Fr::one()]).unwrap());
-    // for proof in &proof_batch {
-    //     assert!(verify_proof(&pvk, &proof, &[Fr::one()]).unwrap());
-    // }
+    assert!(verify_proof(&pvk, &proof_single_1, &[Fr::one()]).unwrap());
+    assert!(verify_proof(&pvk, &proof_single_2, &[Fr::one()]).unwrap());
+    for proof in &proof_batch {
+        assert!(verify_proof(&pvk, &proof, &[Fr::one()]).unwrap());
+    }
 }
 
 #[test]

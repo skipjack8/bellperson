@@ -439,7 +439,7 @@ where
         ZAB(&'a <E as Engine>::Gt, &'a E::Fr),
         TC(&'a <E as Engine>::Gt, &'a E::Fr),
         UC(&'a <E as Engine>::Gt, &'a E::Fr),
-        ZC(&'a E::G1, <E::Fr as PrimeField>::Repr),
+        ZC(&'a E::G1, &'a E::Fr),
     }
 
     let res = comms_ab
@@ -467,8 +467,8 @@ where
                 Op::TC(tc_r, c_inv),
                 Op::UC(uc_l, c),
                 Op::UC(uc_r, c_inv),
-                Op::ZC(zc_l, c.to_repr()),
-                Op::ZC(zc_r, c_inv.to_repr()),
+                Op::ZC(zc_l, c),
+                Op::ZC(zc_r, c_inv),
             ]
         })
         .fold(GipaTUZ::<E>::default, |mut res, op: Op<E>| {
@@ -494,9 +494,8 @@ where
                     res.uc += ux;
                 }
                 Op::ZC(zx, c) => {
-                    let mut zx = *zx;
-                    zx.mul_assign(E::Fr::from_repr(c).unwrap());
-                    res.zc.add_assign(&zx);
+                    let zx = *zx * c;
+                    res.zc += zx;
                 }
             }
             res
@@ -709,11 +708,11 @@ where
 {
     fn default() -> Self {
         Self {
-            tab: <E as Engine>::Gt::generator(),
-            uab: <E as Engine>::Gt::generator(),
-            zab: <E as Engine>::Gt::generator(),
-            tc: <E as Engine>::Gt::generator(),
-            uc: <E as Engine>::Gt::generator(),
+            tab: <E as Engine>::Gt::identity(),
+            uab: <E as Engine>::Gt::identity(),
+            zab: <E as Engine>::Gt::identity(),
+            tc: <E as Engine>::Gt::identity(),
+            uc: <E as Engine>::Gt::identity(),
             zc: E::G1::identity(),
         }
     }
@@ -729,6 +728,6 @@ where
         self.zab += &other.zab;
         self.tc += &other.tc;
         self.uc += &other.uc;
-        self.zc.add_assign(&other.zc);
+        self.zc += &other.zc;
     }
 }

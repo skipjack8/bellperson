@@ -278,15 +278,17 @@ where
             .reduce(<E as MultiMillerLoop>::Result::default, |acc, res| {
                 acc + res
             });
-        let mut outt = *out;
-        if out != &<E as Engine>::Gt::generator() {
+        let right = if out != &<E as Engine>::Gt::generator() {
             // we only need to make this expensive operation is the output is
             // not one since 1^r = 1
-            outt *= coeff;
-        }
+            *out * coeff
+        } else {
+            *out
+        };
+
         PairingCheck {
             left: miller_out,
-            right: outt,
+            right,
             randomized: true,
         }
     }
@@ -294,8 +296,9 @@ where
     /// takes another pairing tuple and combine both sides together. Note the checks are not
     /// randomized when merged, the checks must have been randomized before.
     pub fn merge(&mut self, p2: &PairingCheck<E>) {
-        mul_if_not_one_ml(&mut self.left, &p2.left);
-        mul_if_not_one_gt::<E>(&mut self.right, &p2.right);
+        add_if_not_one_ml(&mut self.left, &p2.left);
+        add_if_not_one_gt::<E>(&mut self.right, &p2.right);
+
         // A merged PairingCheck is only randomized if both of its contributors are.
         self.randomized = self.randomized && p2.randomized;
     }
@@ -306,7 +309,7 @@ where
     }
 }
 
-fn mul_if_not_one_ml<M: MillerLoopResult>(left: &mut M, right: &M) {
+fn add_if_not_one_ml<M: MillerLoopResult>(left: &mut M, right: &M) {
     if left.is_identity() {
         *left = *right;
         return;
@@ -317,7 +320,7 @@ fn mul_if_not_one_ml<M: MillerLoopResult>(left: &mut M, right: &M) {
     *left += right
 }
 
-fn mul_if_not_one_gt<E: Engine>(left: &mut E::Gt, right: &E::Gt) {
+fn add_if_not_one_gt<E: Engine>(left: &mut E::Gt, right: &E::Gt) {
     let one = E::Gt::generator();
     if left == &one {
         *left = *right;
@@ -356,6 +359,7 @@ mod test {
         assert!(tuple.verify());
         tuple
     }
+
     #[test]
     fn test_pairing_randomize() {
         let mut rng = rand_chacha::ChaChaRng::seed_from_u64(0u64);

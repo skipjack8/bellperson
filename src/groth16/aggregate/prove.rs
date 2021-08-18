@@ -544,10 +544,10 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
 
     let one = F::one();
 
-    let mut res = one + (transcript[0] * &power_zr);
+    let mut res = one + (transcript[0] * power_zr);
     for x in &transcript[1..] {
         power_zr = power_zr.square();
-        res.mul_assign(one + (*x * &power_zr));
+        res.mul_assign(one + (*x * power_zr));
     }
 
     res

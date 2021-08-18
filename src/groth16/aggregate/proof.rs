@@ -461,10 +461,8 @@ fn read_affine<G: PrimeCurveAffine, R: std::io::Read>(mut source: R) -> std::io:
     source.read_exact(affine_compressed.as_mut())?;
     let opt: Option<_> = G::from_bytes(&affine_compressed).into();
 
-    let affine = opt.ok_or(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        "invalid point",
-    ))?;
+    let affine =
+        opt.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid point"))?;
 
     Ok(affine)
 }

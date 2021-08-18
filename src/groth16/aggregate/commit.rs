@@ -188,8 +188,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bls::{Bls12, Fr, G1Projective, G2Projective};
     use crate::groth16::aggregate::structured_generators_scalar_power;
+    use blstrs::{Bls12, G1Projective, G2Projective, Scalar as Fr};
     use ff::Field;
     use group::Group;
     use rand_core::SeedableRng;

@@ -454,8 +454,8 @@ impl<E: Engine> Num<E> {
 mod test {
     use std::ops::{AddAssign, MulAssign, SubAssign};
 
-    use crate::bls::{Bls12, Fr};
     use crate::ConstraintSystem;
+    use blstrs::{Bls12, Scalar as Fr};
     use ff::{Field, PrimeField, PrimeFieldBits};
     use rand_core::SeedableRng;
     use rand_xorshift::XorShiftRng;

@@ -22,8 +22,8 @@
 //!         sha256::sha256,
 //!     },
 //!     groth16, Circuit, ConstraintSystem, SynthesisError,
-//!     bls::Bls12,
 //! };
+//! use blstrs::Bls12;
 //! use pairing::Engine;
 //! use rand::rngs::OsRng;
 //! use sha2::{Digest, Sha256};
@@ -141,7 +141,6 @@
 #[macro_use]
 extern crate hex_literal;
 
-pub mod bls;
 pub mod domain;
 pub mod gadgets;
 pub mod gpu;
@@ -610,13 +609,18 @@ pub trait EngineExt: Engine {
     type Fqe: Field;
 }
 
+impl EngineExt for blstrs::Bls12 {
+    type Fq = blstrs::Fp;
+    type Fqe = blstrs::Fp2;
+}
+
 #[cfg(all(test, feature = "groth16"))]
 mod tests {
     use super::*;
 
     #[test]
     fn test_add_simplify() {
-        use crate::bls::Bls12;
+        use blstrs::Bls12;
 
         let n = 5;
 

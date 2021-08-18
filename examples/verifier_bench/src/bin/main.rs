@@ -14,10 +14,8 @@ use bellperson::groth16::{
     create_random_proof_batch, generate_random_parameters, prepare_verifying_key,
     verify_proofs_batch, Parameters, Proof, VerifyingKey,
 };
-use bellperson::{
-    bls::{Bls12, Fr},
-    Circuit, ConstraintSystem, SynthesisError,
-};
+use bellperson::{Circuit, ConstraintSystem, SynthesisError};
+use blstrs::{Bls12, Scalar as Fr};
 use ff::{Field, PrimeField};
 use group::{Curve, Group};
 use pairing::{Engine, MultiMillerLoop};
@@ -80,7 +78,7 @@ impl<E: Engine> Circuit<E> for DummyDemo {
     }
 }
 
-fn random_points<C, R>(count: usize, rng: &mut R) -> Vec<C::AffineRepr>
+fn random_points<C, R>(count: usize, mut rng: R) -> Vec<C::AffineRepr>
 where
     C: Curve,
     <C as Curve>::AffineRepr: Clone,
@@ -90,7 +88,7 @@ where
     // consuming, so it's better to just repeat them.
     const DISTINT_POINTS: usize = 100;
     (0..DISTINT_POINTS)
-        .map(|_| C::random(&mut *rng).to_affine())
+        .map(|_| C::random(&mut rng).to_affine())
         .collect::<Vec<_>>()
         .into_iter()
         .cycle()
@@ -98,52 +96,48 @@ where
         .collect()
 }
 
-fn dummy_proofs<E: Engine, R: RngCore>(count: usize, rng: &mut R) -> Vec<Proof<E>> {
+fn dummy_proofs<E: Engine, R: RngCore>(count: usize, mut rng: R) -> Vec<Proof<E>> {
     (0..count)
         .map(|_| Proof {
-            a: E::G1::random(&mut *rng).to_affine(),
-            b: E::G2::random(&mut *rng).to_affine(),
-            c: E::G1::random(&mut *rng).to_affine(),
+            a: E::G1::random(&mut rng).to_affine(),
+            b: E::G2::random(&mut rng).to_affine(),
+            c: E::G1::random(&mut rng).to_affine(),
         })
         .collect()
 }
 
-fn dummy_inputs<E: Engine, R: RngCore>(count: usize, rng: &mut R) -> Vec<<E as Engine>::Fr> {
+fn dummy_inputs<E: Engine, R: RngCore>(count: usize, mut rng: R) -> Vec<<E as Engine>::Fr> {
     (0..count)
-        .map(|_| <E as Engine>::Fr::random(&mut *rng))
+        .map(|_| <E as Engine>::Fr::random(&mut rng))
         .collect()
 }
 
-fn dummy_vk<E: Engine + MultiMillerLoop, R: RngCore>(
-    public: usize,
-    rng: &mut R,
-) -> VerifyingKey<E> {
+fn dummy_vk<E: MultiMillerLoop, R: RngCore>(public: usize, mut rng: R) -> VerifyingKey<E> {
     VerifyingKey {
-        alpha_g1: E::G1::random(&mut *rng).to_affine(),
-        beta_g1: E::G1::random(&mut *rng).to_affine(),
-        beta_g2: E::G2::random(&mut *rng).to_affine(),
-        gamma_g2: E::G2::random(&mut *rng).to_affine(),
-        delta_g1: E::G1::random(&mut *rng).to_affine(),
-        delta_g2: E::G2::random(&mut *rng).to_affine(),
-        ic: random_points::<E::G1, _>(public + 1, &mut *rng),
+        alpha_g1: E::G1::random(&mut rng).to_affine(),
+        beta_g1: E::G1::random(&mut rng).to_affine(),
+        beta_g2: E::G2::random(&mut rng).to_affine(),
+        gamma_g2: E::G2::random(&mut rng).to_affine(),
+        delta_g1: E::G1::random(&mut rng).to_affine(),
+        delta_g2: E::G2::random(&mut rng).to_affine(),
+        ic: random_points::<E::G1, _>(public + 1, &mut rng),
     }
 }
 
-fn dummy_params<E, R>(public: usize, private: usize, rng: &mut R) -> Parameters<E>
+fn dummy_params<E, R>(public: usize, private: usize, mut rng: R) -> Parameters<E>
 where
-    E: Engine + MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: From<<E as Engine>::Gt>,
+    E: MultiMillerLoop,
     R: RngCore,
 {
     let count = public + private;
     let hlen = (1 << (((count + public + 1) as f64).log2().ceil() as usize)) - 1;
     Parameters {
-        vk: dummy_vk(public, rng),
-        h: Arc::new(random_points::<E::G1, _>(hlen, rng)),
-        l: Arc::new(random_points::<E::G1, _>(private, rng)),
-        a: Arc::new(random_points::<E::G1, _>(count, rng)),
-        b_g1: Arc::new(random_points::<E::G1, _>(count, rng)),
-        b_g2: Arc::new(random_points::<E::G2, _>(count, rng)),
+        vk: dummy_vk(public, &mut rng),
+        h: Arc::new(random_points::<E::G1, _>(hlen, &mut rng)),
+        l: Arc::new(random_points::<E::G1, _>(private, &mut rng)),
+        a: Arc::new(random_points::<E::G1, _>(count, &mut rng)),
+        b_g1: Arc::new(random_points::<E::G1, _>(count, &mut rng)),
+        b_g2: Arc::new(random_points::<E::G2, _>(count, &mut rng)),
     }
 }
 

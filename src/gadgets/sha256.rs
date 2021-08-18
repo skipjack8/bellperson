@@ -273,9 +273,9 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::bls::Bls12;
     use crate::gadgets::boolean::AllocatedBit;
     use crate::gadgets::test::TestConstraintSystem;
+    use blstrs::Bls12;
     use rand_core::{RngCore, SeedableRng};
     use rand_xorshift::XorShiftRng;
 

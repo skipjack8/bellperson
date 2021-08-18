@@ -387,7 +387,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::bls::Bls12;
+    use blstrs::Bls12;
     use rand_core::SeedableRng;
     use std::io::Cursor;
 

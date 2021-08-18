@@ -12,7 +12,7 @@ use group::Group;
 use pairing::Engine;
 
 // We're going to use the BLS12-381 pairing-friendly elliptic curve.
-use bellperson::bls::Bls12;
+use blstrs::Bls12;
 
 // We'll use these interfaces to construct our circuit.
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};

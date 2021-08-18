@@ -1,4 +1,3 @@
-use bellperson::bls::{Bls12, Fr};
 use bellperson::gadgets::num::AllocatedNum;
 use bellperson::groth16::{
     aggregate::{
@@ -8,6 +7,7 @@ use bellperson::groth16::{
     verify_proofs_batch, Parameters, Proof,
 };
 use bellperson::{Circuit, ConstraintSystem, SynthesisError};
+use blstrs::{Bls12, Scalar as Fr};
 use ff::{Field, PrimeField};
 use group::{Curve, Group};
 use itertools::Itertools;

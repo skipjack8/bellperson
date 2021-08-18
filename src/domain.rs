@@ -435,7 +435,7 @@ fn parallel_fft<E: Engine, T: Group<E::Fr>>(
 // comparing with naive evaluations.
 #[test]
 fn polynomial_arith() {
-    use crate::bls::Bls12;
+    use blstrs::Bls12;
     use rand_core::RngCore;
 
     fn test_mul<E: EngineExt, R: RngCore>(rng: &mut R) {
@@ -485,7 +485,7 @@ fn polynomial_arith() {
 
 #[test]
 fn fft_composition() {
-    use crate::bls::Bls12;
+    use blstrs::Bls12;
     use rand_core::RngCore;
 
     fn test_comp<E: EngineExt, R: RngCore>(rng: &mut R) {
@@ -522,7 +522,7 @@ fn fft_composition() {
 
 #[test]
 fn parallel_fft_consistency() {
-    use crate::bls::Bls12;
+    use blstrs::Bls12;
     use rand_core::RngCore;
     use std::cmp::min;
 
@@ -573,10 +573,10 @@ where
 #[cfg(feature = "gpu")]
 #[cfg(test)]
 mod tests {
-    use crate::bls::{Bls12, Fr};
     use crate::domain::{gpu_fft, parallel_fft, serial_fft, EvaluationDomain, Scalar};
     use crate::gpu;
     use crate::multicore::Worker;
+    use blstrs::{Bls12, Scalar as Fr};
     use ff::Field;
     use std::time::Instant;
 

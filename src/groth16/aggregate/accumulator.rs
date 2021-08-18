@@ -344,7 +344,7 @@ fn derive_non_zero<E: Engine, R: rand_core::RngCore>(rng: &mut R) -> E::Fr {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::bls::{Bls12, G1Projective, G2Projective};
+    use blstrs::{Bls12, G1Projective, G2Projective};
     use group::Group;
     use rand_core::RngCore;
     use rand_core::SeedableRng;

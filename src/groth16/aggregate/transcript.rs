@@ -108,8 +108,7 @@ impl<E: Engine> Transcript<E> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::bls::{Bls12, Fr, G1Affine, G2Affine};
-
+    use blstrs::{Bls12, G1Affine, G2Affine, Scalar as Fr};
     use ff::Field;
     use group::prime::PrimeCurveAffine;
     use pairing::{MillerLoopResult, MultiMillerLoop};

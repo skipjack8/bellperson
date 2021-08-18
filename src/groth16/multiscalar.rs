@@ -300,8 +300,7 @@ mod tests {
 
     use std::ops::Mul;
 
-    use crate::bls::{Fr, G1Affine, G1Projective};
-
+    use blstrs::{G1Affine, G1Projective, Scalar as Fr};
     use ff::Field;
     use rand_core::SeedableRng;
     use rand_xorshift::XorShiftRng;

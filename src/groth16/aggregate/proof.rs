@@ -1,10 +1,10 @@
 use std::io::{Read, Write};
 
+use blstrs::Compress;
 use group::{prime::PrimeCurveAffine, Curve, GroupEncoding};
 use pairing::{Engine, MultiMillerLoop};
 use serde::{Deserialize, Serialize};
 
-use crate::bls::Compress;
 use crate::groth16::aggregate::{commit, srs};
 use crate::SynthesisError;
 
@@ -484,7 +484,7 @@ mod tests {
 
     use group::Group;
 
-    use crate::bls::{Bls12, G1Affine, G1Projective, G2Affine, G2Projective};
+    use blstrs::{Bls12, G1Affine, G1Projective, G2Affine, G2Projective};
 
     fn fake_proof() -> AggregateProof<Bls12> {
         // create pairing, as pairing results can be compressed

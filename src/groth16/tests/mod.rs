@@ -439,8 +439,8 @@ fn test_create_batch_single() {
 
 #[test]
 fn test_verify_random_single() {
-    use crate::bls::{Bls12, Fr, G1Projective, G2Projective};
     use crate::groth16::{create_random_proof, generate_random_parameters, Proof};
+    use blstrs::{Bls12, G1Projective, G2Projective, Scalar as Fr};
 
     let mut rng = XorShiftRng::from_seed([
         0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06, 0xbc,
@@ -517,10 +517,10 @@ fn test_verify_random_single() {
 
 #[test]
 fn test_verify_random_batch() {
-    use crate::bls::{Bls12, Fr, G1Projective, G2Projective};
     use crate::groth16::{
         create_random_proof_batch, generate_random_parameters, verify_proofs_batch, Proof,
     };
+    use blstrs::{Bls12, G1Projective, G2Projective, Scalar as Fr};
 
     let mut rng = XorShiftRng::from_seed([
         0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06, 0xbc,

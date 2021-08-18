@@ -105,8 +105,8 @@ where
 
 #[test]
 fn test_multipacking() {
-    use crate::bls::Bls12;
     use crate::ConstraintSystem;
+    use blstrs::Bls12;
     use rand_core::{RngCore, SeedableRng};
     use rand_xorshift::XorShiftRng;
 

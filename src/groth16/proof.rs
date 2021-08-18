@@ -258,13 +258,13 @@ mod test_with_bls12_381 {
     use std::ops::MulAssign;
 
     use super::*;
-    use crate::bls::{Bls12, Fr};
     use crate::groth16::{
         create_random_proof, generate_random_parameters, prepare_verifying_key, verify_proof,
         Parameters,
     };
     use crate::{Circuit, ConstraintSystem, SynthesisError};
     use bincode::{deserialize, serialize};
+    use blstrs::{Bls12, Scalar as Fr};
     use ff::Field;
     use rand::thread_rng;
 

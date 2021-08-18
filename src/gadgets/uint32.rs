@@ -401,11 +401,11 @@ impl UInt32 {
 #[cfg(test)]
 mod test {
     use super::UInt32;
-    use crate::bls::Bls12;
     use crate::gadgets::boolean::Boolean;
     use crate::gadgets::multieq::MultiEq;
     use crate::gadgets::test::*;
     use crate::ConstraintSystem;
+    use blstrs::Bls12;
     use ff::Field;
     use rand_core::{RngCore, SeedableRng};
     use rand_xorshift::XorShiftRng;

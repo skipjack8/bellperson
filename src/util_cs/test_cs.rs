@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_cs() {
-        use crate::bls::{Bls12, Fr};
+        use blstrs::{Bls12, Scalar as Fr};
         use ff::PrimeField;
 
         let mut cs = TestConstraintSystem::<Bls12>::new();

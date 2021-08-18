@@ -331,7 +331,7 @@ impl PrimeField for Fr {
 #[derive(Debug, Clone)]
 pub struct DummyEngine;
 
-impl crate::bls::Compress for Fr {
+impl blstrs::Compress for Fr {
     fn write_compressed<W: std::io::Write>(self, _out: W) -> std::io::Result<()> {
         unimplemented!()
     }

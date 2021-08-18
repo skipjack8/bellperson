@@ -1,4 +1,5 @@
-use bellperson::{bls::Bls12, Index, LinearCombination, Variable};
+use bellperson::{Index, LinearCombination, Variable};
+use blstrs::Bls12;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ff::Field;
 use pairing::Engine;

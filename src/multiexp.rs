@@ -403,7 +403,7 @@ fn test_with_bls12() {
         acc
     }
 
-    use crate::bls::Bls12;
+    use blstrs::Bls12;
     use group::Curve;
 
     const SAMPLES: usize = 1 << 14;
@@ -454,7 +454,7 @@ where
 #[cfg(feature = "gpu")]
 #[test]
 pub fn gpu_multiexp_consistency() {
-    use crate::bls::Bls12;
+    use blstrs::Bls12;
     use group::Curve;
     use std::time::Instant;
 

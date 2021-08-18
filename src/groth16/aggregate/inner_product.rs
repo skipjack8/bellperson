@@ -1,6 +1,6 @@
 use ff::PrimeField;
 use group::prime::PrimeCurveAffine;
-use pairing::{Engine, MillerLoopResult, MultiMillerLoop};
+use pairing::{MillerLoopResult, MultiMillerLoop};
 use rayon::prelude::*;
 
 use crate::groth16::multiscalar::*;
@@ -10,7 +10,7 @@ use crate::SynthesisError;
 /// e(l_1,r_1)e(l_2,r_2)...
 /// NOTE: the result is not in the final subgroup, one must run
 /// `E::final_exponentiation` to use the final result.
-pub(crate) fn pairing_miller_affine<E: Engine + MultiMillerLoop>(
+pub(crate) fn pairing_miller_affine<E: MultiMillerLoop>(
     left: &[E::G1Affine],
     right: &[E::G2Affine],
 ) -> Result<<E as MultiMillerLoop>::Result, SynthesisError> {
@@ -20,7 +20,7 @@ pub(crate) fn pairing_miller_affine<E: Engine + MultiMillerLoop>(
         ));
     }
     let prepared: Vec<E::G2Prepared> = right.par_iter().map(|&p| p.into()).collect();
-    let pairs_ref: Vec<(&E::G1Affine, &E::G2Prepared)> = left
+    let pairs_ref: Vec<_> = left
         .iter()
         .zip(prepared.iter())
         .map(|(a, b)| (a, b))
@@ -30,7 +30,7 @@ pub(crate) fn pairing_miller_affine<E: Engine + MultiMillerLoop>(
 }
 
 /// Returns the miller loop result of the inner pairing product
-pub(crate) fn pairing<E: Engine + MultiMillerLoop>(
+pub(crate) fn pairing<E: MultiMillerLoop>(
     left: &[E::G1Affine],
     right: &[E::G2Affine],
 ) -> Result<E::Gt, SynthesisError> {

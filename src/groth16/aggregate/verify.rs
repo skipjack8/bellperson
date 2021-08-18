@@ -52,7 +52,6 @@ where
     E: MultiMillerLoop + std::fmt::Debug,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Clone + Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Serialize,
     <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
@@ -107,7 +106,7 @@ where
     info!("checking aggregate pairing");
     let mut r_sum = r.pow_vartime(&[public_inputs.len() as u64]);
     r_sum.sub_assign(&E::Fr::one());
-    let b = sub!(*r, &E::Fr::one()).invert().unwrap();
+    let b = (*r - E::Fr::one()).invert().unwrap();
     r_sum.mul_assign(&b);
 
     // The following parts 3 4 5 are independently computing the parts of the Groth16
@@ -214,7 +213,6 @@ fn verify_tipp_mipp<E, R>(
     E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Clone + Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Serialize,
     <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
@@ -335,7 +333,6 @@ where
     E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Clone + Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Serialize,
     <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
 {
@@ -599,10 +596,10 @@ fn kzg_check_v<E, R>(
     // e(-g, C_f * h^{-y}) * e(vk * g^{-x}, \pi) = 1
 
     // C_f - (y * h)
-    let b = sub!(cf, &mul!(v_srs.h, y)).to_affine();
+    let b = (cf - (v_srs.h * y)).to_affine();
 
     // vk - (g * x)
-    let c = sub!(vk, &mul!(v_srs.g, x)).to_affine();
+    let c = (vk - (v_srs.g * x)).to_affine();
 
     pairing_checks.merge_miller_inputs(&[(&ng, &b), (&c, &pi)], &<E as Engine>::Gt::generator());
 }
@@ -678,10 +675,10 @@ fn kzg_check_w<E, R>(
     // e(C_f * g^{-y}, -h) * e(\pi, wk * h^{-x}) = 1
 
     // C_f - (y * g)
-    let a = sub!(cf, &mul!(v_srs.g, y)).to_affine();
+    let a = (cf - (v_srs.g * y)).to_affine();
 
     // wk - (x * h)
-    let d = sub!(wk, &mul!(v_srs.h, x)).to_affine();
+    let d = (wk - (v_srs.h * x)).to_affine();
 
     pairing_checks.merge_miller_inputs(&[(&a, &nh), (&pi, &d)], &<E as Engine>::Gt::generator());
 }

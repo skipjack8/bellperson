@@ -98,6 +98,12 @@ impl<E: Engine> Proof<E> {
                 C(E::G1Affine),
             }
 
+            let g1_len = <E::G1Affine as GroupEncoding>::Repr::default()
+                .as_ref()
+                .len();
+            let g2_len = <E::G2Affine as GroupEncoding>::Repr::default()
+                .as_ref()
+                .len();
             let parts = (0..num_proofs * 3)
                 .into_par_iter()
                 .map(|i| -> io::Result<_> {
@@ -109,26 +115,16 @@ impl<E: Engine> Proof<E> {
                     match c {
                         0 => {
                             let mut g2_repr = <E::G2Affine as GroupEncoding>::Repr::default();
-                            let start = offset
-                                + <E::G1Affine as GroupEncoding>::Repr::default()
-                                    .as_ref()
-                                    .len();
-                            let end = start
-                                + <E::G2Affine as GroupEncoding>::Repr::default()
-                                    .as_ref()
-                                    .len();
+                            let start = offset + g1_len;
+                            let end = start + g2_len;
                             g2_repr.as_mut().copy_from_slice(&proof_bytes[start..end]);
 
-                            let b = {
+                            let b: E::G2Affine = {
                                 let opt = E::G2Affine::from_bytes(&g2_repr);
-                                if opt.is_none().into() {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::InvalidData,
-                                        "not on curve",
-                                    ));
-                                }
-                                opt.unwrap()
-                            };
+                                Option::from(opt).ok_or_else(|| {
+                                    io::Error::new(io::ErrorKind::InvalidData, "not on curve")
+                                })
+                            }?;
 
                             if b.is_identity().into() {
                                 return Err(io::Error::new(
@@ -142,22 +138,15 @@ impl<E: Engine> Proof<E> {
                         1 => {
                             let mut g1_repr = <E::G1Affine as GroupEncoding>::Repr::default();
                             let start = offset;
-                            let end = start
-                                + <E::G1Affine as GroupEncoding>::Repr::default()
-                                    .as_ref()
-                                    .len();
+                            let end = start + g1_len;
                             g1_repr.as_mut().copy_from_slice(&proof_bytes[start..end]);
 
-                            let a = {
+                            let a: E::G1Affine = {
                                 let opt = E::G1Affine::from_bytes(&g1_repr);
-                                if opt.is_none().into() {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::InvalidData,
-                                        "not on curve",
-                                    ));
-                                }
-                                opt.unwrap()
-                            };
+                                Option::from(opt).ok_or_else(|| {
+                                    io::Error::new(io::ErrorKind::InvalidData, "not on curve")
+                                })
+                            }?;
 
                             if a.is_identity().into() {
                                 return Err(io::Error::new(
@@ -170,30 +159,17 @@ impl<E: Engine> Proof<E> {
                         }
                         2 => {
                             let mut g1_repr = <E::G1Affine as GroupEncoding>::Repr::default();
-                            let start = offset
-                                + <E::G1Affine as GroupEncoding>::Repr::default()
-                                    .as_ref()
-                                    .len()
-                                + <E::G2Affine as GroupEncoding>::Repr::default()
-                                    .as_ref()
-                                    .len();
-                            let end = start
-                                + <E::G1Affine as GroupEncoding>::Repr::default()
-                                    .as_ref()
-                                    .len();
+                            let start = offset + g1_len + g2_len;
+                            let end = start + g1_len;
 
                             g1_repr.as_mut().copy_from_slice(&proof_bytes[start..end]);
 
-                            let c = {
+                            let c: E::G1Affine = {
                                 let opt = E::G1Affine::from_bytes(&g1_repr);
-                                if opt.is_none().into() {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::InvalidData,
-                                        "not on curve",
-                                    ));
-                                }
-                                opt.unwrap()
-                            };
+                                Option::from(opt).ok_or_else(|| {
+                                    io::Error::new(io::ErrorKind::InvalidData, "not on curve")
+                                })
+                            }?;
 
                             if c.is_identity().into() {
                                 return Err(io::Error::new(

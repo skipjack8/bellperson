@@ -48,6 +48,11 @@ impl<E: Engine + MultiMillerLoop> PartialEq for VerifyingKey<E> {
     }
 }
 
+fn read_uncompressed_point<C: UncompressedEncoding>(repr: &C::Uncompressed) -> io::Result<C> {
+    let opt = C::from_uncompressed(repr);
+    Option::from(opt).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
+}
+
 impl<E: Engine + MultiMillerLoop> VerifyingKey<E> {
     pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         writer.write_all(self.alpha_g1.to_uncompressed().as_ref())?;
@@ -69,58 +74,22 @@ impl<E: Engine + MultiMillerLoop> VerifyingKey<E> {
         let mut g2_repr = <E::G2Affine as UncompressedEncoding>::Uncompressed::default();
 
         reader.read_exact(g1_repr.as_mut())?;
-        let alpha_g1 = {
-            let opt = E::G1Affine::from_uncompressed(&g1_repr);
-            if opt.is_none().into() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-            }
-            opt.unwrap()
-        };
+        let alpha_g1 = read_uncompressed_point(&g1_repr)?;
 
         reader.read_exact(g1_repr.as_mut())?;
-        let beta_g1 = {
-            let opt = E::G1Affine::from_uncompressed(&g1_repr);
-            if opt.is_none().into() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-            }
-            opt.unwrap()
-        };
+        let beta_g1 = read_uncompressed_point(&g1_repr)?;
 
         reader.read_exact(g2_repr.as_mut())?;
-        let beta_g2 = {
-            let opt = E::G2Affine::from_uncompressed(&g2_repr);
-            if opt.is_none().into() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-            }
-            opt.unwrap()
-        };
+        let beta_g2 = read_uncompressed_point(&g2_repr)?;
 
         reader.read_exact(g2_repr.as_mut())?;
-        let gamma_g2 = {
-            let opt = E::G2Affine::from_uncompressed(&g2_repr);
-            if opt.is_none().into() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-            }
-            opt.unwrap()
-        };
+        let gamma_g2 = read_uncompressed_point(&g2_repr)?;
 
         reader.read_exact(g1_repr.as_mut())?;
-        let delta_g1 = {
-            let opt = E::G1Affine::from_uncompressed(&g1_repr);
-            if opt.is_none().into() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-            }
-            opt.unwrap()
-        };
+        let delta_g1 = read_uncompressed_point(&g1_repr)?;
 
         reader.read_exact(g2_repr.as_mut())?;
-        let delta_g2 = {
-            let opt = E::G2Affine::from_uncompressed(&g2_repr);
-            if opt.is_none().into() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-            }
-            opt.unwrap()
-        };
+        let delta_g2 = read_uncompressed_point(&g2_repr)?;
 
         let ic_len = reader.read_u32::<BigEndian>()? as usize;
 
@@ -128,13 +97,7 @@ impl<E: Engine + MultiMillerLoop> VerifyingKey<E> {
 
         for _ in 0..ic_len {
             reader.read_exact(g1_repr.as_mut())?;
-            let g1 = {
-                let opt = E::G1Affine::from_uncompressed(&g1_repr);
-                if opt.is_none().into() {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-                }
-                opt.unwrap()
-            };
+            let g1: E::G1Affine = read_uncompressed_point(&g1_repr)?;
             if g1.is_identity().into() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -172,13 +135,7 @@ impl<E: Engine + MultiMillerLoop> VerifyingKey<E> {
             };
 
             *offset += g1_len;
-
-            let opt = E::G1Affine::from_uncompressed(&g1_repr);
-            if opt.is_none().into() {
-                Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
-            } else {
-                Ok(opt.unwrap())
-            }
+            read_uncompressed_point(g1_repr)
         };
 
         let read_g2 = |mmap: &Mmap,
@@ -193,13 +150,7 @@ impl<E: Engine + MultiMillerLoop> VerifyingKey<E> {
             };
 
             *offset += g2_len;
-
-            let opt = E::G2Affine::from_uncompressed(&g2_repr);
-            if opt.is_none().into() {
-                Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
-            } else {
-                Ok(opt.unwrap())
-            }
+            read_uncompressed_point(g2_repr)
         };
 
         let alpha_g1 = read_g1(&mmap, &mut *offset)?;

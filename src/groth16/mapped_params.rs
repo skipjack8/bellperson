@@ -153,17 +153,16 @@ pub fn read_g1<E: MultiMillerLoop>(
         &*(ptr as *const [u8] as *const <E::G1Affine as UncompressedEncoding>::Uncompressed)
     };
 
-    let affine = {
+    let affine: E::G1Affine = {
         let affine_opt = if checked {
             E::G1Affine::from_uncompressed(&repr)
         } else {
             E::G1Affine::from_uncompressed_unchecked(&repr)
         };
-        if affine_opt.is_none().into() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-        }
-        affine_opt.unwrap()
-    };
+
+        Option::from(affine_opt)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
+    }?;
 
     if affine.is_identity().into() {
         Err(io::Error::new(
@@ -191,17 +190,16 @@ pub fn read_g2<E: MultiMillerLoop>(
         &*(ptr as *const [u8] as *const <E::G2Affine as UncompressedEncoding>::Uncompressed)
     };
 
-    let affine = {
+    let affine: E::G2Affine = {
         let affine_opt = if checked {
             E::G2Affine::from_uncompressed(&repr)
         } else {
             E::G2Affine::from_uncompressed_unchecked(&repr)
         };
-        if affine_opt.is_none().into() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"));
-        }
-        affine_opt.unwrap()
-    };
+
+        Option::from(affine_opt)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
+    }?;
 
     if affine.is_identity().into() {
         Err(io::Error::new(

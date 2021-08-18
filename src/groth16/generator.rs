@@ -3,7 +3,10 @@ use std::ops::{AddAssign, Mul, MulAssign};
 use std::sync::Arc;
 
 use ff::Field;
-use group::{Curve, Group, Wnaf, WnafGroup};
+use group::{
+    prime::{PrimeCurve, PrimeCurveAffine},
+    Curve, Group, Wnaf, WnafGroup,
+};
 use pairing::{Engine, MultiMillerLoop};
 use rand_core::RngCore;
 
@@ -236,17 +239,13 @@ where
         assembly.num_inputs + assembly.num_aux
     });
 
-    let gamma_inverse = gamma.invert();
-    let delta_inverse = delta.invert();
-    if (gamma_inverse.is_none() | delta_inverse.is_none()).into() {
-        return Err(SynthesisError::UnexpectedIdentity);
-    }
-    let gamma_inverse = gamma_inverse.unwrap();
-    let delta_inverse = delta_inverse.unwrap();
+    let gamma_inverse = Option::from(gamma.invert()).ok_or(SynthesisError::UnexpectedIdentity)?;
+    let delta_inverse = Option::from(delta.invert()).ok_or(SynthesisError::UnexpectedIdentity)?;
 
     let worker = Worker::new();
 
-    let mut h = vec![E::G1::identity(); powers_of_tau.as_ref().len() - 1];
+    let mut h_affine =
+        vec![<E::G1 as PrimeCurve>::Affine::identity(); powers_of_tau.as_ref().len() - 1];
     {
         // Compute powers of tau
         {
@@ -270,8 +269,8 @@ where
         coeff.mul_assign(&delta_inverse);
 
         // Compute the H query with multiple threads
-        worker.scope(h.len(), |scope, chunk| {
-            for (h, p) in h
+        worker.scope(h_affine.len(), |scope, chunk| {
+            for (h_affine, p) in h_affine
                 .chunks_mut(chunk)
                 .zip(powers_of_tau.as_ref().chunks(chunk))
             {
@@ -279,17 +278,20 @@ where
 
                 scope.execute(move || {
                     // Set values of the H query to g1^{(tau^i * t(tau)) / delta}
-                    for (h, p) in h.iter_mut().zip(p.iter()) {
-                        // Compute final exponent
-                        let mut exp = p.0;
-                        exp.mul_assign(&coeff);
+                    let h: Vec<_> = p
+                        .iter()
+                        .take(h_affine.len())
+                        .map(|p| {
+                            // Compute final exponent
+                            let mut exp = p.0;
+                            exp.mul_assign(&coeff);
 
-                        // Exponentiate
-                        *h = g1_wnaf.scalar(&exp);
-                    }
-
+                            // Exponentiate
+                            g1_wnaf.scalar(&exp)
+                        })
+                        .collect();
                     // Batch normalize
-                    // E::G1::batch_normalization(h);
+                    E::G1::batch_normalize(&h, h_affine);
                 });
             }
         });
@@ -299,11 +301,14 @@ where
     powers_of_tau.ifft(&worker, &mut None)?;
     let powers_of_tau = powers_of_tau.into_coeffs();
 
-    let mut a = vec![E::G1::identity(); assembly.num_inputs + assembly.num_aux];
-    let mut b_g1 = vec![E::G1::identity(); assembly.num_inputs + assembly.num_aux];
-    let mut b_g2 = vec![E::G2::identity(); assembly.num_inputs + assembly.num_aux];
-    let mut ic = vec![E::G1::identity(); assembly.num_inputs];
-    let mut l = vec![E::G1::identity(); assembly.num_aux];
+    let mut a_affine =
+        vec![<E::G1 as PrimeCurve>::Affine::identity(); assembly.num_inputs + assembly.num_aux];
+    let mut b_g1_affine =
+        vec![<E::G1 as PrimeCurve>::Affine::identity(); assembly.num_inputs + assembly.num_aux];
+    let mut b_g2_affine =
+        vec![<E::G2 as PrimeCurve>::Affine::identity(); assembly.num_inputs + assembly.num_aux];
+    let mut ic_affine = vec![<E::G1 as PrimeCurve>::Affine::identity(); assembly.num_inputs];
+    let mut l_affine = vec![<E::G1 as PrimeCurve>::Affine::identity(); assembly.num_aux];
 
     #[allow(clippy::too_many_arguments)]
     fn eval<E: Engine>(
@@ -320,10 +325,10 @@ where
         ct: &[Vec<(E::Fr, usize)>],
 
         // Resulting evaluated QAP polynomials
-        a: &mut [E::G1],
-        b_g1: &mut [E::G1],
-        b_g2: &mut [E::G2],
-        ext: &mut [E::G1],
+        a_affine: &mut [E::G1Affine],
+        b_g1_affine: &mut [E::G1Affine],
+        b_g2_affine: &mut [E::G2Affine],
+        ext_affine: &mut [E::G1Affine],
 
         // Inverse coefficient for ext elements
         inv: &E::Fr,
@@ -336,20 +341,20 @@ where
         worker: &Worker,
     ) {
         // Sanity check
-        assert_eq!(a.len(), at.len());
-        assert_eq!(a.len(), bt.len());
-        assert_eq!(a.len(), ct.len());
-        assert_eq!(a.len(), b_g1.len());
-        assert_eq!(a.len(), b_g2.len());
-        assert_eq!(a.len(), ext.len());
+        assert_eq!(a_affine.len(), at.len());
+        assert_eq!(a_affine.len(), bt.len());
+        assert_eq!(a_affine.len(), ct.len());
+        assert_eq!(a_affine.len(), b_g1_affine.len());
+        assert_eq!(a_affine.len(), b_g2_affine.len());
+        assert_eq!(a_affine.len(), ext_affine.len());
 
         // Evaluate polynomials in multiple threads
-        worker.scope(a.len(), |scope, chunk| {
-            for ((((((a, b_g1), b_g2), ext), at), bt), ct) in a
+        worker.scope(a_affine.len(), |scope, chunk| {
+            for ((((((a_affine, b_g1_affine), b_g2_affine), ext_affine), at), bt), ct) in a_affine
                 .chunks_mut(chunk)
-                .zip(b_g1.chunks_mut(chunk))
-                .zip(b_g2.chunks_mut(chunk))
-                .zip(ext.chunks_mut(chunk))
+                .zip(b_g1_affine.chunks_mut(chunk))
+                .zip(b_g2_affine.chunks_mut(chunk))
+                .zip(ext_affine.chunks_mut(chunk))
                 .zip(at.chunks(chunk))
                 .zip(bt.chunks(chunk))
                 .zip(ct.chunks(chunk))
@@ -358,6 +363,11 @@ where
                 let mut g2_wnaf = g2_wnaf.shared();
 
                 scope.execute(move || {
+                    let mut a = vec![E::G1::identity(); a_affine.len()];
+                    let mut b_g1 = vec![E::G1::identity(); a_affine.len()];
+                    let mut b_g2 = vec![E::G2::identity(); a_affine.len()];
+                    let mut ext = vec![E::G1::identity(); a_affine.len()];
+
                     for ((((((a, b_g1), b_g2), ext), at), bt), ct) in a
                         .iter_mut()
                         .zip(b_g1.iter_mut())
@@ -410,10 +420,10 @@ where
                     }
 
                     // Batch normalize
-                    // E::G1::batch_normalization(a);
-                    // E::G1::batch_normalization(b_g1);
-                    // E::G2::batch_normalization(b_g2);
-                    // E::G1::batch_normalization(ext);
+                    E::G1::batch_normalize(&a, a_affine);
+                    E::G1::batch_normalize(&b_g1, b_g1_affine);
+                    E::G2::batch_normalize(&b_g2, b_g2_affine);
+                    E::G1::batch_normalize(&ext, ext_affine);
                 });
             }
         });
@@ -427,10 +437,10 @@ where
         &assembly.at_inputs,
         &assembly.bt_inputs,
         &assembly.ct_inputs,
-        &mut a[0..assembly.num_inputs],
-        &mut b_g1[0..assembly.num_inputs],
-        &mut b_g2[0..assembly.num_inputs],
-        &mut ic,
+        &mut a_affine[0..assembly.num_inputs],
+        &mut b_g1_affine[0..assembly.num_inputs],
+        &mut b_g2_affine[0..assembly.num_inputs],
+        &mut ic_affine,
         &gamma_inverse,
         &alpha,
         &beta,
@@ -445,10 +455,10 @@ where
         &assembly.at_aux,
         &assembly.bt_aux,
         &assembly.ct_aux,
-        &mut a[assembly.num_inputs..],
-        &mut b_g1[assembly.num_inputs..],
-        &mut b_g2[assembly.num_inputs..],
-        &mut l,
+        &mut a_affine[assembly.num_inputs..],
+        &mut b_g1_affine[assembly.num_inputs..],
+        &mut b_g2_affine[assembly.num_inputs..],
+        &mut l_affine,
         &delta_inverse,
         &alpha,
         &beta,
@@ -457,7 +467,7 @@ where
 
     // Don't allow any elements be unconstrained, so that
     // the L query is always fully dense.
-    for e in l.iter() {
+    for e in l_affine.iter() {
         if e.is_identity().into() {
             return Err(SynthesisError::UnconstrainedVariable);
         }
@@ -473,46 +483,31 @@ where
         gamma_g2: g2.mul(gamma).to_affine(),
         delta_g1: g1.mul(delta).to_affine(),
         delta_g2: g2.mul(delta).to_affine(),
-        ic: ic.into_iter().map(|e| e.to_affine()).collect(),
+        ic: ic_affine,
     };
 
     Ok(Parameters {
         vk,
-        h: Arc::new(h.into_iter().map(|e| e.to_affine()).collect()),
-        l: Arc::new(l.into_iter().map(|e| e.to_affine()).collect()),
+        h: Arc::new(h_affine),
+        l: Arc::new(l_affine),
 
         // Filter points at infinity away from A/B queries
         a: Arc::new(
-            a.into_iter()
-                .filter_map(|e| {
-                    if e.is_identity().into() {
-                        None
-                    } else {
-                        Some(e.to_affine())
-                    }
-                })
+            a_affine
+                .into_iter()
+                .filter(|e| !bool::from(e.is_identity()))
                 .collect(),
         ),
         b_g1: Arc::new(
-            b_g1.into_iter()
-                .filter_map(|e| {
-                    if e.is_identity().into() {
-                        None
-                    } else {
-                        Some(e.to_affine())
-                    }
-                })
+            b_g1_affine
+                .into_iter()
+                .filter(|e| !bool::from(e.is_identity()))
                 .collect(),
         ),
         b_g2: Arc::new(
-            b_g2.into_iter()
-                .filter_map(|e| {
-                    if e.is_identity().into() {
-                        None
-                    } else {
-                        Some(e.to_affine())
-                    }
-                })
+            b_g2_affine
+                .into_iter()
+                .filter(|e| !bool::from(e.is_identity()))
                 .collect(),
         ),
     })

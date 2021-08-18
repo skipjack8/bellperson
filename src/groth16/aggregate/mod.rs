@@ -1,4 +1,4 @@
-use std::ops::{AddAssign, MulAssign};
+use std::ops::AddAssign;
 
 use ff::Field;
 use group::{prime::PrimeCurveAffine, Curve};
@@ -31,7 +31,7 @@ pub use self::verify::*;
 fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     let mut powers = vec![F::one()];
     for i in 1..num {
-        powers.push(mul!(powers[i - 1], s));
+        powers.push(powers[i - 1] * s);
     }
     powers
 }
@@ -44,7 +44,7 @@ fn compress<C: PrimeCurveAffine>(vec: &mut Vec<C>, split: usize, scaler: &C::Sca
     left.par_iter_mut()
         .zip(right.par_iter())
         .for_each(|(a_l, a_r)| {
-            let mut x = mul!(a_r.to_curve(), scaler);
+            let mut x = a_r.to_curve() * scaler;
             x.add_assign(a_l.to_curve());
             *a_l = x.to_affine();
         });

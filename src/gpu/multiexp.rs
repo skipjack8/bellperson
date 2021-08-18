@@ -273,7 +273,7 @@ where
     ) -> GPUResult<<G as PrimeCurveAffine>::Curve>
     where
         G: PrimeCurveAffine<Scalar = E::Fr>,
-        <G::Scalar as PrimeField>::Repr: Clone + Copy + Send + Sync,
+        <G::Scalar as PrimeField>::Repr: Copy + Send + Sync,
     {
         let num_devices = self.kernels.len();
         // Bases are skipped by `self.1` elements, when converted from (Arc<Vec<G>>, usize) to Source

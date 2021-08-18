@@ -15,20 +15,19 @@ use crate::SynthesisError;
 pub struct AggregateProof<E>
 where
     E: MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Compress,
     <E as Engine>::Gt: Compress,
 {
     /// commitment to A and B using the pair commitment scheme needed to verify
     /// TIPP relation.
     #[serde(bound(
-        serialize = "<E as pairing::MultiMillerLoop>::Result: Serialize",
-        deserialize = "<E as pairing::MultiMillerLoop>::Result: Deserialize<'de>",
+        serialize = "<E as pairing::Engine>::Gt: Serialize",
+        deserialize = "<E as pairing::Engine>::Gt: Deserialize<'de>",
     ))]
     pub com_ab: commit::Output<E>,
     /// commit to C separate since we use it only in MIPP
     #[serde(bound(
-        serialize = "<E as pairing::MultiMillerLoop>::Result: Serialize",
-        deserialize = "<E as pairing::MultiMillerLoop>::Result: Deserialize<'de>",
+        serialize = "<E as pairing::Engine>::Gt: Serialize",
+        deserialize = "<E as pairing::Engine>::Gt: Deserialize<'de>",
     ))]
     pub com_c: commit::Output<E>,
     /// $A^r * B = Z$ is the left value on the aggregated Groth16 equation
@@ -49,7 +48,6 @@ where
 impl<E> PartialEq for AggregateProof<E>
 where
     E: MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Compress,
     <E as Engine>::Gt: Compress,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -64,7 +62,6 @@ where
 impl<E> AggregateProof<E>
 where
     E: MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Compress,
     <E as Engine>::Gt: Compress,
 {
     /// Performs some high level checks on the length of vectors and others to
@@ -238,7 +235,6 @@ where
 impl<E> GipaProof<E>
 where
     E: MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Compress,
     <E as Engine>::Gt: Compress,
 {
     fn log_proofs(nproofs: usize) -> usize {
@@ -319,7 +315,6 @@ where
         fn read_output<E, R>(mut source: R) -> std::io::Result<commit::Output<E>>
         where
             E: MultiMillerLoop,
-            <E as MultiMillerLoop>::Result: Compress,
             <E as Engine>::Gt: Compress,
             R: Read,
         {
@@ -385,7 +380,6 @@ where
 pub struct TippMippProof<E>
 where
     E: MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Compress,
 {
     #[serde(bound(
         serialize = "GipaProof<E>: Serialize",
@@ -407,7 +401,6 @@ where
 impl<E> PartialEq for TippMippProof<E>
 where
     E: MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Compress,
 {
     fn eq(&self, other: &Self) -> bool {
         self.gipa == other.gipa
@@ -419,7 +412,6 @@ where
 impl<E> TippMippProof<E>
 where
     E: MultiMillerLoop,
-    <E as MultiMillerLoop>::Result: Compress,
     <E as Engine>::Gt: Compress,
 {
     /// Writes the  proof into the provided buffer.
@@ -467,15 +459,14 @@ fn read_affine<G: PrimeCurveAffine, R: std::io::Read>(mut source: R) -> std::io:
     // Read as compressed affine point.
     let mut affine_compressed = <G as GroupEncoding>::Repr::default();
     source.read_exact(affine_compressed.as_mut())?;
-    let opt = G::from_bytes(&affine_compressed);
-    if opt.is_some().into() {
-        Ok(opt.unwrap())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "invalid point",
-        ))
-    }
+    let opt: Option<_> = G::from_bytes(&affine_compressed).into();
+
+    let affine = opt.ok_or(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "invalid point",
+    ))?;
+
+    Ok(affine)
 }
 
 #[cfg(test)]

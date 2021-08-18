@@ -39,7 +39,6 @@ where
     E: MultiMillerLoop + std::fmt::Debug,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Serialize,
     <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
@@ -99,7 +98,7 @@ where
     let b_r = b
         .par_iter()
         .zip(r_vec.par_iter())
-        .map(|(bi, ri)| mul!(bi.to_curve(), ri).to_affine())
+        .map(|(bi, ri)| (bi.to_curve() * ri).to_affine())
         .collect::<Vec<_>>();
     let refb_r = &b_r;
     let refr_vec = &r_vec;
@@ -161,7 +160,6 @@ where
     E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Send + Sync,
-    <E as MultiMillerLoop>::Result: Compress + Serialize,
     <E as Engine>::Gt: Compress + Serialize,
     E::G1: Serialize,
     E::G1Affine: Serialize,
@@ -239,7 +237,6 @@ where
     E: MultiMillerLoop,
     E::Fr: Serialize,
     <E::Fr as PrimeField>::Repr: Sync,
-    <E as MultiMillerLoop>::Result: Serialize,
     <E as Engine>::Gt: Serialize,
     E::G1: Serialize,
 {
@@ -547,10 +544,10 @@ pub(super) fn polynomial_evaluation_product_form_from_transcript<F: Field>(
 
     let one = F::one();
 
-    let mut res = add!(one, &mul!(transcript[0], &power_zr));
+    let mut res = one + (transcript[0] * &power_zr);
     for x in &transcript[1..] {
         power_zr = power_zr.square();
-        res.mul_assign(&add!(one, &mul!(*x, &power_zr)));
+        res.mul_assign(one + (*x * &power_zr));
     }
 
     res
@@ -579,7 +576,7 @@ fn polynomial_coefficients_from_transcript<F: Field>(transcript: &[F], r_shift: 
             power_2_r = power_2_r.square();
         }
         for j in 0..n {
-            let coeff = mul!(coefficients[j], &mul!(*x, &power_2_r));
+            let coeff = coefficients[j] * (*x * &power_2_r);
             coefficients.push(coeff);
         }
     }

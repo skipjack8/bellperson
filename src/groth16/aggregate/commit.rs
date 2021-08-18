@@ -25,7 +25,7 @@
 /// The second commitment scheme enables to save some KZG verification in the
 /// verifier of the Groth16 verification protocol since we pack two vectors in
 /// one commitment.
-use std::ops::{AddAssign, MulAssign};
+use std::ops::AddAssign;
 
 use group::{prime::PrimeCurveAffine, Curve};
 use rayon::prelude::*;
@@ -79,8 +79,8 @@ where
             .zip(self.b.par_iter())
             .zip(s_vec.par_iter())
             .map(|((ap, bp), si)| {
-                let v1s = mul!(ap.to_curve(), si).to_affine();
-                let v2s = mul!(bp.to_curve(), si).to_affine();
+                let v1s = (ap.to_curve() * si).to_affine();
+                let v2s = (bp.to_curve() * si).to_affine();
                 (v1s, v2s)
             })
             .unzip();
@@ -121,8 +121,8 @@ where
             .zip(right.a.par_iter())
             .zip(right.b.par_iter())
             .map(|(((left_a, left_b), right_a), right_b)| {
-                let mut ra = mul!(right_a.to_curve(), scale);
-                let mut rb = mul!(right_b.to_curve(), scale);
+                let mut ra = right_a.to_curve() * scale;
+                let mut rb = right_b.to_curve() * scale;
                 ra.add_assign(left_a);
                 rb.add_assign(left_b);
                 (ra.to_affine(), rb.to_affine())

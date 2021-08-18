@@ -324,7 +324,6 @@ where
     // Deconstruct in big-endian bit order
     let values = match value {
         Some(ref value) => {
-            // let mut field_char = BitIterator::new(E::Fr::char());
             let field_char = E::Fr::char_le_bits();
             let mut field_char = field_char.into_iter().rev();
 

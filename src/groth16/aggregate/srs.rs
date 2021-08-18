@@ -246,12 +246,8 @@ where
                     // Safety: this operation is safe because it's a read on
                     // a buffer that's already allocated and being iterated on.
                     let g1_repr = unsafe { &*(ptr as *const [u8] as *const G::Repr) };
-                    let opt = G::from_bytes(&g1_repr);
-                    if opt.is_some().into() {
-                        Ok(opt.unwrap())
-                    } else {
-                        Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
-                    }
+                    let opt: Option<G> = G::from_bytes(&g1_repr).into();
+                    opt.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
                 })
                 .collect::<io::Result<Vec<_>>>()?;
             *offset += vec_len * point_len;
@@ -368,18 +364,19 @@ where
             format!("invalid SRS vector length {}", vector_len),
         ));
     }
-    let mut data: Vec<G::Repr> = (0..vector_len).map(|_| G::Repr::default()).collect();
-    for encoded in &mut data {
-        r.read_exact(encoded.as_mut())?;
-    }
+
+    let data: Vec<G::Repr> = (0..vector_len)
+        .map(|_| {
+            let mut el = G::Repr::default();
+            r.read_exact(el.as_mut())?;
+            Ok(el)
+        })
+        .collect::<Result<_, io::Error>>()?;
+
     data.par_iter()
         .map(|enc| {
-            let opt = G::from_bytes(enc);
-            if opt.is_some().into() {
-                Ok(opt.unwrap())
-            } else {
-                Err(io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
-            }
+            let opt: Option<G> = G::from_bytes(enc).into();
+            opt.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not on curve"))
         })
         .collect::<io::Result<Vec<_>>>()
 }

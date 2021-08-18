@@ -93,7 +93,6 @@ fn mixing_g<E: Engine + Send, CS: ConstraintSystem<E>, M>(
     y: &UInt32,
 ) -> Result<(), SynthesisError>
 where
-    E: Send,
     M: ConstraintSystem<E, Root = MultiEq<E, CS>>,
 {
     v[a] = UInt32::addmany(

@@ -239,7 +239,7 @@ where
     for<'a> &'a Q: QueryDensity,
     D: Send + Sync + 'static + Clone + AsRef<Q>,
     G: PrimeCurveAffine,
-    <<G as PrimeCurveAffine>::Scalar as PrimeField>::Repr: Copy + Sync + Send,
+    <<G as PrimeCurveAffine>::Scalar as PrimeField>::Repr: Copy + Send + Sync,
     S: SourceBuilder<G>,
 {
     // Perform this region of the multiexp

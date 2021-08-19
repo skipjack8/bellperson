@@ -296,7 +296,7 @@ where
     /// takes another pairing tuple and combine both sides together. Note the checks are not
     /// randomized when merged, the checks must have been randomized before.
     pub fn merge(&mut self, p2: &PairingCheck<E>) {
-        add_if_not_one_ml(&mut self.left, &p2.left);
+        self.left += &p2.left;
         add_if_not_one_gt::<E>(&mut self.right, &p2.right);
 
         // A merged PairingCheck is only randomized if both of its contributors are.
@@ -307,17 +307,6 @@ where
         let left = self.left.final_exponentiation();
         left == self.right
     }
-}
-
-fn add_if_not_one_ml<M: MillerLoopResult>(left: &mut M, right: &M) {
-    if left.is_identity() {
-        *left = *right;
-        return;
-    } else if right.is_identity() {
-        // nothing to do here
-        return;
-    }
-    *left += right
 }
 
 fn add_if_not_one_gt<E: Engine>(left: &mut E::Gt, right: &E::Gt) {

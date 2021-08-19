@@ -288,9 +288,8 @@ where
         let mut acc = <G as CurveAffine>::Projective::zero();
 
         if n > 0 {
-            let mut results: Vec<_> = (0..(bases.len() / chunk_size))
-                .map(|_| Ok(G::Projective::zero()))
-                .collect();
+            let num_chunks = (bases.len() as f64 / chunk_size as f64).ceil() as usize;
+            let mut results: Vec<_> = (0..num_chunks).map(|_| Ok(G::Projective::zero())).collect();
 
             crate::multicore::THREAD_POOL.scoped(|s| {
                 for (((bases, exps), kern), result) in bases

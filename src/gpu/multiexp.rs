@@ -8,7 +8,6 @@ use crate::multiexp::{multiexp as cpu_multiexp, FullDensity};
 use ff::{PrimeField, ScalarEngine};
 use groupy::{CurveAffine, CurveProjective};
 use log::{error, info};
-use rayon::prelude::*;
 use rust_gpu_tools::*;
 use std::any::TypeId;
 use std::sync::Arc;
@@ -288,28 +287,41 @@ where
 
         let mut acc = <G as CurveAffine>::Projective::zero();
 
-        let results = crate::multicore::RAYON_THREAD_POOL.install(|| {
-            if n > 0 {
-                bases
-                .par_chunks(chunk_size)
-                .zip(exps.par_chunks(chunk_size))
-                .zip(self.kernels.par_iter_mut())
-                .map(|((bases, exps), kern)| -> Result<<G as CurveAffine>::Projective, GPUError> {
-                    let mut acc = <G as CurveAffine>::Projective::zero();
-                    for (bases, exps) in bases.chunks(kern.n).zip(exps.chunks(kern.n)) {
-                        match kern.multiexp(bases, exps, bases.len()) {
-                            Ok(result) => acc.add_assign(&result),
-                            Err(e) => return Err(e),
-                        }
-                    }
+        if n > 0 {
+            let mut results: Vec<_> = (0..(bases.len() / chunk_size))
+                .map(|_| Ok(G::Projective::zero()))
+                .collect();
 
-                    Ok(acc)
-                })
-                .collect::<Vec<_>>()
-            } else {
-                Vec::new()
+            crate::multicore::THREAD_POOL.scoped(|s| {
+                for (((bases, exps), kern), result) in bases
+                    .chunks(chunk_size)
+                    .zip(exps.chunks(chunk_size))
+                    .zip(self.kernels.iter_mut())
+                    .zip(results.iter_mut())
+                {
+                    s.execute(move || {
+                        let mut acc = <G as CurveAffine>::Projective::zero();
+                        for (bases, exps) in bases.chunks(kern.n).zip(exps.chunks(kern.n)) {
+                            match kern.multiexp(bases, exps, bases.len()) {
+                                Ok(result) => acc.add_assign(&result),
+                                Err(e) => {
+                                    *result = Err(e);
+                                    break;
+                                }
+                            }
+                        }
+                        *result = Ok(acc);
+                    });
+                }
+            });
+
+            for r in results {
+                match r {
+                    Ok(r) => acc.add_assign(&r),
+                    Err(e) => return Err(e),
+                }
             }
-        });
+        }
 
         let cpu_acc = cpu_multiexp(
             &pool,
@@ -318,13 +330,6 @@ where
             Arc::new(cpu_exps.to_vec()),
             &mut None,
         );
-
-        for r in results {
-            match r {
-                Ok(r) => acc.add_assign(&r),
-                Err(e) => return Err(e),
-            }
-        }
 
         acc.add_assign(&cpu_acc.wait().unwrap());
 

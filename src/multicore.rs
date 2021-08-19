@@ -65,6 +65,19 @@ impl Worker {
 
         THREAD_POOL.scoped(|scope| f(scope, chunk_size))
     }
+
+    pub fn scoped<'a, F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&yastl::Scope<'a>) -> R,
+    {
+        let (sender, receiver) = bounded(1);
+        THREAD_POOL.scoped(|s| {
+            let res = f(s);
+            sender.send(res).unwrap();
+        });
+
+        receiver.recv().unwrap()
+    }
 }
 
 pub struct Waiter<T> {

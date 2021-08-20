@@ -6,13 +6,13 @@ fn main() {
     use std::path::PathBuf;
     use std::process::Command;
 
-    static CUDA_MULTIEXP_PATH: &str = "src/gpu/multiexp/multiexp32.cu";
+    static CUDA_MULTIEXP_PATH: &str = "src/gpu/multiexp/multiexp32_ffclgen.cu";
 
     // The kernel only needs to be re-compiled if it changed.
     println!("cargo:rerun-if-changed={}", CUDA_MULTIEXP_PATH);
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR was not set.");
-    let fatbin_path: PathBuf = [&out_dir, "multiexp32.fatbin"].iter().collect();
+    let fatbin_path: PathBuf = [&out_dir, "multiexp32_ffclgen.fatbin"].iter().collect();
 
     // nvcc --optimize=6 --fatbin --gpu-architecture=sm_86 --generate-code=arch=compute_86,code=sm_86 --generate-code=arch=compute_80,code=sm_80 --generate-code=arch=compute_75,code=sm_75 --define-macro=BLSTRS --output-file multiexp32.fatbin src/gpu/multiexp/multiexp32.cu
     let status = Command::new("nvcc")
